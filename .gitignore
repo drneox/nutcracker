@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Build / analysis artifacts
+decompiled/
+downloads/
+reports/
+*.apk
+*.apks
+/tmp/
+
+# Tool caches / outputs
+.semgrep/
+frida_scripts/
+config.yaml

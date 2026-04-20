@@ -1,0 +1,24 @@
+services:
+  nutcracker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nutcracker
+    working_dir: /workspace
+    tty: true
+    stdin_open: true
+    volumes:
+      - .:/workspace
+
+    # Permite que adb dentro del contenedor hable con el servidor adb del host.
+    # En Docker Desktop (Windows/macOS), host.docker.internal suele resolver solo;
+    # el extra_hosts lo mantiene consistente en Linux con host-gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    environment:
+      # Usa el adb server del host (emulador/dispositivos conectados al host).
+      - ADB_SERVER_SOCKET=tcp:host.docker.internal:5037
+
+    # Comando por defecto: shell interactiva.
+    command: ["bash"]
