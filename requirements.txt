@@ -1,0 +1,18 @@
+# Análisis de APKs
+androguard>=3.3.5
+
+# CLI y presentación
+click>=8.1.0
+rich>=13.7.0
+
+# Configuración
+pyyaml>=6.0.1
+
+# Generación de informes PDF
+fpdf2>=2.7.9
+
+# Logging estructurado
+loguru>=0.7.0
+
+# Utilidades HTTP
+requests>=2.31.0
