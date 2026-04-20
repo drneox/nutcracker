@@ -1,0 +1,109 @@
+google_play:
+  email: ''
+  aas_token: ''
+downloader:
+  output_dir: ./downloads
+  keep_apk: true
+reports:
+  output_dir: ./reports
+  save_json: false
+  save_pdf: true
+
+# ── Feature flags ─────────────────────────────────────────────────────────────
+# Enable or disable each pipeline module.
+features:
+  anti_root_analysis: true   # protection detection (root-check, DexGuard, etc.)
+  decompilation: true        # APK decompilation (jadx or runtime)
+  manifest_scan: true        # AndroidManifest.xml analysis (misconfigurations)
+  vuln_scan: false           # vulnerability scanning (semgrep or regex)
+  leak_scan: true            # secret/token detection in source code
+  osint_scan: true           # OSINT: subdomains, public leaks, dorks
+  report_pdf: true           # auto-generate PDF report
+  report_json: false         # save results as JSON
+
+# ── Leak scan engines ────────────────────────────────────────────────────────
+leak_scan:
+  native: true        # built-in regex rules (HC*) on decompiled source
+  apkleaks: true      # apkleaks on the original APK binary
+  gitleaks: true      # gitleaks (700+ rules) on decompiled source
+
+# ── OSINT ─────────────────────────────────────────────────────────────────────
+osint:
+  crt_sh: true         # enumerate subdomains via crt.sh
+  github_search: true  # search for leaks in GitHub Code Search (no auth)
+  postman_search: true # search for public collections in Postman
+  generate_dorks: true # generate dorks (Google, GitHub, Shodan)
+
+# ── Analysis strategies ──────────────────────────────────────────────────────
+strategies:
+  # Protection detection engine.
+  # Options: native (built-in, fast) | apkid (more detailed, requires apkid)
+  anti_root_engine: native
+
+  # Vulnerability scanning engine.
+  # Options: auto (detects semgrep, falls back to regex) | semgrep | regex | none
+  scanner_engine: auto
+
+  # Semgrep rules (only applies when scanner_engine=semgrep).
+  # Format: space-separated tokens. E.g.: "p/secrets ./semgrep_rules_android/rules"
+  scanner_config: p/secrets ./semgrep_rules_android/rules
+
+  # Show emulator window (false = headless).
+  show_emulator: true
+
+  # Where to run runtime analysis (Frida, FART, etc.).
+  # Options: auto (emulator if AVD available, otherwise device) | emulator | device
+  runtime_target: emulator
+
+  # Default AVD name for the emulator.
+  # If empty, the first available AVD is used.
+  default_emulator_avd: ''
+
+  # Physical device serial (from adb devices).
+  # If empty, auto-detected.
+  default_device_id: ''
+
+  # Frida connection over TCP instead of USB.
+  # Format: "host:port" (e.g.: "192.168.1.50:27042").
+  # If empty, USB is used (-D serial / -U).
+  # Applies to frida, frida-dexdump, and FART.
+  frida_host: ''
+
+  # frida-server version to install on the device (e.g.: "17.4.0").
+  # If empty, uses the frida version from the Python environment.
+  frida_server_version: ''
+
+# ── Pipelines by app type ────────────────────────────────────────────────────
+pipelines:
+  # Protected apps (DexGuard, Arxan, root-check detected).
+  protected:
+    # Decompilation method.
+    # Options: runtime (Frida/FART in-memory extraction) | jadx (static)
+    decompilation: runtime
+
+    # If runtime fails, try jadx as fallback.
+    fallback_jadx: true
+
+    # Runtime methods to try, in order.
+    # Options: frida_server | gadget | fart
+    #   frida_server — frida-dexdump with frida-server on the device
+    #   gadget       — injects Frida Gadget into the APK, repackages and installs
+    #   fart         — FART script for in-memory DEX dump
+    runtime_methods:
+    - frida_server
+    - gadget
+    - fart
+
+  # Unprotected apps (no protection detected).
+  unprotected:
+    # Decompile directly with jadx.
+    decompilation_jadx: true
+
+# ── Auto mode ─────────────────────────────────────────────────────────────────
+auto:
+  unattended: true     # skip all confirmation prompts
+
+# ── Batch mode ────────────────────────────────────────────────────────────────
+batch:
+  list_file: ''           # path to the list file (optional if passed as CLI argument)
+  stop_on_error: false    # stop batch processing if an app fails
