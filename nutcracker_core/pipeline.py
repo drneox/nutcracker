@@ -376,7 +376,7 @@ def do_fart_emulator(
                 console.print("[yellow]⚠[/yellow]  Intentando con Frida Gadget...")
                 gadget_dex = try_gadget_inject(
                     apk_path, serial, sdk_tools, package, local_dump_dir,
-                    _with_spinner,
+                    _with_spinner, cfg,
                 )
                 if gadget_dex:
                     dex_files = gadget_dex
@@ -508,6 +508,7 @@ def try_gadget_inject(
     package: str,
     dump_dir: Path,
     with_spinner,
+    cfg: dict | None = None,
 ) -> list[Path] | None:
     """
     Intenta extraer DEX inyectando Frida Gadget en el APK.
@@ -765,7 +766,7 @@ def try_gadget_inject(
         console.print("  Intentando volcar DEX vía gadget...")
         dex_files, err = with_spinner(
             f"Volcando DEX con gadget ({package})...",
-            lambda cb: launch_with_dexdump(serial, package, dump_dir, sdk_tools, progress_callback=cb, frida_host=cfg_get(cfg, "strategies", "frida_host") or None if cfg else None),
+            lambda cb: launch_with_dexdump(serial, package, dump_dir, sdk_tools, progress_callback=cb, frida_host=(cfg_get(cfg, "strategies", "frida_host") or None) if cfg else None),
         )
         if dex_files:
             console.print(f"[green]✔[/green] {len(dex_files)} DEX extraídos con Frida Gadget")
