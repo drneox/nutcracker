@@ -84,11 +84,11 @@ pipelines:
     # If runtime fails, try jadx as fallback.
     fallback_jadx: true
 
-    # Runtime methods to try, in order.
+    # Runtime methods to execute, in the order listed below.
     # Options: frida_server | gadget | fart
-    #   frida_server — frida-dexdump with frida-server on the device
-    #   gadget       — injects Frida Gadget into the APK, repackages and installs
-    #   fart         — FART script for in-memory DEX dump
+    #   frida_server — runtime extraction using Frida with frida-server on the device or emulator
+    #   gadget       — instrumentation via Frida Gadget embedded into the APK
+    #   fart         — alternative runtime DEX extraction flow
     runtime_methods:
     - frida_server
     - gadget
