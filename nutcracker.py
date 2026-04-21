@@ -324,7 +324,7 @@ def _print_banner() -> None:
 
     tag = Text()
     tag.append("★ ", style="bold green")
-    tag.append("Mobile Security & Threat Intelligence", style="bold white")
+    tag.append("Mobile Security & Offensive Threat Intelligence", style="bold white")
     tag.append(" ★", style="bold green")
     right[min(4, n - 1)] = tag
 

@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/dynamic%20analysis-Frida-B4232C?style=for-the-badge&labelColor=0B0F14" alt="Frida dynamic analysis">
 </p>
 
-# nutcracker v0.1 — Mobile Security & Threat Intelligence
+# nutcracker v0.1 — Mobile Security & Offensive Threat Intelligence
 
 Herramienta de análisis estático y dinámico de APKs Android. Descarga apps de Google Play,
 las decompila, detecta protecciones anti-root, busca secretos y leaks públicos en código
@@ -38,8 +38,8 @@ con hallazgos técnicos y contexto OSINT clasificados por severidad.
 - Soporte para App Bundles (AAB): detección de splits y `adb install-multiple`
 - Detección estática de protecciones: DexGuard, Arxan, Appdome, RootBeer, Promon Shield, etc.
 - Filtrado inteligente de SDKs de analytics (AppMetrica, AppsFlyer, etc.) para evitar falsos positivos
-- Desofuscación dinámica con frida-dexdump o FART (classloader hook)
-- Inyección opcional de Frida Gadget como fallback sigiloso
+- Desofuscación dinámica mediante `frida_server`, `gadget` o `fart`, según el pipeline configurado
+- Instrumentación opcional con Frida Gadget como ruta embebida de fallback
 - Escáner de vulnerabilidades: semgrep (OWASP MASTG) + 38 reglas regex internas
 - Búsqueda de leaks/secretos configurable: reglas HC internas + apkleaks + gitleaks sobre código decompilado y APK original
 - Módulo OSINT opcional: subdominios, leaks públicos en GitHub/Postman, dominios propios y dorks accionables
@@ -244,7 +244,10 @@ python nutcracker.py batch packages.txt
 
 ---
 
-## Configuración (`config.yaml`)
+## Configuración (`config.yaml` / `config.yaml.example`)
+
+Usa [config.yaml.example](config.yaml.example) como fuente de verdad.
+La práctica recomendada es copiar ese archivo a `config.yaml` y ajustar solo los valores que necesites.
 
 ```yaml
 google_play:
@@ -296,7 +299,10 @@ pipelines:
   protected:                    # Apps con protección detectada
     decompilation: runtime      # Decompilación vía runtime (frida-dexdump)
     fallback_jadx: true         # Si runtime falla, intentar jadx
-    runtime_methods:
+    runtime_methods:            # Se ejecutarán en el orden listado abajo
+    # - frida_server: extracción runtime usando Frida con frida-server en el dispositivo o emulador
+    # - gadget: instrumentación mediante Frida Gadget embebido en la APK
+    # - fart: flujo alternativo de extracción runtime de DEX
     - frida_server
     - gadget
     - fart
