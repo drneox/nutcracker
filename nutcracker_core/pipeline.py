@@ -667,7 +667,27 @@ def try_gadget_inject(
                     zout.writestr(item, raw, compress_type=item.compress_type)
         patched_unsigned_raw.unlink(missing_ok=True)
 
-        # ── 6c. zipalign ─────────────────────────────────────────────────────
+        # ── 6c. Eliminar requiredSplitTypes del manifiesto binario ───────────
+        # Permite instalar solo base.apk cuando la app es un bundle y no
+        # se tienen los demás splits (apkeep solo descargó base).
+        try:
+            from nutcracker_core.apk_tools import strip_required_splits_from_manifest as _strip_splits
+            import zipfile as _zf2
+            _stripped_apk = work_dir / f"{package}_gadget_stripped.apk"
+            with _zf2.ZipFile(str(patched_unsigned), "r") as _zin, \
+                 _zf2.ZipFile(str(_stripped_apk), "w") as _zout:
+                for _item in _zin.infolist():
+                    _raw = _zin.read(_item.filename)
+                    if _item.filename == "AndroidManifest.xml":
+                        _raw = _strip_splits(_raw)
+                    _zout.writestr(_item, _raw, compress_type=_item.compress_type)
+            patched_unsigned.unlink(missing_ok=True)
+            patched_unsigned = _stripped_apk
+            console.print("  requiredSplitTypes eliminado del manifiesto.")
+        except Exception as _e:
+            console.print(f"[yellow]⚠[/yellow]  No se pudo parchear requiredSplitTypes: {_e}")
+
+        # ── 6d. zipalign ─────────────────────────────────────────────────────
         zipalign_bin = str(Path(apksigner).parent / "zipalign")
         patched_aligned = work_dir / f"{package}_gadget_aligned.apk"
         if Path(zipalign_bin).exists():
