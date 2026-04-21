@@ -752,7 +752,7 @@ def _findings_section(
 
 
 def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
-    """Sección OSINT: subdominios, leaks públicos y dorks."""
+    """Sección OSINT: dominios, subdominios y leaks públicos."""
     pdf.add_page()
 
     # Título con desglose por categoría
@@ -761,9 +761,6 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
         parts.append(f"{len(osint.subdomains)} subdominios")
     if osint.public_leaks:
         parts.append(f"{len(osint.public_leaks)} leaks publicos")
-    total_dorks = sum(len(v) for v in osint.dorks.values()) if osint.dorks else 0
-    if total_dorks:
-        parts.append(f"{total_dorks} dorks")
     summary = " · ".join(parts) if parts else "sin hallazgos"
     pdf.section_title(f"OSINT  ({summary})")
 
@@ -862,7 +859,7 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
 
-        for idx, leak in enumerate(osint.public_leaks[:20]):
+        for idx, leak in enumerate(osint.public_leaks):
             if pdf.will_page_break(6):
                 pdf.add_page()
             bg = C["row_alt"] if idx % 2 else C["row_normal"]
@@ -890,46 +887,7 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
                          new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 pdf.set_text_color(*C["text"])
 
-        if len(osint.public_leaks) > 20:
-            pdf.set_font("Helvetica", "I", 7)
-            pdf.set_text_color(*C["muted"])
-            pdf.cell(0, 5, _safe(f"... y {len(osint.public_leaks) - 20} mas"),
-                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            pdf.set_text_color(*C["text"])
         pdf.ln(3)
-
-    # ── Dorks ─────────────────────────────────────────────────────────────
-    if osint.dorks:
-        total_dorks = sum(len(v) for v in osint.dorks.values())
-        if total_dorks > 0:
-            if pdf.will_page_break(20):
-                pdf.add_page()
-
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_text_color(*C["accent"])
-            pdf.cell(0, 7, _safe(f"Dorks generados ({total_dorks})"),
-                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            pdf.set_text_color(*C["text"])
-            pdf.ln(1)
-
-            for engine, dork_list in osint.dorks.items():
-                if not dork_list:
-                    continue
-                pdf.set_font("Helvetica", "B", 7.5)
-                pdf.cell(0, 5, _safe(f"{engine.upper()} ({len(dork_list)}):"),
-                         new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.set_font("Helvetica", "", 6.5)
-                for d in dork_list[:8]:
-                    if pdf.will_page_break(5):
-                        pdf.add_page()
-                    pdf.cell(0, 4, _safe(f"  {d[:120]}"),
-                             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                if len(dork_list) > 8:
-                    pdf.set_text_color(*C["muted"])
-                    pdf.cell(0, 4, _safe(f"  ... y {len(dork_list) - 8} mas"),
-                             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                    pdf.set_text_color(*C["text"])
-                pdf.ln(2)
 
     # ── Auth flows ────────────────────────────────────────────────────────
     if osint.auth_flows:

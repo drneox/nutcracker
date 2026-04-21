@@ -215,7 +215,6 @@ def load_osint_json(package: str):
         secrets=[Secret(**s) for s in data.get("secrets", [])],
         subdomains=[Subdomain(**s) for s in data.get("subdomains", [])],
         public_leaks=[PublicLeak(**l) for l in data.get("public_leaks", [])],
-        dorks=data.get("dorks", {}),
         domains_scanned=data.get("domains_scanned", []),
         auth_flows=data.get("auth_flows", []),
     )
