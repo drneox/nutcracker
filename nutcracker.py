@@ -618,6 +618,7 @@ def setup_token(config_path: str, serial: str | None, method: str, no_interactiv
 def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_pdf: bool = True) -> None:
     started_at = time.perf_counter()
     result = None
+    elapsed_seconds = 0.0
     try:
         anti_root_engine = str(
             cfg_get(_CFG, "strategies", "anti_root_engine", default="native")
@@ -648,6 +649,9 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
         # Flujo post-análisis: bypass, vuln scan, etc. (puede poblar decompilation_info)
         vuln_scan = _post_analysis_flow(result, apk_path)
 
+        elapsed_seconds = time.perf_counter() - started_at
+        result.elapsed_seconds = elapsed_seconds
+
         # Guardar JSON una vez que todos los datos están completos
         save_analysis_json(result)
 
@@ -662,7 +666,7 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
         apk_path.unlink()
         console.print(f"[dim]APK eliminada: {apk_path}[/dim]")
 
-    _print_elapsed("Tiempo total de análisis", time.perf_counter() - started_at)
+    _print_elapsed("Tiempo total de análisis", elapsed_seconds)
 
 
 def _print_bypass_banner(dex_count: int) -> None:
@@ -711,7 +715,7 @@ def _print_verdict(result, vuln_scan) -> None:
         color  = "red"
         icon   = "✘"
         title  = "SIN PROTECCION"
-        detail = "No se detectaron mecanismos de proteccion anti-root activos."
+        detail = "No se detectaron mecanismos de proteccion anti-root / RASP activos."
     elif was_bypassed:
         color  = "yellow"
         icon   = "⚡"
@@ -755,7 +759,7 @@ def _post_analysis_flow(result, apk_path: Path):
 
     _label = "[green]ℹ[/green]" if result.protected else "[yellow]ℹ[/yellow]"
     _estado = "tiene" if result.protected else "no tiene"
-    console.print(f"{_label}  La app [bold]{_estado} protección anti-root[/bold].")
+    console.print(f"{_label}  La app [bold]{_estado} protección anti-root / RASP[/bold].")
 
     # ── Selección automática del mejor método ─────────────────────────────────
     decomp_mode = _pipeline_decompilation_mode(result.protected)
@@ -1345,23 +1349,28 @@ def _do_vuln_scan(
     use_apkleaks = bool(cfg_get(_CFG, "leak_scan", "apkleaks", default=True))
     use_gitleaks = bool(cfg_get(_CFG, "leak_scan", "gitleaks", default=False))
 
-    # Derivar leak_engine para auto_scan (apk|code|both)
-    if use_native and use_apkleaks:
+    # Derivar leak_engine para auto_scan (none|apk|code|both)
+    if not include_leak_scan:
+        leak_engine = "none"
+    elif use_native and use_apkleaks:
         leak_engine = "both"
     elif use_apkleaks:
         leak_engine = "apk"
     elif use_native:
         leak_engine = "code"
     else:
-        leak_engine = "code"  # fallback, gitleaks corre aparte
+        leak_engine = "none"
 
-    default_semgrep_config = "p/android p/owasp-top-ten p/secrets"
+    default_semgrep_config = "p/android p/owasp-top-ten"
     semgrep_config = default_semgrep_config
     if str(engine).strip().lower() == "semgrep":
         semgrep_config = (
             cfg_get(_CFG, "strategies", "scanner_config")
             or default_semgrep_config
         )
+    semgrep_config = " ".join(
+        token for token in str(semgrep_config).split() if token != "p/secrets"
+    ) or default_semgrep_config
 
     # Permite ejecución separada: vuln scan y leak scan pueden activarse de forma independiente.
     apk_for_leaks = apk_path if include_leak_scan and use_apkleaks else None
@@ -1388,24 +1397,28 @@ def _do_vuln_scan(
             if _shutil.which("semgrep")
             else "[bold]regex interno[/bold] [dim](semgrep no instalado)[/dim]"
         )
-    console.print(f"  Motor de escaneo: {engine_label}")
-    console.print(
-        "  Leak scan: "
-        + ("[green]habilitado[/green]" if include_leak_scan else "[yellow]deshabilitado[/yellow]")
-    )
-    # Detalle de motores de leak
-    leak_parts = []
-    if use_native:
-        leak_parts.append("native")
-    if use_apkleaks:
-        leak_parts.append("apkleaks")
-    if use_gitleaks:
-        leak_parts.append("gitleaks")
-    console.print(f"  Leak engines: [bold]{', '.join(leak_parts) or 'ninguno'}[/bold]")
     console.print(
         "  Vulnerability scan (código): "
         + ("[green]habilitado[/green]" if include_vuln_scan else "[yellow]deshabilitado[/yellow]")
     )
+    console.print(
+        "  Vulnerability scan engine: "
+        + (engine_label if include_vuln_scan else "[dim]desactivado[/dim]")
+    )
+    console.print(
+        "  Leak scan: "
+        + ("[green]habilitado[/green]" if include_leak_scan else "[yellow]deshabilitado[/yellow]")
+    )
+    # Detalle de motores de leak realmente activos
+    leak_parts = []
+    if include_leak_scan and use_native:
+        leak_parts.append("native")
+    if include_leak_scan and use_apkleaks:
+        leak_parts.append("apkleaks")
+    if include_leak_scan and use_gitleaks:
+        leak_parts.append("gitleaks")
+    leak_engine_label = ", ".join(leak_parts) if leak_parts else "[dim]desactivados[/dim]"
+    console.print(f"  Leak engines: {leak_engine_label}")
 
     if not include_vuln_scan:
         if include_leak_scan:
@@ -1420,6 +1433,8 @@ def _do_vuln_scan(
                         progress_callback=None,
                         apk_path=None,
                         leak_engine="code",
+                        include_code_leak_rules=True,
+                        include_xml_leak_rules=False,
                     )
                     leaks.extend([f for f in base_scan.findings if _is_leak_finding(f)])
 
@@ -1502,6 +1517,8 @@ def _do_vuln_scan(
                 progress_callback=on_progress,
                 apk_path=apk_for_leaks,
                 leak_engine=leak_engine,
+                include_code_leak_rules=include_leak_scan and use_native,
+                include_xml_leak_rules=include_leak_scan and use_native,
             )
 
     except RuntimeError as exc:
@@ -1523,6 +1540,8 @@ def _do_vuln_scan(
                     progress_callback=lambda m: progress.update(task, description=m),
                     apk_path=apk_for_leaks,
                     leak_engine=leak_engine,
+                    include_code_leak_rules=include_leak_scan and use_native,
+                    include_xml_leak_rules=include_leak_scan and use_native,
                 )
         except Exception as exc2:  # noqa: BLE001
             console.print(f"[red]Error en el scan de vulnerabilidades:[/red] {exc2}")

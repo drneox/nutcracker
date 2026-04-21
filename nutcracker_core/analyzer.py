@@ -137,6 +137,7 @@ class AnalysisResult:
         target_sdk: str,
         analyzed_at: str,
         results: list[DetectionResult],
+        elapsed_seconds: float | None = None,
     ) -> None:
         self.package = package
         self.version_name = version_name
@@ -145,6 +146,7 @@ class AnalysisResult:
         self.target_sdk = target_sdk
         self.analyzed_at = analyzed_at
         self.results = results
+        self.elapsed_seconds = elapsed_seconds
         # Campo opcional: rellena nutcracker.py si se hizo decompilación con frida
         # Formato: {"method": "frida-dexdump" | "FART" | None, "dex_count": int, "source_dir": str}
         self.decompilation_info: "dict | None" = None
@@ -191,6 +193,7 @@ class AnalysisResult:
             "min_sdk": self.min_sdk,
             "target_sdk": self.target_sdk,
             "analyzed_at": self.analyzed_at,
+            "elapsed_seconds": self.elapsed_seconds,
             "anti_root_protected": self.protected,
             "protection_broken": self.protection_broken,
             "confidence": self.confidence,
@@ -214,6 +217,7 @@ class AnalysisResult:
             target_sdk=str(data.get("target_sdk", "?")),
             analyzed_at=data.get("analyzed_at", ""),
             results=results,
+            elapsed_seconds=data.get("elapsed_seconds"),
         )
         obj.decompilation_info = data.get("decompilation_info")
         return obj
