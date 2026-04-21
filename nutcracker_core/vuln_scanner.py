@@ -90,6 +90,21 @@ RULES: list[VulnRule] = [
             # → detectados por el patrón de valor == nombre-de-var en mayúsculas
             # FP: valores que son patrones regex o mensajes de error
             "INVALID_", "invalid null", "invalid.",
+            # FP: valores que son nombres de parámetros OAuth2/OIDC estándar (no son credenciales
+            # reales; son las claves/campos del protocolo, no los valores secretos).
+            '"access_token"', '"refresh_token"', '"id_token"',
+            '"client_secret"', '"password"',
+            '"continuation_token"', '"transfer_token"',
+            '"account_transfer_token"', '"account_refresh_token"',
+            '"account_access_token"', '"account.idtoken"',
+            '"account.refresh.token"', '"account.access.token"',
+            '"account.userinfo.id.token"', '"account.client.secret.key"',
+            '"account.multi.resource.token"',
+            '"workplacejoin.key.prt.idtoken.key"',
+            # FP: error strings / tags de log que contienen "token" como texto, no como valor
+            '"bad_token"', '"retry_token"', '"dummy_token"',
+            # FP: claves de cabecera HTTP (no credenciales)
+            '"lock-token"', '"data_callback_token"', '"data_media_session_token"',
         ],
     ),
     VulnRule(
@@ -157,6 +172,16 @@ RULES: list[VulnRule] = [
             # FP: constantes de seguridad de capas inferiores (Bluetooth, IPSec)
             "Insufficient", "cipher_suite", "encryptedStorage",
             "encryptionAlgorithm", "inBandCrypto",
+            # FP: error codes que contienen "decrypt/encrypt/crypto" en el nombre de variable
+            # pero cuyo valor es un identificador de error, no material criptográfico real.
+            '"decryption_error"', '"decryption_failed"', '"failed_to_decrypt"',
+            '"encryption_error"', '"unknown_crypto_error"', '"decryption_error_v2"',
+            # FP: nombres de TLS cipher suites como constantes (TLS_AES_128_GCM_SHA256)
+            '"tls_aes_', '"tls_chacha20_', '"ssl_',
+            # FP: nombres de atributos OpenID Connect de capacidades de cifrado
+            "_values_supported", "_alg_values", "_enc_values",
+            # FP: identificadores de protocolo JWE/session que son claves de campo
+            '"jwe_crypto"', '"session_key_crypto"',
         ],
     ),
     VulnRule(
@@ -180,6 +205,17 @@ RULES: list[VulnRule] = [
             "schema.org", "xml.org",
             # FP: namespaces XML de Apache Xalan/Xerces (no son endpoints de producción)
             "xml.apache.org", "xsl.lotus.com", "exslt.org",
+            # FP: URLs de documentación — no son endpoints de API
+            "slf4j.org", "logging.apache.org", "docs.oracle.com",
+            "go.microsoft.com/fwlink", "aka.ms/",
+            # FP: entornos de test/preproducción de Microsoft Azure
+            ".dnsdemo1.", "windows-ppe.net", "-ppe.net", ".test:",
+            # FP: URL de enrolamiento MDM de Google (no es un endpoint de la app)
+            "enterprise.google.com/android/enroll",
+            # FP: URLs de Firebase/Google SDKs embebidas en librerías
+            "firebaseremoteconfig.googleapis.com", "firebaseremoteconfigrealtime.googleapis.com",
+            "firebaseappcheck.googleapis.com", "firebase-settings.crashlytics.com",
+            "console.firebase.google.com",
         ],
     ),
     VulnRule(
@@ -657,6 +693,41 @@ def scan_directory(
         # Huawei HMS (SDK de terceros — no es código de la app)
         "api/entity/common/CommonConstant",
         "api/entity/account/AccountNaming",
+        # ── Microsoft MSAL / ADAL identity libraries ──────────────────────────
+        # Generan FP masivos con HC002/HC006: contienen constantes OAuth2 como
+        # ACCESS_TOKEN="access_token", CLIENT_SECRET="client_secret", etc.
+        "identity/client/",
+        "identity/common/",
+        "common/adal/",
+        "common/java/",
+        "common/internal/broker/",
+        "java/providers/microsoft/",
+        "java/providers/oauth2/",
+        "java/nativeauth/",
+        "internal/providers/oauth2/",
+        "adal/internal/",
+        # ── Google / Firebase SDKs ────────────────────────────────────────────
+        # AUTH001 FP: logs de error de SDK que mencionan "token" en texto literal.
+        # HC002 FP: constantes internas de Firebase (INSTANCE_ID_TOKEN, DUMMY_TOKEN…).
+        "google/firebase/",
+        "android/gms/auth/",
+        "android/gms/",
+        "firebase/appcheck/",
+        "firebase/messaging/",
+        "firebase/perf/",
+        "crashlytics/internal/",
+        # ── AndroidX / Jetpack ────────────────────────────────────────────────
+        "sources/androidx/browser/",
+        "sources/androidx/media/",
+        "androidx/browser/",
+        # ── Librerías de red / logging ────────────────────────────────────────
+        # HC002 FP: okhttp tiene TOKEN = "([a-zA-Z0-9…])" como regex, no un secreto.
+        # HC007 FP: slf4j tiene URLs de documentación, no endpoints de producción.
+        "sources/okhttp3/",
+        "sources/org/slf4j/",
+        "org/slf4j/",
+        "p004hc/core5/",
+        "io/grpc/util/",
     )
 
     source_files = [
