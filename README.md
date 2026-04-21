@@ -25,10 +25,12 @@
 
 # nutcracker v0.1 — Mobile Security & Offensive Threat Intelligence
 
-Herramienta de análisis estático y dinámico de APKs Android. Descarga apps de Google Play,
-las decompila, detecta protecciones anti-root, busca secretos y leaks públicos en código
-y fuentes abiertas, analiza configuraciones inseguras del manifest y genera un informe PDF
-con hallazgos técnicos y contexto OSINT clasificados por severidad.
+Herramienta de análisis de aplicaciones Android orientada a investigadores de seguridad.
+Descarga apps directamente desde Google Play, detecta y intenta eludir protecciones
+anti-root/RASP (DexGuard, Arxan, Appdome, Promon, RootBeer), las decompila, extrae secretos y endpoints hardcodeados,
+analiza configuraciones inseguras del manifest y lanza reconocimiento OSINT sobre el package ID,
+dominios, endpoints y secretos extraídos (subdominios vía crt.sh, leaks públicos en GitHub/Postman, dorks).
+Todo el hallazgo se consolida en un informe PDF técnico listo para reportar.
 
 ---
 
@@ -120,7 +122,7 @@ avdmanager create avd -n nutcracker_avd -k "system-images;android-34;google_apis
 
 ```bash
 git clone <repo>
-cd apk-monitor
+cd nutcracker
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -336,7 +338,7 @@ APK
 
 | Sección | Descripción |
 |---|---|
-| Cover | Puntaje de seguridad (0-100), calificación (A-F) y nivel de riesgo |
+| Cover | Veredicto binario de protección (SIN PROTECCION / PROTECCION ROTA / PROTEGIDA) y metadata de la APK |
 | Executive Summary | Resumen ejecutivo con datos de la app y riesgo por módulo |
 | Anti-Root Analysis | Protecciones detectadas vs eludidas (5 detectores) |
 | Bypass RASP | Técnicas de bypass para cada protección encontrada |
@@ -363,10 +365,16 @@ Cuando apkeep descarga solo el split base (`base.apk`), la herramienta:
 
 ---
 
+## Roadmap
+
+Ver [ROADMAP.md](ROADMAP.md) para las tareas pendientes: mejoras OSINT, soporte iOS/IPA y migración parcial a Go.
+
+---
+
 ## Estructura del proyecto
 
 ```
-apk-monitor/
+nutcracker/
 ├── nutcracker.py                   # CLI principal (click)
 ├── config.yaml                     # Configuración local
 ├── config.yaml.example             # Plantilla de configuración

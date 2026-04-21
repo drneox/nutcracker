@@ -708,7 +708,7 @@ def scan_directory(
 
 def scan_with_semgrep(
     source_dir: Path,
-    semgrep_config: str = "p/android p/owasp-top-ten p/secrets",
+    semgrep_config: str = "p/android p/owasp-top-ten",
     progress_callback=None,
 ) -> ScanResult:
     """
@@ -870,10 +870,12 @@ def scan_with_semgrep(
 def auto_scan(
     source_dir: Path,
     engine: str = "auto",
-    semgrep_config: str = "p/android p/owasp-top-ten p/secrets",
+    semgrep_config: str = "p/android p/owasp-top-ten",
     progress_callback=None,
     apk_path: Path | None = None,
     leak_engine: str = "apk",
+    include_code_leak_rules: bool = True,
+    include_xml_leak_rules: bool = True,
 ) -> ScanResult:
     """
     Punto de entrada unificado: elige semgrep o regex según engine.
@@ -891,7 +893,7 @@ def auto_scan(
         engine: "auto" | "semgrep" | "regex"
         semgrep_config: Config para semgrep.
         progress_callback: Función(str) para mensajes de progreso.
-        leak_engine: "apk" | "code" | "both"
+        leak_engine: "none" | "apk" | "code" | "both"
     """
     import shutil
 
@@ -911,7 +913,7 @@ def auto_scan(
             progress_callback(f"Motor de escaneo: {status}")
 
     leak_engine = str(leak_engine or "apk").strip().lower()
-    if leak_engine not in {"apk", "code", "both"}:
+    if leak_engine not in {"none", "apk", "code", "both"}:
         leak_engine = "apk"
 
     def _apply_apkleaks(scan_result: ScanResult) -> None:
@@ -933,7 +935,7 @@ def auto_scan(
         semgrep_result = scan_with_semgrep(scan_code_dir, semgrep_config, progress_callback)
 
         # Si leaks vienen de código (o mixto), añadir un pass regex solo para HC*.
-        if leak_engine in {"code", "both"}:
+        if include_code_leak_rules and leak_engine in {"code", "both"}:
             secret_rules = [r for r in RULES if r.rule_id.startswith("HC")]
             regex_secret_result = scan_directory(
                 scan_code_dir,
@@ -958,7 +960,7 @@ def auto_scan(
         # Si no usamos leaks desde APK, hacer pass regex sobre resources/.
         if apk_path and leak_engine in {"apk", "both"}:
             _apply_apkleaks(semgrep_result)
-        else:
+        elif include_xml_leak_rules:
             xml_findings = _scan_xml_resources_for_secrets(source_dir)
             if xml_findings:
                 if progress_callback:
@@ -967,10 +969,13 @@ def auto_scan(
                 semgrep_result.files_scanned += len({f.file for f in xml_findings})
         return semgrep_result
 
-    result = scan_directory(scan_code_dir, progress_callback=progress_callback)
+    scan_rules = RULES if include_code_leak_rules else [
+        rule for rule in RULES if not rule.rule_id.startswith("HC")
+    ]
+    result = scan_directory(scan_code_dir, rules=scan_rules, progress_callback=progress_callback)
     if apk_path and leak_engine in {"apk", "both"}:
         _apply_apkleaks(result)
-    else:
+    elif include_xml_leak_rules:
         # Fallback: secretos en XML vía regex
         xml_findings = _scan_xml_resources_for_secrets(source_dir)
         if xml_findings:

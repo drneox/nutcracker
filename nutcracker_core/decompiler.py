@@ -63,7 +63,16 @@ def decompile(apk_path: Path, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if tool == "jadx":
-        return _decompile_jadx(tool_path, apk_path, output_dir)
+        try:
+            return _decompile_jadx(tool_path, apk_path, output_dir)
+        except DecompilerError as jadx_exc:
+            apktool_path = _find_tool("apktool")
+            if apktool_path:
+                return _decompile_apktool(apktool_path, apk_path, output_dir)
+            raise DecompilerError(
+                f"{jadx_exc}\n\n"
+                "No hay fallback disponible con apktool."
+            ) from jadx_exc
     else:
         return _decompile_apktool(tool_path, apk_path, output_dir)
 
@@ -81,7 +90,13 @@ def _decompile_jadx(jadx_path: str, apk_path: Path, output_dir: Path) -> Path:
         str(apk_path),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired as exc:
+        raise DecompilerError(
+            "jadx excedió el tiempo límite de 900s durante la decompilación. "
+            "Intentando fallback con apktool si está disponible."
+        ) from exc
 
     # jadx devuelve código != 0 cuando hay errores parciales, pero igual genera output
     if not any(dest.rglob("*.java")) and result.returncode != 0:

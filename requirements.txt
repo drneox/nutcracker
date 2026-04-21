@@ -14,5 +14,9 @@ fpdf2>=2.7.9
 # Logging estructurado
 loguru>=0.7.0
 
+# Instrumentación y volcado runtime
+frida-tools>=13.7.0
+frida-dexdump>=2.0.1
+
 # Utilidades HTTP
 requests>=2.31.0

@@ -79,6 +79,23 @@ def _safe(text: str) -> str:
     return text.translate(_UNICODE_SUBS).encode("latin-1", errors="replace").decode("latin-1")
 
 
+def _format_elapsed(seconds: float | None) -> str:
+    """Formatea una duración en formato legible para el reporte."""
+    if seconds is None:
+        return "-"
+    total_seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(total_seconds, 60)
+    hours, mins = divmod(minutes, 60)
+
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if mins or hours:
+        parts.append(f"{mins}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
 def _is_leak_finding(f: "VulnFinding") -> bool:
     rid = str(getattr(f, "rule_id", "")).upper()
     if rid.startswith("AL-") or rid.startswith("HC") or rid.startswith("GL-"):
@@ -135,7 +152,7 @@ class APKReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"Generado el {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  ./dev by Carlos Ganoza",
+        self.cell(0, 5, f"Generado el {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  https://github.com/drneox/nutcracker",
                   align="L")
         self.cell(0, 5, f"Pagina {self.page_no()}", align="R")
 
@@ -176,7 +193,7 @@ def _cover_page(
 
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*C["muted"])
-    pdf.cell(0, 5, "./dev by Carlos Ganoza", align="C",
+    pdf.cell(0, 5, "https://github.com/drneox/nutcracker", align="C",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_font("Helvetica", "", 11)
@@ -236,6 +253,8 @@ def _cover_page(
     meta_row("Version:", _safe(f"{result.version_name}  (codigo {result.version_code})"))
     meta_row("SDK min / target:", _safe(f"{result.min_sdk} / {result.target_sdk}"))
     meta_row("Analizado:", result.analyzed_at[:19].replace("T", "  "))
+    if result.elapsed_seconds is not None:
+        meta_row("Duracion:", _format_elapsed(result.elapsed_seconds))
 
     # Decompilacion con Frida (si se realizo)
     dec = getattr(result, "decompilation_info", None)
@@ -1021,7 +1040,7 @@ class BatchReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"Generado el {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  ./dev by Carlos Ganoza",
+        self.cell(0, 5, f"Generado el {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  https://github.com/drneox/nutcracker",
                   align="L")
         self.cell(0, 5, f"Pagina {self.page_no()}", align="R")
 
