@@ -29,7 +29,7 @@ Herramienta de análisis de aplicaciones Android orientada a investigadores de s
 Descarga apps directamente desde Google Play, detecta y intenta eludir protecciones
 anti-root/RASP (DexGuard, Arxan, Appdome, Promon, RootBeer), las decompila, extrae secretos y endpoints hardcodeados,
 analiza configuraciones inseguras del manifest y lanza reconocimiento OSINT sobre el package ID,
-dominios, endpoints y secretos extraídos (subdominios vía crt.sh, leaks públicos en GitHub/Postman, dorks).
+dominios, endpoints y secretos extraídos (subdominios vía crt.sh, leaks públicos en GitHub/Postman/FOFA/Wayback y búsquedas web opcionales).
 Todo el hallazgo se consolida en un informe PDF técnico listo para reportar.
 
 ---
@@ -44,7 +44,7 @@ Todo el hallazgo se consolida en un informe PDF técnico listo para reportar.
 - Instrumentación opcional con Frida Gadget como ruta embebida de fallback
 - Escáner de vulnerabilidades: semgrep (OWASP MASTG) + 38 reglas regex internas
 - Búsqueda de leaks/secretos configurable: reglas HC internas + apkleaks + gitleaks sobre código decompilado y APK original
-- Módulo OSINT opcional: subdominios, leaks públicos en GitHub/Postman, dominios propios y dorks accionables
+- Módulo OSINT opcional: subdominios vía crt.sh, leaks públicos en GitHub/Postman/FOFA/Wayback, filtro anti-falsos-positivos y búsquedas web opcionales vía DuckDuckGo
 - Análisis de AndroidManifest.xml: permisos peligrosos, componentes exportados, `network security config` y configuraciones inseguras
 - Informe PDF completo: portada, resumen ejecutivo, anti-root, bypass RASP, configuraciones inseguras, leaks, OSINT y vulnerabilidades
 - Modo batch para escanear múltiples apps en secuencia
@@ -271,7 +271,7 @@ features:                       # Feature flags: habilita o deshabilita módulos
   manifest_scan: true           # Análisis de configuraciones inseguras del manifest
   vuln_scan: false              # Escáner de vulnerabilidades (regex + semgrep)
   leak_scan: true               # Escáner de leaks/secretos
-  osint_scan: true              # OSINT: subdominios, leaks públicos y dorks
+  osint_scan: true              # OSINT: subdominios y leaks públicos
   report_pdf: true              # Generar informe PDF
   report_json: false            # Generar informe JSON
 
@@ -283,8 +283,18 @@ leak_scan:
 osint:
   crt_sh: true                  # Enumeración de subdominios vía crt.sh
   github_search: true           # Búsqueda de leaks públicos en GitHub
+  github_token: ''              # PAT opcional para usar la API de Code Search
+  fofa_search: false            # Búsqueda de activos expuestos en FOFA
+  fofa_key: ''                  # API key de FOFA para search/all
   postman_search: true          # Búsqueda de colecciones públicas en Postman
-  generate_dorks: true          # Generación de dorks
+  execute_dorks: false          # Búsquedas web opcionales vía DuckDuckGo
+  dork_engines:
+    - duckduckgo
+  dork_max_per_engine: 5        # Máximo de queries web por motor
+  dork_max_results_per_dork: 5  # Máximo de resultados por query
+  wayback_search: true          # Búsqueda de URLs históricas en archive.org
+  wayback_limit_per_domain: 200 # Máximo de URLs archivadas por dominio
+  wayback_filter_interesting: true  # Filtra a rutas/queries sensibles
 
 strategies:
   anti_root_engine: native      # Motor de detección anti-root
@@ -400,7 +410,7 @@ nutcracker/
     ├── deobfuscator.py             # Flujo FART para dispositivo físico
   ├── frida_bypass.py             # Scripts Frida (bypass, FART)
     ├── manifest_analyzer.py        # Análisis de AndroidManifest.xml y configuraciones inseguras
-  ├── osint.py                    # Subdominios, leaks públicos y dorks
+  ├── osint.py                    # Subdominios, leaks públicos, Wayback y búsquedas web opcionales
     ├── pdf_reporter.py             # Generación del informe PDF (fpdf2)
     ├── pipeline.py                 # Pipeline de análisis end-to-end
   ├── reporter.py                 # Reportes JSON y salida en consola

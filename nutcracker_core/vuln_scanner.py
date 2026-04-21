@@ -178,6 +178,8 @@ RULES: list[VulnRule] = [
             "localhost", "127.0.0.1", "10.0.", "192.168.", "example.com",
             "schemas.android.com", "www.w3.org", "xmlpull.org",
             "schema.org", "xml.org",
+            # FP: namespaces XML de Apache Xalan/Xerces (no son endpoints de producción)
+            "xml.apache.org", "xsl.lotus.com", "exslt.org",
         ],
     ),
     VulnRule(

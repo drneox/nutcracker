@@ -1098,8 +1098,18 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
 
     crt_sh = bool(cfg_get(_CFG, "osint", "crt_sh", default=True))
     github_search = bool(cfg_get(_CFG, "osint", "github_search", default=True))
+    github_token = cfg_get(_CFG, "osint", "github_token", default="") or None
+    fofa_search = bool(cfg_get(_CFG, "osint", "fofa_search", default=False))
+    fofa_key = cfg_get(_CFG, "osint", "fofa_key", default="") or None
     postman_search = bool(cfg_get(_CFG, "osint", "postman_search", default=True))
-    gen_dorks = bool(cfg_get(_CFG, "osint", "generate_dorks", default=True))
+    execute_dorks_flag = bool(cfg_get(_CFG, "osint", "execute_dorks", default=False))
+    dork_engines_cfg = cfg_get(_CFG, "osint", "dork_engines", default=["duckduckgo"])
+    dork_engines = list(dork_engines_cfg) if isinstance(dork_engines_cfg, (list, tuple)) else ["duckduckgo"]
+    dork_max_per_engine = int(cfg_get(_CFG, "osint", "dork_max_per_engine", default=5))
+    dork_max_results_per_dork = int(cfg_get(_CFG, "osint", "dork_max_results_per_dork", default=5))
+    wayback_search = bool(cfg_get(_CFG, "osint", "wayback_search", default=True))
+    wayback_limit_per_domain = int(cfg_get(_CFG, "osint", "wayback_limit_per_domain", default=200))
+    wayback_filter_interesting = bool(cfg_get(_CFG, "osint", "wayback_filter_interesting", default=True))
 
     console.print()
     try:
@@ -1110,14 +1120,25 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
             transient=True,
         ) as progress:
             task = progress.add_task("OSINT: extrayendo secretos...", total=None)
+            app_label = getattr(_MANIFEST_ANALYSIS, "app_label", "") if _MANIFEST_ANALYSIS else ""
             osint_result = run_osint(
                 source_dir,
                 package,
                 scan_findings=scan_findings,
                 crt_sh=crt_sh,
                 github_search=github_search,
+                github_token=github_token,
+                fofa_search=fofa_search,
+                fofa_key=fofa_key,
                 postman_search=postman_search,
-                gen_dorks=gen_dorks,
+                execute_dorks_flag=execute_dorks_flag,
+                dork_engines=dork_engines,
+                dork_max_per_engine=dork_max_per_engine,
+                dork_max_results_per_dork=dork_max_results_per_dork,
+                wayback_search=wayback_search,
+                wayback_limit_per_domain=wayback_limit_per_domain,
+                wayback_filter_interesting=wayback_filter_interesting,
+                app_label=app_label,
                 progress_callback=lambda m: progress.update(task, description=m),
             )
     except Exception as exc:  # noqa: BLE001
@@ -1181,18 +1202,6 @@ def _print_osint_report(osint: OsintResult) -> None:
             console.print(f"  [{leak.source}] {leak.title}")
             if leak.url:
                 console.print(f"    [dim]{leak.url}[/dim]")
-
-    # ── Dorks ─────────────────────────────────────────────────────────────
-    if osint.dorks:
-        total = sum(len(v) for v in osint.dorks.values())
-        console.print(f"\n[bold]OSINT — Dorks generados:[/bold]  {total} dorks")
-        for engine, dork_list in osint.dorks.items():
-            if dork_list:
-                console.print(f"  [cyan]{engine}[/cyan]: {len(dork_list)} dorks")
-                for d in dork_list[:3]:
-                    console.print(f"    [dim]{d}[/dim]")
-                if len(dork_list) > 3:
-                    console.print(f"    [dim]... y {len(dork_list) - 3} más[/dim]")
 
     # ── Auth flows hardcodeados ───────────────────────────────────────────
     if osint.auth_flows:

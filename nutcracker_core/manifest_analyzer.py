@@ -66,6 +66,7 @@ class Misconfiguration:
 @dataclass
 class ManifestAnalysisResult:
     package: str = ""
+    app_label: str = ""
     target_sdk: int = 0
     min_sdk: int = 0
     debuggable: bool = False
@@ -151,6 +152,40 @@ def _attr(element: ET.Element, name: str) -> str | None:
     return element.get(f"{{{_NS}}}{name}") or element.get(name)
 
 
+def _resolve_label(raw_label: str, manifest_path: Path) -> str:
+    """
+    Resuelve el atributo android:label.
+
+    Si es una referencia tipo "@string/app_name", busca el valor en
+    res/values/strings.xml relativo al manifest. Si es texto literal,
+    lo devuelve tal cual. Devuelve "" si no puede resolverse.
+    """
+    raw = raw_label.strip()
+    if not raw:
+        return ""
+    if not raw.startswith("@string/"):
+        return raw
+
+    key = raw[len("@string/"):]
+    # El manifest suele estar en <decompiled>/resources/AndroidManifest.xml
+    # y los strings en <decompiled>/resources/res/values/strings.xml
+    candidates = [
+        manifest_path.parent / "res" / "values" / "strings.xml",
+        manifest_path.parent.parent / "resources" / "res" / "values" / "strings.xml",
+    ]
+    for strings_path in candidates:
+        if not strings_path.exists():
+            continue
+        try:
+            tree = ET.parse(strings_path)
+        except ET.ParseError:
+            continue
+        for el in tree.getroot().findall("string"):
+            if el.get("name") == key and el.text:
+                return el.text.strip()
+    return ""
+
+
 def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
     try:
         tree = ET.parse(path)
@@ -211,6 +246,10 @@ def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
     app_el = root.find("application")
     if app_el is None:
         return
+
+    # ── Label de la app (nombre comercial) ────────────────────────────────────
+    raw_label = _attr(app_el, "label") or ""
+    result.app_label = _resolve_label(raw_label, path) if raw_label else ""
 
     debuggable = _attr(app_el, "debuggable")
     result.debuggable = debuggable == "true"
