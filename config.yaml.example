@@ -17,7 +17,7 @@ features:
   manifest_scan: true        # AndroidManifest.xml analysis (misconfigurations)
   vuln_scan: false           # vulnerability scanning (semgrep or regex)
   leak_scan: true            # secret/token detection in source code
-  osint_scan: true           # OSINT: subdomains, public leaks, dorks
+  osint_scan: true           # OSINT: subdomains + public leaks
   report_pdf: true           # auto-generate PDF report
   report_json: false         # save results as JSON
 
@@ -30,9 +30,19 @@ leak_scan:
 # ── OSINT ─────────────────────────────────────────────────────────────────────
 osint:
   crt_sh: true         # enumerate subdomains via crt.sh
-  github_search: true  # search for leaks in GitHub Code Search (no auth)
+  github_search: true  # search for leaks in GitHub Code Search
+  github_token: ''     # optional GitHub PAT for Code Search API (better results / rate limits)
+  fofa_search: false   # search exposed assets in FOFA
+  fofa_key: ''         # FOFA API key for /api/v1/search/all
   postman_search: true # search for public collections in Postman
-  generate_dorks: true # generate dorks (Google, GitHub, Shodan)
+  execute_dorks: false # opt-in: run web searches (DuckDuckGo) against target domains
+  dork_engines:        # engines used when execute_dorks=true
+    - duckduckgo
+  dork_max_per_engine: 5        # cap of dorks per engine (rate-limit safety)
+  dork_max_results_per_dork: 5  # cap of results per dork
+  wayback_search: true                # archive.org CDX per target domain
+  wayback_limit_per_domain: 200       # cap of archived URLs per domain
+  wayback_filter_interesting: true    # only return admin/debug/secrets-like paths
 
 # ── Analysis strategies ──────────────────────────────────────────────────────
 strategies:
