@@ -705,8 +705,20 @@ def try_gadget_inject(
             return None
 
         # ── 8. Reinstalar e intentar dexdump sobre el gadget ─────────────────
-        from nutcracker_core.apk_tools import install_apk as _install_apk
+        from nutcracker_core.apk_tools import install_apk as _install_apk, find_split_apks as _find_split_apks
         console.print("  Reinstalando APK con gadget...")
+
+        # Si el APK original es parte de un bundle, copiar los splits
+        # al work_dir y reemplazar base.apk por el parcheado para que
+        # install_apk los envíe todos juntos con adb install-multiple.
+        orig_splits = _find_split_apks(apk_path)
+        if len(orig_splits) > 1:
+            for s in orig_splits:
+                if s.resolve() != apk_path.resolve():
+                    _shutil.copy2(s, work_dir / s.name)
+            # patched_apk ya está en work_dir; install_apk usará find_split_apks
+            # que ahora encontrará todos los splits en el mismo directorio.
+
         _install_msgs: list[str] = []
         ok = _install_apk(
             serial,
