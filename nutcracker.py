@@ -11,6 +11,7 @@ Uso:
 import sys
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import click
@@ -58,6 +59,26 @@ console = Console()
 _CFG: dict = {}
 _MANIFEST_ANALYSIS = None  # ManifestAnalysisResult del último scan
 _OSINT_RESULT = None       # OsintResult del último scan
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Formatea una duración en formato legible para consola."""
+    total_seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(total_seconds, 60)
+    hours, mins = divmod(minutes, 60)
+
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if mins or hours:
+        parts.append(f"{mins}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+def _print_elapsed(label: str, seconds: float) -> None:
+    """Imprime el tiempo total consumido por una ejecución."""
+    console.print(f"[bold cyan]⏱ {label}:[/bold cyan] {_format_elapsed(seconds)}")
 
 
 def _auto(key: str) -> "bool | None":
@@ -595,6 +616,7 @@ def setup_token(config_path: str, serial: str | None, method: str, no_interactiv
 # ── Lógica compartida ─────────────────────────────────────────────────────────
 
 def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_pdf: bool = True) -> None:
+    started_at = time.perf_counter()
     result = None
     try:
         anti_root_engine = str(
@@ -639,6 +661,8 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
     if not keep_apk and apk_path and apk_path.exists():
         apk_path.unlink()
         console.print(f"[dim]APK eliminada: {apk_path}[/dim]")
+
+    _print_elapsed("Tiempo total de análisis", time.perf_counter() - started_at)
 
 
 def _print_bypass_banner(dex_count: int) -> None:
@@ -1714,6 +1738,7 @@ def batch(
     Las líneas que empiecen por '#' o estén vacías se ignoran.
     """
     global _CFG
+    started_at = time.perf_counter()
     config = load_config(config_path)
     _CFG = config
 
@@ -1893,6 +1918,8 @@ def batch(
         batch_pdf = Path(reports_dir) / "batch_report.pdf"
         generate_batch_report(results_summary, batch_pdf)
         console.print(f"\n[bold green]✔[/bold green] Reporte consolidado: [bold]{batch_pdf}[/bold]")
+
+    _print_elapsed("Tiempo total de ejecución batch", time.perf_counter() - started_at)
 
 
 # ── Comando: regen-pdf ────────────────────────────────────────────────────────
