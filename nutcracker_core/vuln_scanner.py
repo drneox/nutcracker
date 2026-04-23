@@ -47,6 +47,9 @@ class VulnRule:
     file_filter: str | None = None
     # Líneas a ignorar si contienen alguno de estos strings (reduce falsos positivos)
     ignore_if_contains: list[str] = field(default_factory=list)
+    # Si el valor entre comillas capturado por el patrón coincide con este regex, ignorar
+    # (útil para filtrar valores que son identificadores, no secretos reales)
+    ignore_value_regex: re.Pattern | None = None
 
 
 # ── Reglas de detección ───────────────────────────────────────────────────────
@@ -106,6 +109,9 @@ RULES: list[VulnRule] = [
             # FP: claves de cabecera HTTP (no credenciales)
             '"lock-token"', '"data_callback_token"', '"data_media_session_token"',
         ],
+        # FP: valor == identificador SCREAMING_SNAKE_CASE (ej. TOKEN = "TOKEN" o
+        # API_OBTENER_USUARIO_DESDE_TOKEN = "API_OBTENER_USUARIO_DESDE_TOKEN")
+        ignore_value_regex=re.compile(r'^[A-Z][A-Z0-9_]{5,}$'),
     ),
     VulnRule(
         rule_id="HC003",
@@ -122,7 +128,9 @@ RULES: list[VulnRule] = [
         severity="high",
         category="M1 - Credenciales",
         pattern=re.compile(
-            r'(?i)(AIza[0-9A-Za-z\-_]{35}|AAAA[A-Za-z0-9_\-]{7}:[A-Za-z0-9_\-]{140})'
+            # (?<![A-Za-z]) evita FP donde "aiza" aparece dentro de un identificador
+            # (ej. visulaizacionNotificacionesAnaliticaBDDaoConfig)
+            r'(?i)(?<![A-Za-z])(AIza[0-9A-Za-z\-_]{35}|AAAA[A-Za-z0-9_\-]{7}:[A-Za-z0-9_\-]{140})'
         ),
         description="Google API key (AIza...) o FCM server key encontrada en el código.",
         recommendation="Restringir la API key en Google Cloud Console y no embebir en el APK.",
@@ -288,9 +296,15 @@ RULES: list[VulnRule] = [
         title="URL HTTP (sin TLS)",
         severity="high",
         category="M3 - Comunicación insegura",
-        pattern=re.compile(r'["\']http://(?!localhost|127\.0\.0\.1|10\.|192\.168\.|schema|example)[\w.]'),
+        pattern=re.compile(
+            # String literal http:// (Java y Kotlin)
+            r'["\']http://(?!localhost|127\.0\.0\.1|10\.|192\.168\.|schema|example)[\w.]'
+            # new URL("http://...") — java.net.URL
+            r'|new\s+URL\s*\(\s*["\']http://(?!localhost|127\.0\.0\.1)[\w.]'
+        ),
         description="Comunicación HTTP en texto claro. Susceptible a ataques MITM.",
         recommendation="Usar HTTPS en todas las comunicaciones de red.",
+        ignore_if_contains=["test", "mock", "localhost", "// "],
     ),
     VulnRule(
         rule_id="NET002",
@@ -307,12 +321,25 @@ RULES: list[VulnRule] = [
     ),
     VulnRule(
         rule_id="NET003",
-        title="Certificate pinning deshabilitado (OkHttp)",
+        title="HostnameVerifier permisivo (acepta cualquier hostname)",
         severity="high",
         category="M3 - Comunicación insegura",
-        pattern=re.compile(r'hostnameVerifier\s*\{[^}]*true\s*\}|\.build\(\).*hostnameVerifier'),
-        description="HostnameVerifier que devuelve true sin verificar el certificado.",
-        recommendation="Implementar validación correcta del hostname.",
+        pattern=re.compile(
+            # Kotlin lambda que devuelve true sin verificar
+            r'hostnameVerifier\s*\{[^}]*true\s*\}'
+            # Java: setHostnameVerifier con instancia anónima o ALLOW_ALL
+            r'|setHostnameVerifier\s*\(\s*(?:new\s+HostnameVerifier|ALLOW_ALL_HOSTNAME_VERIFIER)'
+            # Kotlin: propiedad hostnameVerifier = HostnameVerifier { _, _ -> true }
+            r'|hostnameVerifier\s*=\s*HostnameVerifier\s*\{[^}]*true'
+            # OkHttp Kotlin DSL: .hostnameVerifier { _, _ -> true }
+            r'|\.hostnameVerifier\s*\{[^}]*->\s*true'
+        ),
+        description="HostnameVerifier que acepta cualquier hostname sin verificación. "
+                    "Permite ataques MITM aunque TLS esté activo.",
+        recommendation="Eliminar el HostnameVerifier permisivo. El verificador del sistema "
+                       "es correcto por defecto; si se necesita flexibilidad, validar el "
+                       "hostname explícitamente.",
+        ignore_if_contains=["test", "mock", "debug", "BuildConfig.DEBUG"],
     ),
 
     # ── M4: Autenticación insegura ────────────────────────────────────────────
@@ -374,9 +401,16 @@ RULES: list[VulnRule] = [
         title="AES en modo ECB",
         severity="high",
         category="M5 - Criptografía débil",
-        pattern=re.compile(r'Cipher\.getInstance\s*\(\s*["\']AES/ECB|["\']AES["\']'),
-        description="El modo ECB no oculta patrones en los datos cifrados.",
-        recommendation="Usar AES/GCM/NoPadding con IV aleatorio.",
+        pattern=re.compile(
+            # AES/ECB/... — modo ECB explícito
+            r'Cipher\.getInstance\s*\(\s*["\']AES/ECB'
+            # "AES" solo (sin modo) → Android defaultea a AES/ECB/PKCS5Padding
+            r'|Cipher\.getInstance\s*\(\s*["\']AES["\']'
+        ),
+        description="AES en modo ECB o sin modo especificado (Android defaultea a ECB). "
+                    "ECB no oculta patrones en los datos cifrados y es inseguro.",
+        recommendation="Usar AES/GCM/NoPadding con IV aleatorio generado por SecureRandom.",
+        ignore_if_contains=["test", "mock"],
     ),
     VulnRule(
         rule_id="CRYPTO005",
@@ -401,33 +435,69 @@ RULES: list[VulnRule] = [
         ignore_if_contains=["SecureRandom", "//", "test", "mock"],
     ),
 
-    # ── M6: Autorización insegura ─────────────────────────────────────────────
+    # ── M6: WebView inseguro ──────────────────────────────────────────────────
     VulnRule(
         rule_id="COMP001",
         title="WebView con JavaScript habilitado",
         severity="medium",
         category="M6 - Componentes inseguros",
         pattern=re.compile(r'setJavaScriptEnabled\s*\(\s*true\s*\)'),
-        description="JavaScript habilitado en WebView. Si carga URLs no confiables, puede ejecutar código arbitrario.",
-        recommendation="Deshabilitar JavaScript salvo que sea imprescindible. Validar URLs cargadas.",
+        description="JavaScript habilitado en WebView. Si la app carga URLs de terceros o "
+                    "contenido no confiable, permite ejecución de código arbitrario (XSS universal).",
+        recommendation="Deshabilitar JavaScript salvo que sea imprescindible. "
+                       "Si se habilita, cargar solo URLs propias y verificar el origen.",
+        ignore_if_contains=["test", "mock"],
     ),
     VulnRule(
         rule_id="COMP002",
-        title="WebView con acceso a archivos locales",
+        title="WebView con acceso a archivos o contenido local",
         severity="high",
         category="M6 - Componentes inseguros",
-        pattern=re.compile(r'setAllowFileAccess\s*\(\s*true\s*\)|setAllowUniversalAccessFromFileURLs\s*\(\s*true\s*\)'),
-        description="WebView puede acceder al sistema de archivos local.",
-        recommendation="Deshabilitar el acceso a archivos locales en WebView.",
+        pattern=re.compile(
+            # Acceso al sistema de archivos
+            r'setAllowFileAccess\s*\(\s*true\s*\)'
+            # Acceso cross-origin desde file:// (escalada de privilegios)
+            r'|setAllowFileAccessFromFileURLs\s*\(\s*true\s*\)'
+            r'|setAllowUniversalAccessFromFileURLs\s*\(\s*true\s*\)'
+            # Acceso al ContentProvider de otras apps vía content://
+            r'|setAllowContentAccess\s*\(\s*true\s*\)'
+        ),
+        description="WebView configurado para acceder al sistema de archivos o a ContentProviders. "
+                    "setAllowUniversalAccessFromFileURLs permite que JS en file:// lea cualquier archivo "
+                    "del dispositivo.",
+        recommendation="Mantener todos estos flags a false (son el default desde API 30). "
+                       "Nunca habilitar AllowUniversalAccessFromFileURLs en producción.",
+        ignore_if_contains=["test", "mock"],
     ),
     VulnRule(
         rule_id="COMP003",
-        title="addJavascriptInterface expuesto",
+        title="addJavascriptInterface expuesto a WebView",
         severity="critical",
         category="M6 - Componentes inseguros",
         pattern=re.compile(r'addJavascriptInterface\s*\('),
-        description="Interfaz Java expuesta a JavaScript. Antes de API 17, permite ejecución de código arbitrario.",
-        recommendation="Usar @JavascriptInterface solo en métodos necesarios y validar la entrada.",
+        description="Interfaz Java/Kotlin expuesta directamente a JavaScript en WebView. "
+                    "En APIs < 17 permite RCE. En APIs modernas, cada método público anotado "
+                    "con @JavascriptInterface es invocable desde cualquier página cargada.",
+        recommendation="Exponer solo los métodos estrictamente necesarios con @JavascriptInterface. "
+                       "Validar el origen de la página antes de permitir llamadas. "
+                       "Nunca usar en WebViews que carguen URLs externas.",
+        ignore_if_contains=["test", "mock"],
+    ),
+    VulnRule(
+        rule_id="COMP005",
+        title="WebView.loadUrl con URI javascript:",
+        severity="high",
+        category="M6 - Componentes inseguros",
+        pattern=re.compile(
+            r'\.loadUrl\s*\(\s*["\']javascript:'
+            r'|\.evaluateJavascript\s*\([^,)]*(?:input|param|data|url|uri|extra|arg)'
+        ),
+        description="La app inyecta JavaScript en un WebView mediante loadUrl('javascript:...') "
+                    "o evaluateJavascript() con datos no confiables. "
+                    "Permite XSS si el contenido proviene de un Intent o fuente externa.",
+        recommendation="No construir URIs javascript: con datos externos. "
+                       "Si se usa evaluateJavascript(), escapar y validar toda entrada.",
+        ignore_if_contains=["test", "mock", "//"],
     ),
     VulnRule(
         rule_id="COMP004",
@@ -522,13 +592,25 @@ RULES: list[VulnRule] = [
         severity="high",
         category="M7 - Inyección",
         pattern=re.compile(
-            r'getIntent\(\)\.(getStringExtra|getData|getDataString)\s*\(.*?\)\s*;'
-            r'|Uri\.parse\s*\(\s*getIntent\(\)'
+            # Java: getIntent() inline — extras tipados + getAction + getExtras
+            r'getIntent\(\)\.(getStringExtra|getData|getDataString|getExtras'
+            r'|getIntExtra|getLongExtra|getBooleanExtra'
+            r'|getParcelableExtra|getSerializableExtra|getAction)\s*\('
+            # Java/Kotlin: Uri.parse con getIntent() o variable intent
+            r'|Uri\.parse\s*\(\s*(getIntent\(\)|intent\.)'
+            # Kotlin: variable intent (Activity/Fragment) — métodos de extracción
+            r'|(?<!\w)intent\.(getStringExtra|getDataString|getData|getIntExtra'
+            r'|getLongExtra|getBooleanExtra|getParcelableExtra|getSerializableExtra)\s*\('
+            # Kotlin: propiedad dataString de deep link
+            r'|(?<!\w)intent\.dataString\b'
+            # Kotlin: extras?.get/getString/getParcelable
+            r'|(?<!\w)intent\.extras\??\.(?:getString|getInt|getLong|getParcelable|get)\s*\('
         ),
         description="Datos extraídos de un Intent sin validación del origen. "
                     "Un deep link malicioso podría inyectar valores inesperados.",
         recommendation="Validar el scheme, host y parámetros del Intent antes de usarlos. "
                        "Restringir las actividades exportadas con android:exported=false.",
+        ignore_if_contains=["getScheme()", "getHost()", ".scheme", "test", "mock"],
     ),
 
     # ── M2: Almacenamiento inseguro adicional ─────────────────────────────────
@@ -596,19 +678,39 @@ RULES: list[VulnRule] = [
                        "del servidor.",
         ignore_if_contains=["certificatePinner", "CertificatePinner"],
     ),
+    VulnRule(
+        rule_id="NET006",
+        title="WebView acepta cualquier certificado SSL",
+        severity="critical",
+        category="M3 - Comunicación insegura",
+        pattern=re.compile(
+            # handler.proceed() dentro de onReceivedSslError
+            r'onReceivedSslError\s*\([^)]*\)\s*\{[^}]*handler\.proceed\s*\(\s*\)'
+            # handler.proceed() suelto (código decompilado donde el método ya está en contexto)
+            r'|SslErrorHandler[^;\n]*handler[^;\n]*[;\n][^}]*handler\.proceed\s*\(\s*\)'
+        ),
+        description="WebViewClient con onReceivedSslError que llama handler.proceed() sin "
+                    "verificar el error. Acepta cualquier certificado inválido, caducado o "
+                    "autofirmado — equivalente a deshabilitar TLS para WebViews.",
+        recommendation="No llamar handler.proceed() en onReceivedSslError salvo en builds de "
+                       "debug. En producción, llamar handler.cancel() y mostrar un error al usuario.",
+        ignore_if_contains=["BuildConfig.DEBUG", "debug", "test", "mock"],
+    ),
 
     # ── M10: Funcionalidad extra ──────────────────────────────────────────────
     VulnRule(
         rule_id="EXTRA001",
         title="Permisos peligrosos en uso",
         severity="info",
-        category="M10 - Funcionalidad extra",
+        category="M6 - Componentes inseguros",
         pattern=re.compile(
             r'Manifest\.permission\.(READ_CONTACTS|READ_CALL_LOG|SEND_SMS|'
             r'ACCESS_FINE_LOCATION|RECORD_AUDIO|READ_EXTERNAL_STORAGE|CAMERA)'
         ),
-        description="Uso de permisos considerados peligrosos por Android.",
-        recommendation="Verificar que cada permiso es estrictamente necesario y está justificado.",
+        description="Uso de permisos considerados peligrosos por Android. "
+                    "Verificar que cada permiso solicitado es estrictamente necesario.",
+        recommendation="Seguir el principio de mínimo privilegio: solicitar solo los permisos "
+                       "imprescindibles y justificar cada uno en la ficha de Play Store.",
     ),
 ]
 
@@ -762,6 +864,11 @@ def scan_directory(
 
                 match = rule.pattern.search(line)
                 if match:
+                    # Filtrar valores que son identificadores SCREAMING_SNAKE_CASE, no secretos
+                    if rule.ignore_value_regex:
+                        val_match = re.search(r'["\']([^"\']{6,})["\']', match.group(0))
+                        if val_match and rule.ignore_value_regex.search(val_match.group(1)):
+                            continue
                     findings.append(VulnFinding(
                         rule_id=rule.rule_id,
                         title=rule.title,
@@ -1104,6 +1211,10 @@ def _scan_xml_resources_for_secrets(base_dir: Path) -> list[VulnFinding]:
                         continue
                     match = rule.pattern.search(line)
                     if match:
+                        if rule.ignore_value_regex:
+                            val_match = re.search(r'["\']([^"\']{6,})["\']', match.group(0))
+                            if val_match and rule.ignore_value_regex.search(val_match.group(1)):
+                                continue
                         key = (file_path, lineno, rule.rule_id)
                         if key in seen_keys:
                             continue
