@@ -40,7 +40,7 @@ from nutcracker_core.frida_bypass import (
 )
 from nutcracker_core.manifest_analyzer import analyze_decompiled_dir, Misconfiguration
 from nutcracker_core.pdf_reporter import generate_pdf_report
-from nutcracker_core.reporter import print_report, save_json_report, save_analysis_json, print_vuln_report
+from nutcracker_core.reporter import print_report, save_json_report, save_analysis_json, print_vuln_report, print_masvs_summary
 from nutcracker_core.pipeline import (
     ExtractionResult,
     connected_adb_devices,
@@ -653,7 +653,15 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
         result.elapsed_seconds = elapsed_seconds
 
         # Guardar JSON una vez que todos los datos están completos
-        save_analysis_json(result)
+        save_analysis_json(result, scan_result=vuln_scan)
+
+        # ── Resumen MASVS v2 ─────────────────────────────────────────────
+        try:
+            from nutcracker_core.masvs import build_masvs_report
+            _masvs = build_masvs_report(result, vuln_scan)
+            print_masvs_summary(_masvs)
+        except Exception:
+            pass
 
         # ── Veredicto final en terminal ───────────────────────────────────
         _print_verdict(result, vuln_scan)
@@ -1863,14 +1871,14 @@ def batch(
                 pdf_dest = Path(reports_dir) / f"{pkg}.pdf"
                 scan_result = _post_analysis_flow(result, apk_path)
                 # Guardar JSON una vez que todos los datos están completos
-                save_analysis_json(result)
+                save_analysis_json(result, scan_result=scan_result)
                 from nutcracker_core.pdf_reporter import generate_pdf_report
                 pdf_path = generate_pdf_report(result, pdf_dest, scan=scan_result, manifest=_MANIFEST_ANALYSIS)
                 console.print(f"  [green]✔[/green] PDF: [bold]{pdf_path}[/bold]")
             else:
                 scan_result = _post_analysis_flow(result, apk_path)
                 # Guardar JSON una vez que todos los datos están completos
-                save_analysis_json(result)
+                save_analysis_json(result, scan_result=scan_result)
 
             status = "protected_broken" if result.protection_broken \
                 else ("protected" if result.protected else "unprotected")

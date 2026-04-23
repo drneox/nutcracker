@@ -75,8 +75,10 @@ from .detectors.appdome import AppdomeDetector
 from .detectors.dexguard import DexGuardDetector
 from .detectors.libraries import KnownLibrariesDetector
 from .detectors.magisk import MagiskDetector
+from .detectors.certificate_pinning import CertificatePinningDetector
 from .detectors.manual_checks import ManualChecksDetector
 from .detectors.safetynet import SafetyNetDetector
+from .detectors.signature_check import SignatureCheckDetector
 
 
 # Lista de todos los detectores disponibles
@@ -87,6 +89,8 @@ ALL_DETECTORS = [
     MagiskDetector(),
     DexGuardDetector(),
     AppdomeDetector(),
+    SignatureCheckDetector(),
+    CertificatePinningDetector(),
 ]
 
 
