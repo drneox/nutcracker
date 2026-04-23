@@ -49,7 +49,7 @@ _SECRET_PATTERNS: list[tuple[str, str, str]] = [
     ("google_maps_key", r'AIza[0-9A-Za-z\\-_]{35}',                                             "Google Maps API Key"),
     ("jwt_token",       r'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}',  "JWT Token hardcodeado"),
     ("private_ip",      r'https?://(?:192\.168|10\.\d+|172\.(?:1[6-9]|2\d|3[01]))\.\d+\.\d+',  "IP privada hardcodeada"),
-    ("password_field",  r'(?i)<string[^>]+name="[^"]*passw[^"]*"[^>]*>([^<]{6,})<',            "Posible contraseña hardcodeada"),
+    ("password_field",  r'(?i)<string[^>]+name="[^"]*passw[^"]*"[^>]*>([^\s<]{6,})<',           "Posible contraseña hardcodeada"),
 ]
 
 
