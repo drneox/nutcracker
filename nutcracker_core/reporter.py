@@ -179,12 +179,24 @@ def save_json_report(result: "AnalysisResult", output_path: str | Path) -> None:
     console.print(f"[dim]Informe JSON guardado en:[/dim] [bold]{output_path}[/bold]")
 
 
-def save_analysis_json(result: "AnalysisResult", reports_dir: str | Path = "./reports") -> Path:
+def save_analysis_json(
+    result: "AnalysisResult",
+    reports_dir: str | Path = "./reports",
+    scan_result=None,
+    manifest=None,
+) -> Path:
     """Persiste el AnalysisResult en reports/<package>/<timestamp>.json.
 
     Convención canónica para que todos los módulos guarden en el mismo lugar.
     Debe llamarse una sola vez, cuando el resultado está completamente poblado
     (incluido decompilation_info si hubo bypass).
+
+    Args:
+        result:      Resultado del análisis de protecciones.
+        reports_dir: Directorio raíz donde guardar los reportes.
+        scan_result: ScanResult del vuln_scanner (opcional). Si se provee,
+                     se añade la sección ``masvs`` al JSON con el reporte
+                     de cumplimiento MASVS v2.
     """
     pkg_dir = Path(reports_dir) / result.package
     pkg_dir.mkdir(parents=True, exist_ok=True)
@@ -194,12 +206,98 @@ def save_analysis_json(result: "AnalysisResult", reports_dir: str | Path = "./re
         import datetime
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    data = result.to_dict()
+
+    # Enriquecer con reporte MASVS v2 si hay datos suficientes
+    try:
+        from .masvs import build_masvs_report
+        masvs_report = build_masvs_report(result, scan_result, manifest)
+        data["masvs"] = masvs_report.to_dict()
+    except Exception:
+        pass  # No bloquear el guardado si el módulo falla
+
     json_path = pkg_dir / f"{ts}.json"
     with json_path.open("w", encoding="utf-8") as fh:
-        json.dump(result.to_dict(), fh, ensure_ascii=False, indent=2)
+        json.dump(data, fh, ensure_ascii=False, indent=2)
 
     console.print(f"[dim]  Análisis guardado: {json_path}[/dim]")
     return json_path
+
+
+def print_masvs_summary(masvs_report: "MASVSReport") -> None:
+    """Imprime el resumen de cumplimiento MASVS v2 en consola."""
+    from .masvs import MASVSReport
+
+    _GRADE_COLOR = {"A": "bold green", "B": "green", "C": "yellow", "D": "red", "F": "bold red"}
+    _STATUS_ICON = {
+        "pass":         ("[green]✔[/green]",  "pass"),
+        "fail":         ("[red]✘[/red]",      "FAIL"),
+        "bypass":       ("[yellow]⚡[/yellow]", "BYPASS"),
+        "no_protection":  ("[red]\u2718[/red]",      "FAIL"),
+        "not_tested":   ("[dim]–[/dim]",       "no evaluado"),
+    }
+
+    from .masvs import MASVS_CONTROLS as _ALL_CONTROLS
+    _MASVS_TOTAL = 24  # Total de controles MASVS v2 oficial
+    _covered = len(_ALL_CONTROLS)
+
+    grade_color = _GRADE_COLOR.get(masvs_report.grade, "white")
+    score_text = Text(justify="center")
+    score_text.append(f"\n  MASVS v2  |  Score: ", style="bold white")
+    score_text.append(f"{masvs_report.score}/100", style=f"bold {grade_color}")
+    score_text.append("  |  Grade: ", style="bold white")
+    score_text.append(masvs_report.grade, style=f"bold {grade_color}")
+    score_text.append(f"  |  Cobertura: ", style="bold white")
+    score_text.append(f"{_covered}/{_MASVS_TOTAL} controles", style="bold cyan")
+    if masvs_report.bypass_confirmed:
+        score_text.append("  |  ⚡ BYPASS CONFIRMADO", style="bold yellow")
+    score_text.append("\n")
+
+    summary = masvs_report.to_dict()["summary"]
+    _fail_total = summary['fail'] + summary['no_protection']
+    _stat_parts = []
+    if summary['pass']:   _stat_parts.append(f"✔ {summary['pass']} pass")
+    if _fail_total:       _stat_parts.append(f"✘ {_fail_total} fail")
+    if summary['bypass']: _stat_parts.append(f"⚡ {summary['bypass']} bypass")
+    stats = "  ".join(_stat_parts)
+    console.print()
+    console.print(Panel(score_text, subtitle=stats, expand=False, border_style=grade_color))
+
+    # Orden de visualización: peor estado primero
+    _STATUS_ORDER = {"bypass": 0, "fail": 1, "no_protection": 2, "not_tested": 3, "pass": 4}
+
+    all_controls = sorted(
+        masvs_report.controls,
+        key=lambda c: (_STATUS_ORDER.get(c.status, 3), -c.penalty),
+    )
+
+    table = Table(
+        title="Controles MASVS v2",
+        box=box.ROUNDED,
+        show_lines=True,
+        highlight=True,
+    )
+    table.add_column("Control",      style="bold cyan", no_wrap=True, width=22)
+    table.add_column("Status",        justify="center",  no_wrap=True, width=14)
+    table.add_column("Descripción",  overflow="fold")
+
+    for ctrl in all_controls:
+        icon, label = _STATUS_ICON.get(ctrl.status, ("?", ctrl.status))
+        status_cell = Text()
+        status_cell.append_text(Text.from_markup(icon))
+        status_cell.append(f" {label}")
+
+        # Filas de pass/not_tested más tenues
+        row_style = "dim" if ctrl.status in ("pass", "not_tested") else ""
+        table.add_row(
+            ctrl.control_id,
+            status_cell,
+            ctrl.description,
+            style=row_style,
+        )
+
+    console.print(table)
+    console.print()
 
 
 def load_osint_json(package: str):

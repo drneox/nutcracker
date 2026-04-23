@@ -556,6 +556,53 @@ def _misconfig_section(pdf: APKReportPDF, manifest: "ManifestAnalysisResult") ->
         pdf.ln(3)
 
 
+def _masvs_ids_for_misconfig(title: str) -> list[str]:
+    """Devuelve los IDs MASVS que aplican a una misconfiguration dado su título."""
+    from .masvs import MISCONFIG_TO_MASVS
+    ids: list[str] = []
+    for prefix, cids in MISCONFIG_TO_MASVS:
+        if title.startswith(prefix):
+            ids.extend(cids)
+    return list(dict.fromkeys(ids))  # deduplica conservando orden
+
+
+def _masvs_ids_for_rule(rule_id: str) -> list[str]:
+    """Devuelve los IDs MASVS que aplican a un rule_id de vuln scanner."""
+    from .masvs import RULE_TO_MASVS
+    return RULE_TO_MASVS.get(rule_id, [])
+
+
+def _render_masvs_tags(pdf: APKReportPDF, masvs_ids: list[str], row_bg: tuple) -> None:
+    """Renderiza badges con los IDs MASVS afectados al final de una tarjeta."""
+    if not masvs_ids:
+        return
+    fw = pdf.w - pdf.l_margin - pdf.r_margin
+    x0 = pdf.l_margin
+    TAG_H = 5.0
+    TAG_PAD = 1.5
+    pdf.set_x(x0)
+    pdf.set_fill_color(*row_bg)
+    pdf.set_font("Helvetica", "", 5.5)
+    pdf.set_text_color(*C["muted"])
+    pdf.cell(fw, TAG_PAD, "", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    pdf.set_x(x0)
+    for tag in masvs_ids:
+        tag_w = pdf.get_string_width(tag) + 4
+        if pdf.get_x() + tag_w > x0 + fw:
+            pdf.ln(TAG_H + 1)
+            pdf.set_x(x0)
+        pdf.set_fill_color(*C["accent"])
+        pdf.set_text_color(*C["white"])
+        pdf.set_font("Helvetica", "B", 5.5)
+        pdf.cell(tag_w, TAG_H, _safe(tag), align="C", fill=True,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP)
+        pdf.set_x(pdf.get_x() + 1.5)
+
+    pdf.ln(TAG_H + 1)
+    pdf.set_text_color(*C["text"])
+
+
 def _misconfig_card(pdf: APKReportPDF, m: "Misconfiguration", row_bg: tuple) -> None:
     """Renderiza una misconfiguration como tarjeta."""
     fw = pdf.w - pdf.l_margin - pdf.r_margin
@@ -603,6 +650,9 @@ def _misconfig_card(pdf: APKReportPDF, m: "Misconfiguration", row_bg: tuple) -> 
         pdf.set_text_color(*C["muted"])
         pdf.set_fill_color(*row_bg)
         pdf.multi_cell(fw, 5, _safe(f"> {m.recommendation}"), fill=True)
+
+    masvs_ids = _masvs_ids_for_misconfig(m.title)
+    _render_masvs_tags(pdf, masvs_ids, row_bg)
 
     pdf.set_text_color(*C["text"])
     pdf.ln(1.5)
@@ -684,6 +734,9 @@ def _vuln_card(pdf: APKReportPDF, finding: "VulnFinding", base_dir: Path, row_bg
     pdf.set_text_color(*C["muted"])
     pdf.set_fill_color(*row_bg)
     pdf.multi_cell(fw, 5, _safe(f"> {finding.recommendation}"), fill=True)
+
+    masvs_ids = _masvs_ids_for_rule(finding.rule_id)
+    _render_masvs_tags(pdf, masvs_ids, row_bg)
 
     pdf.set_text_color(*C["text"])
     pdf.ln(1.5)
@@ -904,6 +957,234 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
 
+_GRADE_COLOR_PDF: dict[str, tuple] = {
+    "A": (34,  197,  94),   # verde
+    "B": (74,  222, 128),   # verde claro
+    "C": (234, 179,   8),   # amarillo
+    "D": (220, 130,   0),   # naranja
+    "F": (239,  68,  68),   # rojo
+}
+_STATUS_COLOR_PDF: dict[str, tuple] = {
+    "fail":          (239,  68,  68),
+    "bypass":        (220,  95,   0),
+    "no_protection": (239,  68,  68),
+    "pass":          (34,  197,  94),
+    "not_tested":    (100, 116, 139),
+}
+_STATUS_LABEL_PDF: dict[str, str] = {
+    "fail":          "FAIL",
+    "bypass":        "BYPASS",
+    "no_protection": "FAIL",
+    "pass":          "PASS",
+    "not_tested":    "NO EVAL.",
+}
+
+
+def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResult | None" = None, manifest: "ManifestAnalysisResult | None" = None) -> None:
+    """Sección MASVS v2 — score, grado e incumplimientos."""
+    from .masvs import build_masvs_report
+
+    masvs = build_masvs_report(result, scan, manifest)
+
+    from .masvs import MASVS_CONTROLS as _ALL_CONTROLS
+    _MASVS_TOTAL = 24  # Total de controles MASVS v2 oficial
+    _covered = len(_ALL_CONTROLS)
+
+    pdf.add_page()
+    pdf.section_title(f"Cumplimiento MASVS v2  ({_covered}/{_MASVS_TOTAL} controles evaluados)")
+
+    fw  = pdf.w - pdf.l_margin - pdf.r_margin
+    x0  = pdf.l_margin
+    grade_color = _GRADE_COLOR_PDF.get(masvs.grade, C["muted"])
+
+    # ── Banner de score ───────────────────────────────────────────────────────
+    banner_h = 22
+    pdf.set_fill_color(*C["bg"])
+    pdf.rect(x0, pdf.get_y(), fw, banner_h, style="F")
+
+    by = pdf.get_y()
+
+    # Score grande
+    pdf.set_xy(x0 + 4, by + 3)
+    pdf.set_font("Helvetica", "B", 22)
+    pdf.set_text_color(*grade_color)
+    pdf.cell(28, 10, str(masvs.score), align="R")
+
+    pdf.set_xy(x0 + 33, by + 6)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*C["muted"])
+    pdf.cell(16, 5, "/ 100", align="L")
+
+    # Separador vertical
+    pdf.set_draw_color(*C["accent"])
+    pdf.set_line_width(0.3)
+    pdf.line(x0 + 52, by + 3, x0 + 52, by + banner_h - 3)
+
+    # Grado
+    pdf.set_xy(x0 + 55, by + 3)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(*grade_color)
+    pdf.cell(14, 10, masvs.grade, align="C")
+
+    pdf.set_xy(x0 + 55, by + 13)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(*C["muted"])
+    pdf.cell(14, 4, "Grado", align="C")
+
+    # Separador vertical
+    pdf.line(x0 + 72, by + 3, x0 + 72, by + banner_h - 3)
+
+    # Bypass badge (si aplica)
+    bx = x0 + 76
+    if masvs.bypass_confirmed:
+        pdf.set_xy(bx, by + 5)
+        pdf.set_fill_color(220, 95, 0)
+        pdf.set_text_color(*C["white"])
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.cell(28, 6, "BYPASS CONFIRMADO", align="C", fill=True)
+        bx += 32
+
+    # Estadísticas de controles
+    summary = masvs.to_dict()["summary"]
+    _fail_total = summary['fail'] + summary['no_protection']
+    _all_stats = [
+        (summary['pass'],        "pass",    C["success"]),
+        (_fail_total,            "fail",    C["danger"]),
+        (summary['bypass'],      "bypass",  (220, 95, 0)),
+        (summary['not_tested'],  "no eval", C["muted"]),
+    ]
+    stats = [(str(v), l, c) for v, l, c in _all_stats if v > 0]
+    sx = bx + 4
+    for val, lbl, col in stats:
+        if sx + 18 > x0 + fw - 4:
+            break
+        pdf.set_xy(sx, by + 3)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(*col)
+        pdf.cell(14, 6, val, align="C")
+        pdf.set_xy(sx, by + 10)
+        pdf.set_font("Helvetica", "", 6)
+        pdf.set_text_color(*C["muted"])
+        pdf.cell(14, 4, lbl, align="C")
+        sx += 16
+
+    pdf.set_y(by + banner_h + 3)
+    pdf.set_text_color(*C["text"])
+
+    # ── Tabla de controles (todos, peores primero) ────────────────────────────
+    _STATUS_ORDER_PDF = {"bypass": 0, "fail": 1, "no_protection": 2, "not_tested": 3, "pass": 4}
+    all_controls = sorted(
+        masvs.controls,
+        key=lambda c: (_STATUS_ORDER_PDF.get(c.status, 3), -c.penalty),
+    )
+
+    # Cabecera de tabla
+    COL_W = {"ctrl": 36, "status": 22, "desc": fw - 36 - 22 - 18 - 16, "findings": 18, "penalty": 16}
+    HDR_H = 6
+
+    def _draw_table_header() -> None:
+        pdf.set_fill_color(*C["accent"])
+        pdf.set_text_color(*C["white"])
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_x(x0)
+        for txt, w in [("Control", COL_W["ctrl"]), ("Status", COL_W["status"]),
+                       ("Descripci\u00f3n", COL_W["desc"]),
+                       ("Hallazgos", COL_W["findings"]), ("Penalizaci\u00f3n", COL_W["penalty"])]:
+            pdf.cell(w, HDR_H + 1, txt, align="C", fill=True,
+                     new_x=XPos.RIGHT, new_y=YPos.TOP)
+        pdf.ln(HDR_H + 1)
+
+    _draw_table_header()
+
+    LINE_H = 4.5  # altura por línea de texto
+
+    # Filas
+    for i, ctrl in enumerate(all_controls):
+        is_ok = ctrl.status in ("pass", "not_tested")
+        is_pass    = ctrl.status == "pass"
+        is_not_tested = ctrl.status == "not_tested"
+        scolor = _STATUS_COLOR_PDF.get(ctrl.status, C["muted"])
+        slabel = _STATUS_LABEL_PDF.get(ctrl.status, ctrl.status.upper())
+
+        # Estimación inicial de row_h para page-break check
+        est_lines = max(1, len(ctrl.description) // max(1, int(COL_W["desc"] / 2.0)) + 1)
+        est_row_h = max(7, est_lines * LINE_H)
+
+        if pdf.will_page_break(est_row_h + 2):
+            pdf.add_page()
+            _draw_table_header()
+
+        ry = pdf.get_y()
+        row_bg = C["row_alt"] if i % 2 else C["row_normal"]
+        desc_x = x0 + COL_W["ctrl"] + COL_W["status"]
+
+        # ── Paso 1: medir altura de descripción (sin fill) ──────────────────
+        pdf.set_xy(desc_x, ry)
+        pdf.set_font("Helvetica", "", 6.5)
+        pdf.set_text_color(*C["text"])
+        pdf.multi_cell(COL_W["desc"], LINE_H, _safe(ctrl.description), fill=False)
+        row_h = max(est_row_h, pdf.get_y() - ry)
+
+        # ── Paso 2: rellenar fondo de TODA la fila (rect completo) ──────────
+        pdf.set_fill_color(*row_bg)
+        pdf.rect(x0, ry, fw, row_h, style="F")
+
+        # ── Paso 3: rerenderizar descripción (sin fill, fondo ya puesto) ────
+        pdf.set_xy(desc_x, ry)
+        pdf.set_font("Helvetica", "", 6.5)
+        pdf.set_text_color(*C["text"])
+        pdf.multi_cell(COL_W["desc"], LINE_H, _safe(ctrl.description), fill=False)
+
+        # ── Paso 4: Control ID ───────────────────────────────────────────────
+        pdf.set_xy(x0, ry)
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_text_color(*C["accent"])
+        pdf.cell(COL_W["ctrl"], row_h, _safe(ctrl.control_id), fill=False,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP)
+
+        # ── Paso 5: Status badge ─────────────────────────────────────────────
+        badge_color = C["success"] if is_pass else (C["muted"] if is_not_tested else scolor)
+        pdf.set_xy(x0 + COL_W["ctrl"], ry)
+        pdf.set_fill_color(*badge_color)
+        pdf.set_text_color(*C["white"])
+        pdf.set_font("Helvetica", "B", 6.5)
+        pdf.cell(COL_W["status"], row_h, slabel, align="C", fill=True,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP)
+
+        # ── Paso 4: Hallazgos ────────────────────────────────────────────────
+        findings_x = desc_x + COL_W["desc"]
+        pdf.set_xy(findings_x, ry)
+        if ctrl.finding_count > 0:
+            findings_val = str(ctrl.finding_count)
+            findings_color = C["danger"]
+            findings_bold = "B"
+        elif ctrl.status == "no_protection":
+            findings_val = "1"            # ausencia de protección = 1 hallazgo
+            findings_color = C["danger"]
+            findings_bold = "B"
+        else:
+            findings_val = "-"
+            findings_color = C["muted"]
+            findings_bold = ""
+        pdf.set_font("Helvetica", findings_bold, 7)
+        pdf.set_text_color(*findings_color)
+        pdf.cell(COL_W["findings"], row_h, findings_val, align="C", fill=False,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP)
+
+        # ── Paso 6: Penalización ─────────────────────────────────────────────
+        penalty_val = f"-{ctrl.penalty}" if ctrl.penalty > 0 else "-"
+        penalty_color = C["danger"] if ctrl.penalty > 0 else C["muted"]
+        pdf.set_font("Helvetica", "B" if ctrl.penalty > 0 else "", 7)
+        pdf.set_text_color(*penalty_color)
+        pdf.cell(COL_W["penalty"], row_h, penalty_val, align="C", fill=False,
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        pdf.set_y(ry + row_h + 1.5)
+
+    pdf.set_text_color(*C["text"])
+    pdf.ln(2)
+
+
 def _leaks_section(pdf: APKReportPDF, scan: "ScanResult") -> None:
     leaks, _ = _split_findings(scan)
     _findings_section(pdf, scan.base_dir, leaks, "Leaks", "No se encontraron leaks.")
@@ -928,10 +1209,11 @@ def generate_pdf_report(
     Genera un informe PDF con las secciones:
       1. Resumen (portada)
       2. Protecciones descubiertas
-      3. Misconfigurations del Manifest
-      4. OSINT
-      5. Leaks
-      6. Vulnerabilidades
+      3. MASVS v2 compliance
+      4. Misconfigurations del Manifest
+      5. OSINT
+      6. Leaks
+      7. Vulnerabilidades
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -947,7 +1229,10 @@ def generate_pdf_report(
     # 2. Protecciones descubiertas
     _protections_section(pdf, result)
 
-    # 3. Misconfigurations del manifest
+    # 3. MASVS v2 compliance
+    _masvs_section(pdf, result, scan=scan, manifest=manifest)
+
+    # 4. Misconfigurations del manifest
     if manifest is not None:
         _misconfig_section(pdf, manifest)
 
