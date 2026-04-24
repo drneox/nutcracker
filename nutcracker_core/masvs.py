@@ -131,25 +131,40 @@ _POSITIVE_ONLY_DETECTORS: frozenset[str] = frozenset({
 # ── Mapeo misconfigs del manifest → MASVS ────────────────────────────────────
 # Cada entrada: (prefijo del título de Misconfiguration, [control_ids])
 MISCONFIG_TO_MASVS: list[tuple[str, list[str]]] = [
+    # ── These titles are the same in both languages ───────────────────────────
     ('android:debuggable="true"',               ["MASVS-CODE-2"]),
     ('android:allowBackup="true"',              ["MASVS-STORAGE-1"]),
     ('android:usesCleartextTraffic="true"',     ["MASVS-NETWORK-1"]),
+    ('AWS Access Key',                          ["MASVS-STORAGE-2"]),
+    ('Firebase Realtime DB URL',                ["MASVS-STORAGE-2"]),
+    ('Firebase API Key',                        ["MASVS-STORAGE-2"]),
+    ('Google Maps API Key',                     ["MASVS-STORAGE-2"]),
+    # ── Spanish ───────────────────────────────────────────────────────────────
     ('Sin android:networkSecurityConfig',       ["MASVS-NETWORK-1"]),
     ('Sin Network Security Config y cleartext', ["MASVS-NETWORK-1"]),
-    ('Confía en CAs del usuario',               ["MASVS-NETWORK-2"]),
+    ('Conf\u00eda en CAs del usuario',          ["MASVS-NETWORK-2"]),
     ('Cleartext permitido para dominio',        ["MASVS-NETWORK-1"]),
     ('<activity> exportado sin permiso',        ["MASVS-PLATFORM-1"]),
     ('<service> exportado sin permiso',         ["MASVS-PLATFORM-1"]),
     ('<receiver> exportado sin permiso',        ["MASVS-PLATFORM-1"]),
     ('<provider> exportado sin permiso',        ["MASVS-PLATFORM-1"]),
     ('API Key hardcodeada',                     ["MASVS-STORAGE-2"]),
-    ('AWS Access Key',                          ["MASVS-STORAGE-2"]),
-    ('Firebase Realtime DB URL',                ["MASVS-STORAGE-2"]),
-    ('Firebase API Key',                        ["MASVS-STORAGE-2"]),
-    ('Google Maps API Key',                     ["MASVS-STORAGE-2"]),
     ('JWT Token hardcodeado',                   ["MASVS-STORAGE-2", "MASVS-AUTH-2"]),
     ('IP privada hardcodeada',                  ["MASVS-NETWORK-1"]),
-    ('Posible contraseña hardcodeada',          ["MASVS-STORAGE-2"]),
+    ('Posible contrase\u00f1a hardcodeada',     ["MASVS-STORAGE-2"]),
+    # ── English ───────────────────────────────────────────────────────────────
+    ('No android:networkSecurityConfig',        ["MASVS-NETWORK-1"]),
+    ('No Network Security Config and cleartext',["MASVS-NETWORK-1"]),
+    ('Trusts user CAs',                         ["MASVS-NETWORK-2"]),
+    ('Cleartext allowed for domain',            ["MASVS-NETWORK-1"]),
+    ('<activity> exported without permission',  ["MASVS-PLATFORM-1"]),
+    ('<service> exported without permission',   ["MASVS-PLATFORM-1"]),
+    ('<receiver> exported without permission',  ["MASVS-PLATFORM-1"]),
+    ('<provider> exported without permission',  ["MASVS-PLATFORM-1"]),
+    ('Hardcoded API Key',                       ["MASVS-STORAGE-2"]),
+    ('Hardcoded JWT Token',                     ["MASVS-STORAGE-2", "MASVS-AUTH-2"]),
+    ('Hardcoded Private IP',                    ["MASVS-NETWORK-1"]),
+    ('Possible hardcoded password',             ["MASVS-STORAGE-2"]),
 ]
 
 # ── Parámetros de penalización ────────────────────────────────────────────────
