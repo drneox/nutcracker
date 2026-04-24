@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 
 from fpdf import FPDF, XPos, YPos
 
+from .i18n import t
+
 if TYPE_CHECKING:
     from .analyzer import AnalysisResult
     from .manifest_analyzer import ManifestAnalysisResult, Misconfiguration
@@ -142,7 +144,7 @@ class APKReportPDF(FPDF):
         self.set_font("Helvetica", "B", 8)
         self.set_text_color(*C["white"])
         self.set_y(2)
-        self.cell(0, 6, "nutcracker  ·  Security Report", align="L")
+        self.cell(0, 6, _safe(t("security_report_header")), align="L")
         self.set_y(2)
         self.cell(0, 6, self.app_package, align="R")
         self.set_text_color(*C["text"])
@@ -152,9 +154,9 @@ class APKReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"Generado el {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  https://github.com/drneox/nutcracker",
+        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  https://github.com/drneox/nutcracker",
                   align="L")
-        self.cell(0, 5, f"Pagina {self.page_no()}", align="R")
+        self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
     def section_title(self, text: str) -> None:
         self.ln(4)
@@ -198,7 +200,7 @@ def _cover_page(
 
     pdf.set_font("Helvetica", "", 11)
     pdf.set_text_color(*C["info"])
-    pdf.cell(0, 7, "Android Security Analysis Report", align="C",
+    pdf.cell(0, 7, t("android_security_report"), align="C",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # Linea acento
@@ -212,17 +214,17 @@ def _cover_page(
     was_bypassed = _protection_broken(result)
 
     if not protected:
-        verdict_txt = "SIN PROTECCION"
+        verdict_txt = t("no_protection_verdict")
         verdict_bg  = C["danger"]
-        verdict_sub = "No se detectaron mecanismos de proteccion activos."
+        verdict_sub = t("no_protection_verdict_sub")
     elif was_bypassed:
-        verdict_txt = "PROTECCION ROTA"
+        verdict_txt = t("protection_broken_verdict")
         verdict_bg  = (220, 95, 0)
-        verdict_sub = "Protecciones detectadas pero eludidas via Frida/FART."
+        verdict_sub = t("protection_broken_verdict_sub")
     else:
-        verdict_txt = "PROTEGIDA"
+        verdict_txt = t("protected_verdict")
         verdict_bg  = C["success"]
-        verdict_sub = "Protecciones activas detectadas."
+        verdict_sub = t("protected_verdict_sub")
 
     pdf.set_fill_color(*verdict_bg)
     pdf.set_x(45)
@@ -250,21 +252,21 @@ def _cover_page(
         pdf.cell(0, 6, value, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     meta_row("Package:", _safe(result.package))
-    meta_row("Version:", _safe(f"{result.version_name}  (codigo {result.version_code})"))
-    meta_row("SDK min / target:", _safe(f"{result.min_sdk} / {result.target_sdk}"))
-    meta_row("Analizado:", result.analyzed_at[:19].replace("T", "  "))
+    meta_row(t("version_label"), _safe(f"{result.version_name}  (codigo {result.version_code})"))
+    meta_row(t("sdk_min_target_label"), _safe(f"{result.min_sdk} / {result.target_sdk}"))
+    meta_row(t("analyzed_label"), result.analyzed_at[:19].replace("T", "  "))
     if result.elapsed_seconds is not None:
-        meta_row("Duracion:", _format_elapsed(result.elapsed_seconds))
+        meta_row(t("duration_label"), _format_elapsed(result.elapsed_seconds))
 
     # Decompilacion con Frida (si se realizo)
     dec = getattr(result, "decompilation_info", None)
     if dec and dec.get("method"):
         meta_row(
-            "Decompilado:",
+            t("decompiled_label"),
             _safe(f"{dec['method']}  ({dec.get('dex_count', 0)} DEX volcados)"),
         )
         if dec.get("source_dir"):
-            meta_row("Fuentes:", _safe(str(dec["source_dir"])))
+            meta_row(t("sources_label"), _safe(str(dec["source_dir"])))
 
     # Motores de escaneo (vuln y leaks por separado)
     if scan is not None:
@@ -275,14 +277,14 @@ def _cover_page(
         if vuln_eng:
             vuln_label = vuln_eng.replace("regex", "regex interno")
             meta_row(
-                "Escaneo vulns:",
+                t("vuln_scan_engine_label"),
                 _safe(f"{vuln_label}  ({scan.files_scanned} archivos)"),
             )
 
         # Leaks
         if leak_eng:
             parts = [p.strip() for p in leak_eng.split("+") if p.strip()]
-            meta_row("Escaneo leaks:", _safe(" + ".join(parts)))
+            meta_row(t("leak_scan_engine_label"), _safe(" + ".join(parts)))
 
     pdf.ln(6)
     pdf.hline()
@@ -297,20 +299,20 @@ def _cover_page(
 
     # Sub-etiqueta de estado para la tarjeta de Protecciones
     if was_bypassed:
-        _prot_sub: tuple | None = ("ELUDIDA", (220, 95, 0))
+        _prot_sub: tuple | None = (t("bypassed_badge"), (220, 95, 0))
     elif not protected:
-        _prot_sub = ("SIN DETECT.", C["danger"])
+        _prot_sub = (t("not_detected_badge")[:10], C["danger"])
     else:
         _prot_sub = None
 
     counts = [
-        ("Protecciones", f"{detected_count} / {total_modules}",
+        (t("protections_card"), f"{detected_count} / {total_modules}",
          (150, 150, 150), _prot_sub),
-        ("Misconfigs", str(misconfig_count),
+        (t("misconfigs_card"), str(misconfig_count),
          C["warning"] if misconfig_count else C["success"], None),
-        ("Leaks", str(len(leaks)),
+        (t("leaks_card"), str(len(leaks)),
          C["danger"] if leaks else C["success"], None),
-        ("Vulns", str(len(vulns)),
+        (t("vulns_card"), str(len(vulns)),
          C["danger"] if vulns else C["success"], None),
     ]
 
@@ -365,7 +367,7 @@ def _cover_page(
 
 def _protections_section(pdf: APKReportPDF, result: "AnalysisResult") -> None:
     pdf.add_page()
-    pdf.section_title("Protecciones Descubiertas")
+    pdf.section_title(t("protections_section_title"))
 
     fw = pdf.w - pdf.l_margin - pdf.r_margin
     x0 = pdf.l_margin
@@ -376,14 +378,11 @@ def _protections_section(pdf: APKReportPDF, result: "AnalysisResult") -> None:
     total_count = len(result.results)
 
     if not detected_count:
-        status_msg = "No se detectaron mecanismos de proteccion activos."
+        status_msg = t("no_protections_detected")
     elif was_bypassed:
-        status_msg = (
-            f"{detected_count} de {total_count} protecciones detectadas. "
-            f"Las protecciones fueron eludidas via Frida/FART."
-        )
+        status_msg = t("protection_bypassed_status", count=detected_count, total=total_count)
     else:
-        status_msg = f"{detected_count} de {total_count} protecciones detectadas."
+        status_msg = t("protections_detected_status", count=detected_count, total=total_count)
 
     pdf.set_font("Helvetica", "", 8.5)
     pdf.set_text_color(*C["muted"])
@@ -414,7 +413,7 @@ def _protections_section(pdf: APKReportPDF, result: "AnalysisResult") -> None:
         pdf.set_fill_color(*det_fg)
         pdf.set_text_color(*C["white"])
         pdf.set_font("Helvetica", "B", 6.5)
-        pdf.cell(BADGE_W, 5, "DETECTADO" if det.detected else "NO DETECTADO",
+        pdf.cell(BADGE_W, 5, _safe(t("detected_badge") if det.detected else t("not_detected_badge")),
                  align="C", fill=True, new_x=XPos.RIGHT, new_y=YPos.TOP)
 
         # Badge ELUDIDO (solo si fue detectado y luego bypassed)
@@ -424,7 +423,7 @@ def _protections_section(pdf: APKReportPDF, result: "AnalysisResult") -> None:
             pdf.set_fill_color(220, 95, 0)
             pdf.set_text_color(*C["white"])
             pdf.set_font("Helvetica", "B", 6.5)
-            pdf.cell(ELUD_W, 5, "ELUDIDO", align="C", fill=True)
+            pdf.cell(ELUD_W, 5, _safe(t("bypassed_badge")), align="C", fill=True)
             right_offset += ELUD_W + 2
 
         # Nombre detector
@@ -453,7 +452,7 @@ def _protections_section(pdf: APKReportPDF, result: "AnalysisResult") -> None:
             pdf.set_fill_color(*body_bg)
             pdf.set_text_color(*C["muted"])
             pdf.set_font("Helvetica", "I", 6.5)
-            msg = "  Sin evidencias registradas." if det.detected else "  Sin proteccion detectada."
+            msg = t("no_evidence") if det.detected else t("no_protection_badge")
             pdf.cell(fw, 5, msg, fill=True,
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
@@ -474,12 +473,12 @@ def _misconfig_section(pdf: APKReportPDF, manifest: "ManifestAnalysisResult") ->
     misconfigs: list[Misconfiguration] = manifest.misconfigurations
 
     pdf.add_page()
-    pdf.section_title(f"Misconfigurations del Manifest  ({len(misconfigs)} hallazgos)")
+    pdf.section_title(t("misconfigs_section_title", count=len(misconfigs)))
 
     if not misconfigs:
         pdf.set_font("Helvetica", "I", 10)
         pdf.set_text_color(*C["success"])
-        pdf.cell(0, 8, _safe("Sin misconfigurations detectadas en el manifest."),
+        pdf.cell(0, 8, _safe(t("no_misconfigs")),
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
         return
@@ -493,13 +492,13 @@ def _misconfig_section(pdf: APKReportPDF, manifest: "ManifestAnalysisResult") ->
     if manifest.target_sdk:
         info_items.append(("Target SDK", str(manifest.target_sdk)))
     if manifest.debuggable:
-        info_items.append(("Debuggable", "SI"))
+        info_items.append((t("debuggable_info_label"), t("yes_label")))
     if manifest.allow_backup:
-        info_items.append(("allowBackup", "true"))
+        info_items.append((t("allow_backup_info_label"), "true"))
     if manifest.cleartext_traffic:
-        info_items.append(("Cleartext Traffic", "SI"))
+        info_items.append((t("cleartext_traffic_info_label"), t("yes_label")))
     if not manifest.has_network_security_config:
-        info_items.append(("Network Security Config", "NO"))
+        info_items.append((t("network_security_config_info_label"), t("no_label")))
 
     if info_items:
         pdf.set_font("Helvetica", "", 7.5)
@@ -543,7 +542,7 @@ def _misconfig_section(pdf: APKReportPDF, manifest: "ManifestAnalysisResult") ->
         pdf.set_fill_color(*bg)
         pdf.set_text_color(*fg)
         pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(0, 6, f"  {sev.upper()}  ({len(items)} hallazgos)",
+        pdf.cell(0, 6, f"  {sev.upper()}  ({len(items)} {t('findings_label')})",
                  fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(2)
 
@@ -791,7 +790,7 @@ def _findings_section(
         pdf.set_fill_color(*bg)
         pdf.set_text_color(*fg)
         pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(0, 6, f"  {sev.upper()}  ({len(items)} hallazgos)",
+        pdf.cell(0, 6, f"  {sev.upper()}  ({len(items)} {t('findings_label')})",
                  fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(2)
 
@@ -811,17 +810,17 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
     # Título con desglose por categoría
     parts: list[str] = []
     if osint.subdomains:
-        parts.append(f"{len(osint.subdomains)} subdominios")
+        parts.append(t("osint_subdomains_count", count=len(osint.subdomains)))
     if osint.public_leaks:
-        parts.append(f"{len(osint.public_leaks)} leaks publicos")
-    summary = " · ".join(parts) if parts else "sin hallazgos"
+        parts.append(t("osint_public_leaks_count", count=len(osint.public_leaks)))
+    summary = " \u00b7 ".join(parts) if parts else t("osint_no_findings")
     pdf.section_title(f"OSINT  ({summary})")
 
     # ── Dominios y subdominios ────────────────────────────────────────────
     if osint.domains_scanned:
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*C["accent"])
-        pdf.cell(0, 6, _safe(f"Dominios propios ({len(osint.domains_scanned)})"),
+        pdf.cell(0, 6, _safe(t("osint_own_domains", count=len(osint.domains_scanned))),
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
         pdf.ln(1)
@@ -840,7 +839,7 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
 
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*C["accent"])
-        pdf.cell(0, 7, _safe(f"Subdominios via crt.sh ({len(osint.subdomains)})"),
+        pdf.cell(0, 7, _safe(t("osint_subdomains_title", count=len(osint.subdomains))),
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
         pdf.ln(1)
@@ -852,7 +851,7 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
         if dev_subs:
             pdf.set_font("Helvetica", "B", 7.5)
             pdf.set_text_color(*C["warning"])
-            pdf.cell(0, 5, _safe(f"Entornos dev/qa/staging expuestos: {len(dev_subs)}"),
+            pdf.cell(0, 5, _safe(t("osint_dev_environments", count=len(dev_subs))),
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_text_color(*C["text"])
             for s in dev_subs[:10]:
@@ -878,7 +877,7 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
         if len(osint.subdomains) > 40:
             pdf.set_font("Helvetica", "I", 7)
             pdf.set_text_color(*C["muted"])
-            pdf.cell(0, 5, _safe(f"... y {len(osint.subdomains) - 40} mas"),
+            pdf.cell(0, 5, _safe(t("osint_and_more", count=len(osint.subdomains) - 40)),
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_text_color(*C["text"])
         pdf.ln(4)
@@ -890,7 +889,7 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
 
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*C["danger"])
-        pdf.cell(0, 7, _safe(f"Leaks publicos ({len(osint.public_leaks)})"),
+        pdf.cell(0, 7, _safe(t("osint_public_leaks_title", count=len(osint.public_leaks))),
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
         pdf.ln(1)
@@ -904,11 +903,11 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
         pdf.set_font("Helvetica", "B", 7)
         pdf.set_fill_color(*C["accent"])
         pdf.set_text_color(255, 255, 255)
-        pdf.cell(w_plat, row_h, "Plataforma", fill=True,
+        pdf.cell(w_plat, row_h, _safe(t("osint_platform")), fill=True,
                  new_x=XPos.RIGHT, new_y=YPos.TOP)
-        pdf.cell(w_title, row_h, _safe("T\u00edtulo"), fill=True,
+        pdf.cell(w_title, row_h, _safe(t("osint_title_col")), fill=True,
                  new_x=XPos.RIGHT, new_y=YPos.TOP)
-        pdf.cell(w_link, row_h, "Link", fill=True,
+        pdf.cell(w_link, row_h, _safe(t("osint_link")), fill=True,
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
 
@@ -948,7 +947,7 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
             pdf.add_page()
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*C["warning"])
-        pdf.cell(0, 7, _safe(f"Auth hardcodeados ({len(osint.auth_flows)})"),
+        pdf.cell(0, 7, _safe(t("osint_auth_flows", count=len(osint.auth_flows))),
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
         for af in osint.auth_flows[:10]:
@@ -971,13 +970,6 @@ _STATUS_COLOR_PDF: dict[str, tuple] = {
     "pass":          (34,  197,  94),
     "not_tested":    (100, 116, 139),
 }
-_STATUS_LABEL_PDF: dict[str, str] = {
-    "fail":          "FAIL",
-    "bypass":        "BYPASS",
-    "no_protection": "FAIL",
-    "pass":          "PASS",
-    "not_tested":    "NO EVAL.",
-}
 
 
 def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResult | None" = None, manifest: "ManifestAnalysisResult | None" = None) -> None:
@@ -990,8 +982,16 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
     _MASVS_TOTAL = 24  # Total de controles MASVS v2 oficial
     _covered = len(_ALL_CONTROLS)
 
+    _STATUS_LABEL_PDF: dict[str, str] = {
+        "fail":          t("status_fail"),
+        "bypass":        t("status_bypass"),
+        "no_protection": t("status_fail"),
+        "pass":          t("status_pass").upper(),
+        "not_tested":    t("masvs_status_no_eval"),
+    }
+
     pdf.add_page()
-    pdf.section_title(f"Cumplimiento MASVS v2  ({_covered}/{_MASVS_TOTAL} controles evaluados)")
+    pdf.section_title(t("masvs_section_title", covered=_covered, total=_MASVS_TOTAL))
 
     fw  = pdf.w - pdf.l_margin - pdf.r_margin
     x0  = pdf.l_margin
@@ -1029,7 +1029,7 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
     pdf.set_xy(x0 + 55, by + 13)
     pdf.set_font("Helvetica", "", 7)
     pdf.set_text_color(*C["muted"])
-    pdf.cell(14, 4, "Grado", align="C")
+    pdf.cell(14, 4, _safe(t("grade_label_pdf")), align="C")
 
     # Separador vertical
     pdf.line(x0 + 72, by + 3, x0 + 72, by + banner_h - 3)
@@ -1041,7 +1041,7 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
         pdf.set_fill_color(220, 95, 0)
         pdf.set_text_color(*C["white"])
         pdf.set_font("Helvetica", "B", 7)
-        pdf.cell(28, 6, "BYPASS CONFIRMADO", align="C", fill=True)
+        pdf.cell(28, 6, _safe(t("bypass_confirmed")), align="C", fill=True)
         bx += 32
 
     # Estadísticas de controles
@@ -1087,10 +1087,10 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
         pdf.set_text_color(*C["white"])
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_x(x0)
-        for txt, w in [("Control", COL_W["ctrl"]), ("Status", COL_W["status"]),
-                       ("Descripci\u00f3n", COL_W["desc"]),
-                       ("Hallazgos", COL_W["findings"]), ("Penalizaci\u00f3n", COL_W["penalty"])]:
-            pdf.cell(w, HDR_H + 1, txt, align="C", fill=True,
+        for txt, w in [(t("masvs_ctrl_col"), COL_W["ctrl"]), (t("masvs_status_col"), COL_W["status"]),
+                       (t("masvs_desc_col"), COL_W["desc"]),
+                       (t("masvs_findings_col"), COL_W["findings"]), (t("masvs_penalty_col"), COL_W["penalty"])]:
+            pdf.cell(w, HDR_H + 1, _safe(txt), align="C", fill=True,
                      new_x=XPos.RIGHT, new_y=YPos.TOP)
         pdf.ln(HDR_H + 1)
 
@@ -1187,12 +1187,12 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
 
 def _leaks_section(pdf: APKReportPDF, scan: "ScanResult") -> None:
     leaks, _ = _split_findings(scan)
-    _findings_section(pdf, scan.base_dir, leaks, "Leaks", "No se encontraron leaks.")
+    _findings_section(pdf, scan.base_dir, leaks, t("leaks_section_title"), t("no_leaks"))
 
 
 def _vuln_section(pdf: APKReportPDF, scan: "ScanResult") -> None:
     _, vulns = _split_findings(scan)
-    _findings_section(pdf, scan.base_dir, vulns, "Vulnerabilidades", "No se encontraron vulnerabilidades.")
+    _findings_section(pdf, scan.base_dir, vulns, t("vulns_section_title"), t("no_vulns"))
 
 
 # ── Funcion publica ───────────────────────────────────────────────────────────
@@ -1273,7 +1273,7 @@ class BatchReportPDF(FPDF):
         self.set_font("Helvetica", "B", 8)
         self.set_text_color(*C["white"])
         self.set_y(2)
-        self.cell(0, 6, "nutcracker  ·  Batch Report", align="L")
+        self.cell(0, 6, _safe(t("batch_report_header")), align="L")
         self.set_y(2)
         self.cell(0, 6, datetime.datetime.now().strftime("%d/%m/%Y"), align="R")
         self.set_text_color(*C["text"])
@@ -1283,9 +1283,9 @@ class BatchReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"Generado el {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  https://github.com/drneox/nutcracker",
+        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  \u00b7  https://github.com/drneox/nutcracker",
                   align="L")
-        self.cell(0, 5, f"Pagina {self.page_no()}", align="R")
+        self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
     def section_title(self, text: str) -> None:
         self.ln(4)
@@ -1308,11 +1308,11 @@ def _batch_cover(pdf: BatchReportPDF, apps: list[dict]) -> None:
     pdf.set_y(30)
     pdf.set_font("Helvetica", "B", 22)
     pdf.set_text_color(*C["white"])
-    pdf.cell(0, 10, "Evaluacion de Seguridad", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 10, _safe(t("batch_security_evaluation")), align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_font("Helvetica", "", 14)
     pdf.set_text_color(*C["accent"])
-    pdf.cell(0, 8, "Portafolio de Aplicaciones", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 8, _safe(t("batch_application_portfolio")), align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # Línea decorativa
     pdf.set_draw_color(*C["accent"])
@@ -1339,13 +1339,13 @@ def _batch_cover(pdf: BatchReportPDF, apps: list[dict]) -> None:
     total_findings = sum(a.get("findings", 0) for a in ok)
 
     stats = [
-        ("Apps evaluadas",     str(len(apps)),       C["accent"]),
-        ("Exitosas",           str(len(ok)),          C["success"]),
-        ("Errores",            str(len(errors)),      C["danger"] if errors else C["muted"]),
-        ("Sin proteccion",     str(len(unprotected)), C["warning"] if unprotected else C["success"]),
-        ("Proteccion rota",    str(len(broken)),      C["danger"] if broken else C["success"]),
-        ("Hallazgos totales",  str(total_findings),   C["info"]),
-        ("Criticos + Altos",   f"{total_critical} + {total_high}", C["danger"] if total_critical else C["warning"]),
+        (t("batch_apps_evaluated"),     str(len(apps)),       C["accent"]),
+        (t("batch_successful"),         str(len(ok)),          C["success"]),
+        (t("batch_errors"),             str(len(errors)),      C["danger"] if errors else C["muted"]),
+        (t("batch_unprotected"),        str(len(unprotected)), C["warning"] if unprotected else C["success"]),
+        (t("batch_protection_broken"),  str(len(broken)),      C["danger"] if broken else C["success"]),
+        (t("batch_total_findings"),     str(total_findings),   C["info"]),
+        (t("batch_critical_plus_high"), f"{total_critical} + {total_high}", C["danger"] if total_critical else C["warning"]),
     ]
 
     for label, value, color in stats:
@@ -1360,7 +1360,7 @@ def _batch_cover(pdf: BatchReportPDF, apps: list[dict]) -> None:
 def _batch_summary_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
     """Tabla resumen con todas las apps."""
     pdf.add_page()
-    pdf.section_title("Resumen Ejecutivo")
+    pdf.section_title(t("batch_executive_summary"))
 
     # Separar exitosas y errores
     ok = [a for a in apps if "error" not in a.get("status", "")]
@@ -1372,7 +1372,7 @@ def _batch_summary_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
     if ok:
         # Header de tabla
         col_w = [62, 22, 14, 14, 14, 14, 14, 20]  # package, estado, C, H, M, L, leaks, total
-        headers = ["Aplicacion", "Estado", "C", "H", "M", "L", "Leaks", "Total"]
+        headers = [t("col_app"), t("col_status"), "C", "H", "M", "L", t("col_leaks"), t("col_total")]
 
         pdf.set_font("Helvetica", "B", 7)
         pdf.set_fill_color(*C["bg"])
@@ -1400,9 +1400,9 @@ def _batch_summary_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
             # Estado
             status = a.get("status", "?")
             status_labels = {
-                "protected": "Protegida",
-                "unprotected": "Expuesta",
-                "protected_broken": "Bypass OK",
+                "protected": t("batch_status_protected"),
+                "unprotected": t("batch_status_unprotected"),
+                "protected_broken": t("batch_status_bypass"),
             }
             status_colors = {
                 "protected": C["success"],
@@ -1411,7 +1411,7 @@ def _batch_summary_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
             }
             pdf.set_font("Helvetica", "B", 7)
             pdf.set_text_color(*status_colors.get(status, C["muted"]))
-            pdf.cell(col_w[1], 5, status_labels.get(status, status), fill=True, align="C")
+            pdf.cell(col_w[1], 5, _safe(status_labels.get(status, status)), fill=True, align="C")
 
             # Severity counts
             for i, key in enumerate(["critical", "high", "medium", "low"]):
@@ -1443,7 +1443,7 @@ def _batch_summary_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
         pdf.ln(6)
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*C["danger"])
-        pdf.cell(0, 6, f"Apps con error ({len(errors)})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 6, _safe(t("batch_apps_with_error", count=len(errors))), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_font("Helvetica", "", 7)
         pdf.set_text_color(*C["text"])
         for e in errors:
@@ -1474,11 +1474,11 @@ def _batch_common_findings(pdf: BatchReportPDF, apps: list[dict]) -> None:
         return
 
     pdf.add_page()
-    pdf.section_title("Hallazgos Comunes")
+    pdf.section_title(t("batch_common_findings_title"))
 
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(*C["muted"])
-    pdf.cell(0, 5, _safe("Vulnerabilidades que se repiten en multiples aplicaciones"),
+    pdf.cell(0, 5, _safe(t("batch_common_findings_desc")),
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.ln(3)
 
@@ -1489,8 +1489,8 @@ def _batch_common_findings(pdf: BatchReportPDF, apps: list[dict]) -> None:
     pdf.set_font("Helvetica", "B", 7)
     pdf.set_fill_color(*C["bg"])
     pdf.set_text_color(*C["white"])
-    for i, h in enumerate(["Regla", "Hallazgo", "Severidad", "Apps afectadas"]):
-        pdf.cell(col_w[i], 6, h, fill=True, align="C" if i > 1 else "L")
+    for i, h in enumerate([t("col_rule"), t("col_finding"), t("col_severity"), t("col_affected_apps")]):
+        pdf.cell(col_w[i], 6, _safe(h), fill=True, align="C" if i > 1 else "L")
     pdf.ln()
 
     for idx, (rule_id, info) in enumerate(sorted_common):
@@ -1516,8 +1516,8 @@ def _batch_common_findings(pdf: BatchReportPDF, apps: list[dict]) -> None:
 
         pdf.set_text_color(*C["text"])
         pdf.set_font("Helvetica", "", 7)
-        apps_text = f"{len(info['apps'])} apps"
-        pdf.cell(col_w[3], 5, apps_text, fill=True, align="C")
+        apps_text = t("n_apps", count=len(info['apps']))
+        pdf.cell(col_w[3], 5, _safe(apps_text), fill=True, align="C")
         pdf.ln()
 
 
@@ -1531,7 +1531,7 @@ def _batch_app_cards(pdf: BatchReportPDF, apps: list[dict]) -> None:
     ok.sort(key=lambda a: (a.get("critical", 0), a.get("high", 0), a.get("findings", 0)), reverse=True)
 
     pdf.add_page()
-    pdf.section_title("Detalle por Aplicacion")
+    pdf.section_title(t("batch_app_detail_title"))
 
     for a in ok:
         if pdf.get_y() > 240:
@@ -1571,9 +1571,9 @@ def _batch_app_cards(pdf: BatchReportPDF, apps: list[dict]) -> None:
 
         # Status badge
         status_labels = {
-            "protected": "Protegida",
-            "unprotected": "Expuesta",
-            "protected_broken": "Bypass OK",
+            "protected": t("batch_status_protected"),
+            "unprotected": t("batch_status_unprotected"),
+            "protected_broken": t("batch_status_bypass"),
         }
         status_colors = {
             "protected": C["success"],
@@ -1582,7 +1582,7 @@ def _batch_app_cards(pdf: BatchReportPDF, apps: list[dict]) -> None:
         }
         pdf.set_font("Helvetica", "B", 7)
         pdf.set_text_color(*status_colors.get(status, C["muted"]))
-        pdf.cell(0, 5, status_labels.get(status, status), align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 5, _safe(status_labels.get(status, status)), align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         # Línea de hallazgos
         pdf.set_x(pdf.l_margin + 5)
@@ -1590,16 +1590,16 @@ def _batch_app_cards(pdf: BatchReportPDF, apps: list[dict]) -> None:
         pdf.set_text_color(*C["muted"])
         parts = []
         if critical:
-            parts.append(f"{critical} criticos")
+            parts.append(t("count_critical", count=critical))
         if high:
-            parts.append(f"{high} altos")
+            parts.append(t("count_high", count=high))
         if medium:
-            parts.append(f"{medium} medios")
+            parts.append(t("count_medium", count=medium))
         if low:
-            parts.append(f"{low} bajos")
+            parts.append(t("count_low", count=low))
         if leaks:
-            parts.append(f"{leaks} leaks")
-        summary = " · ".join(parts) if parts else "Sin hallazgos"
+            parts.append(t("count_leaks", count=leaks))
+        summary = " \u00b7 ".join(parts) if parts else t("no_findings")
         pdf.cell(0, 4, _safe(summary), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         # Top findings
@@ -1636,7 +1636,7 @@ def _batch_comparative_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
             groups[s].append(a)
 
     pdf.add_page()
-    pdf.section_title("Tabla Comparativa — Estado de Proteccion")
+    pdf.section_title(t("batch_comparative_title"))
 
     # Resumen visual con barras
     total = len(ok)
@@ -1645,9 +1645,9 @@ def _batch_comparative_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
     bar_h = 10
 
     status_meta = [
-        ("unprotected",      "Sin proteccion",    C["danger"]),
-        ("protected_broken", "Proteccion rota",   C["warning"]),
-        ("protected",        "Con proteccion",    C["success"]),
+        ("unprotected",      t("batch_status_unprotected"),  C["danger"]),
+        ("protected_broken", t("batch_protection_broken"),   C["warning"]),
+        ("protected",        t("batch_status_protected"),    C["success"]),
     ]
 
     # Barra proporcional
@@ -1682,7 +1682,7 @@ def _batch_comparative_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
 
     # Tabla detallada por grupo
     col_w = [70, 28, 16, 16, 16, 16, 12]
-    headers = ["Aplicacion", "Proteccion", "C", "H", "M", "L", "Total"]
+    headers = [t("col_app"), t("col_protection"), "C", "H", "M", "L", t("col_total")]
 
     for key, group_label, color in status_meta:
         apps_in_group = groups[key]
@@ -1732,13 +1732,13 @@ def _batch_comparative_table(pdf: BatchReportPDF, apps: list[dict]) -> None:
 
             # Estado
             status_short = {
-                "unprotected": "Sin proteccion",
-                "protected_broken": "Bypass logrado",
-                "protected": "Protegida",
+                "unprotected": t("batch_status_unprotected"),
+                "protected_broken": t("batch_bypass_achieved"),
+                "protected": t("batch_status_protected"),
             }
             pdf.set_font("Helvetica", "B", 7)
             pdf.set_text_color(*color)
-            pdf.cell(col_w[1], 5, status_short.get(key, "?"), fill=True, align="C")
+            pdf.cell(col_w[1], 5, _safe(status_short.get(key, "?")), fill=True, align="C")
 
             # Severity counts
             for i, sev_key in enumerate(["critical", "high", "medium", "low"]):

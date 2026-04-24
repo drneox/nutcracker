@@ -9,6 +9,10 @@ reports:
   save_json: false
   save_pdf: true
 
+# ── Language ──────────────────────────────────────────────────────────────────
+# Report language. Supported: en (English) | es (Spanish). Default: en
+language: en
+
 # ── Feature flags ─────────────────────────────────────────────────────────────
 # Enable or disable each pipeline module.
 features:
