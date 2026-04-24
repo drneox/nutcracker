@@ -99,7 +99,7 @@ def find_split_apks(apk_path: Path) -> list[Path]:
         if f == apk_path:
             continue
         stem = f.stem
-        if stem.endswith("_patched") or stem.endswith("_unsigned"):
+        if stem.endswith("_patched") or stem.endswith("_unsigned") or stem.endswith("_resign"):
             continue
 
         is_same_prefix = f.name.startswith(prefix)
