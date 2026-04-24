@@ -59,6 +59,8 @@ console = Console()
 _CFG: dict = {}
 _MANIFEST_ANALYSIS = None  # ManifestAnalysisResult del último scan
 _OSINT_RESULT = None       # OsintResult del último scan
+_LAUNCH_APP: bool = False  # --launch: lanzar app con bypass script tras el análisis
+_LAUNCH_SERIAL: str | None = None  # --serial para --launch
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -79,6 +81,62 @@ def _format_elapsed(seconds: float) -> str:
 def _print_elapsed(label: str, seconds: float) -> None:
     """Imprime el tiempo total consumido por una ejecución."""
     console.print(f"[bold cyan]⏱ {label}:[/bold cyan] {_format_elapsed(seconds)}")
+
+
+def _find_latest_bypass_script(package: str, scripts_dir: Path = Path("frida_scripts")) -> Path | None:
+    """Devuelve el script de bypass más reciente para el paquete, o None."""
+    if not scripts_dir.exists():
+        return None
+    candidates = sorted(
+        scripts_dir.glob(f"bypass_{package}_*.js"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _launch_frida_bypass(
+    package: str,
+    script_path: Path,
+    serial: str | None = None,
+) -> None:
+    """Reinicia frida-server y lanza la app con el bypass script (reemplaza el proceso)."""
+    import shutil as _shutil
+    import time as _time
+
+    adb = _shutil.which("adb")
+    if not adb:
+        console.print("[red]Error:[/red] adb no encontrado en PATH.")
+        return
+
+    frida_bin = str(Path(sys.executable).parent / "frida")
+    if not Path(frida_bin).exists():
+        frida_bin = _shutil.which("frida") or ""
+    if not frida_bin:
+        console.print("[red]Error:[/red] frida no encontrado. Instala frida-tools.")
+        return
+
+    adb_args = [adb] + (["-s", serial] if serial else [])
+
+    console.print("[dim]  Reiniciando frida-server en el dispositivo...[/dim]")
+    subprocess.run(adb_args + ["shell", "killall frida-server 2>/dev/null; true"], capture_output=True)
+    subprocess.run(adb_args + ["root"], capture_output=True)
+    _time.sleep(2)
+    subprocess.run(
+        adb_args + ["shell", "nohup /data/local/tmp/frida-server > /dev/null 2>&1 &"],
+        capture_output=True,
+    )
+    _time.sleep(2)
+    subprocess.run(adb_args + ["shell", f"am force-stop {package}"], capture_output=True)
+    _time.sleep(1)
+
+    if serial:
+        frida_cmd = [frida_bin, "-D", serial, "-f", package, "-l", str(script_path)]
+    else:
+        frida_cmd = [frida_bin, "-U", "-f", package, "-l", str(script_path)]
+
+    console.print(f"[green]▶[/green]  [bold cyan]{' '.join(frida_cmd)}[/bold cyan]")
+    os.execvp(frida_cmd[0], frida_cmd)
 
 
 def _auto(key: str) -> "bool | None":
@@ -354,7 +412,7 @@ def _print_banner() -> None:
 @click.version_option("0.1.0", prog_name="nutcracker")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """nutcracker: detecta protecciones anti-root en aplicaciones Android (APK/IPA)."""
+    """nutcracker: detecta protecciones anti-root en aplicaciones Android (APK)."""
     _print_banner()
     if ctx.invoked_subcommand is None:
         click.echo("usage: python nutcracker.py scan 'https://play.google.com/store/apps/details?id=...'")
@@ -556,9 +614,23 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
     metavar="ARCHIVO",
     help="Ruta donde guardar el informe en formato JSON.",
 )
-def analyze(apk_path: str, config_path: str, report: str | None) -> None:
+@click.option(
+    "--launch", "-L",
+    is_flag=True,
+    default=False,
+    help="Tras el análisis, lanza la app en el dispositivo con el bypass script generado.",
+)
+@click.option(
+    "--serial", "-s",
+    default=None,
+    metavar="SERIAL",
+    help="ADB serial del dispositivo para --launch (por defecto, primero disponible).",
+)
+def analyze(apk_path: str, config_path: str, report: str | None, launch: bool, serial: str | None) -> None:
     """Analiza una APK local en busca de protecciones anti-root."""
-    global _CFG
+    global _CFG, _LAUNCH_APP, _LAUNCH_SERIAL
+    _LAUNCH_APP = launch
+    _LAUNCH_SERIAL = serial
     config = load_config(config_path)
     _CFG = config
     save_json_cfg = bool(
@@ -573,6 +645,67 @@ def analyze(apk_path: str, config_path: str, report: str | None) -> None:
     )
 
     _run_analysis(Path(apk_path), report, keep_apk=True, gen_pdf=save_pdf)
+
+
+# ── Comando: launch (lanzar app con bypass script) ────────────────────────────
+
+@cli.command()
+@click.argument("package")
+@click.option(
+    "--script", "-l",
+    default=None,
+    metavar="SCRIPT",
+    help="Script de bypass JS a usar. Si se omite, usa el último generado para el paquete.",
+)
+@click.option(
+    "--serial", "-s",
+    default=None,
+    metavar="SERIAL",
+    help="ADB serial del dispositivo (por defecto, primero disponible via -U).",
+)
+@click.option(
+    "--scripts-dir",
+    default="frida_scripts",
+    show_default=True,
+    metavar="DIR",
+    help="Directorio donde buscar scripts de bypass.",
+)
+def launch(package: str, script: str | None, serial: str | None, scripts_dir: str) -> None:
+    """Lanza la app en el dispositivo con el último bypass script generado.
+
+    \b
+    Ejemplos:
+      python nutcracker.py launch com.applemoncash
+      python nutcracker.py launch downloads/com.applemoncash/com.applemoncash.apk
+      python nutcracker.py launch com.applemoncash --script frida_scripts/bypass_....js
+      python nutcracker.py launch com.applemoncash --serial emulator-5554
+    """
+    scripts_path = Path(scripts_dir)
+
+    # Aceptar APK path como argumento: extraer package del nombre del archivo
+    pkg = package
+    p = Path(package)
+    if p.suffix.lower() == ".apk" or "/" in package:
+        pkg = p.stem  # e.g. "com.applemoncash.apk" → "com.applemoncash"
+        console.print(f"[dim]  APK detectado — usando package: [bold]{pkg}[/bold][/dim]")
+
+    if script:
+        script_path = Path(script)
+        if not script_path.exists():
+            console.print(f"[red]Error:[/red] Script no encontrado: {script}")
+            raise SystemExit(1)
+    else:
+        script_path = _find_latest_bypass_script(pkg, scripts_path)
+        if not script_path:
+            console.print(
+                f"[yellow]⚠[/yellow]  No se encontró ningún bypass script para [bold]{pkg}[/bold] "
+                f"en [bold]{scripts_dir}/[/bold].\n"
+                f"  Genera uno primero con: [cyan]python nutcracker.py analyze <apk>[/cyan]"
+            )
+            raise SystemExit(1)
+
+    console.print(f"[green]✔[/green] Script: [bold]{script_path}[/bold]")
+    _launch_frida_bypass(pkg, script_path, serial)
 
 
 @cli.command("setup-token")
@@ -796,13 +929,15 @@ def _post_analysis_flow(result, apk_path: Path):
             )
         # Con protección anti-root: ofrecer combinar bypass en el mismo script
         if result.protected:
-            if _ask_or_auto("  ¿Incluir bypass anti-root en el script Frida?", "bypass_script", default=True):
+            if _LAUNCH_APP or _ask_or_auto("  ¿Incluir bypass anti-root en el script Frida?", "bypass_script", default=True):
                 scripts_dir = Path("./frida_scripts")
                 try:
                     bp_path = generate_bypass_script(result, scripts_dir)
                     console.print(
                         f"[green]✔[/green] Script bypass generado: [bold]{bp_path}[/bold]"
                     )
+                    if _LAUNCH_APP:
+                        _launch_frida_bypass(result.package, bp_path, _LAUNCH_SERIAL)
                 except Exception as exc:  # noqa: BLE001
                     console.print(f"[red]Error generando bypass:[/red] {exc}")
 
@@ -817,14 +952,17 @@ def _post_analysis_flow(result, apk_path: Path):
     # Sin DexGuard (o usuario rechazó frida) → jadx directo
     # Si hay protección anti-root sin DexGuard, ofrecer script de bypass por separado
     if result.protected and not dexguard_result:
-        if _ask_or_auto("  ¿Generar script de bypass Frida?", "bypass_script", default=False):
+        if _LAUNCH_APP or _ask_or_auto("  ¿Generar script de bypass Frida?", "bypass_script", default=False):
             scripts_dir = Path("./frida_scripts")
             try:
                 script_path = generate_bypass_script(result, scripts_dir)
                 console.print(f"[green]✔[/green] Script Frida generado: [bold]{script_path}[/bold]")
-                console.print(frida_run_instructions(result.package, script_path))
+                if _LAUNCH_APP:
+                    _launch_frida_bypass(result.package, script_path, _LAUNCH_SERIAL)
+                else:
+                    console.print(frida_run_instructions(result.package, script_path))
             except Exception as exc:  # noqa: BLE001
-                console.print(f"[red]Error generando script Frida:[/red] {exc}")
+                console.print(f"[red]Error generando bypass:[/red] {exc}")
 
     if not _should_fallback_jadx(result.protected):
         return None
