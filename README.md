@@ -26,7 +26,7 @@
 # nutcracker v0.1 — Mobile Security & Offensive Threat Intelligence
 
 Herramienta de análisis de aplicaciones Android orientada a investigadores de seguridad.
-Descarga apps directamente desde Google Play, detecta y intenta eludir protecciones
+Descarga apps directamente desde Google Play, detecta e intenta eludir protecciones
 anti-root/RASP (DexGuard, Arxan, Appdome, Promon, RootBeer), las decompila, extrae secretos y endpoints hardcodeados,
 analiza configuraciones inseguras del manifest y lanza reconocimiento OSINT sobre el package ID,
 dominios, endpoints y secretos extraídos (subdominios vía crt.sh, leaks públicos en GitHub/Postman/FOFA/Wayback y búsquedas web opcionales).
@@ -244,6 +244,29 @@ python nutcracker.py analyze com.ejemplo.app
 python nutcracker.py batch packages.txt
 ```
 
+### Comando `launch` — bypass manual con Frida
+
+Permite lanzar una app ya instalada usando el último bypass script generado para ese paquete:
+
+```bash
+# Usa el bypass script más reciente para el paquete:
+python nutcracker.py launch com.ejemplo.app
+
+# Especificar emulador concreto:
+python nutcracker.py launch com.ejemplo.app --serial emulator-5554
+
+# Especificar un script manualmente:
+python nutcracker.py launch com.ejemplo.app --script frida_scripts/bypass_com.ejemplo.app_....js
+
+# Pasar la ruta del APK directamente (extrae el package del nombre de archivo):
+python nutcracker.py launch downloads/com.ejemplo.app/com.ejemplo.app.apk
+```
+
+El comando:
+1. Reinicia frida-server en el dispositivo (mata el proceso anterior si existe).
+2. Ejecuta `adb root` para obtener contexto `u:r:su:s0` — **requerido en Android 14** para que frida-server pueda leer `/sys/fs/selinux/policy`.
+3. Lanza la app vía `frida -f <package> -l <script>` con el script de bypass.
+
 ---
 
 ## Configuración (`config.yaml` / `config.yaml.example`)
@@ -369,9 +392,24 @@ Los detectores implementan múltiples capas de filtrado:
 
 Cuando apkeep descarga solo el split base (`base.apk`), la herramienta:
 1. Detecta splits adicionales en la misma carpeta del paquete
-2. Usa `adb install-multiple` con todos los splits
+2. Usa `adb install-multiple` con todos los splits (excluye artefactos `_patched`, `_unsigned`, `_resign`)
 3. Si no hay splits locales: parchea el `AndroidManifest.xml` binario para anular
    `requiredSplitTypes` y reinstala
+
+### Android 14 y SELinux
+
+En Android 14 (API 34), frida-server necesita contexto SELinux `u:r:su:s0` para leer
+`/sys/fs/selinux/policy` durante el spawn. Sin este contexto, frida lanza `InvocationTargetException`.
+
+El comando `launch` y el pipeline automático ejecutan `adb root` antes de iniciar frida-server.
+Requiere un AVD con imagen `google_apis` (no `google_play`) o acceso root en el dispositivo físico.
+
+### Fallbacks en `launch_with_dexdump`
+
+Cuando la app no arranca con `monkey` (anti-tampering a nivel nativo, detección de emulador), el sistema intenta automáticamente:
+
+1. **`am start`** — alternativa más fiable que monkey en apps con restricciones en el intent handler
+2. **`frida-dexdump -f` (spawn mode)** — pausa la app antes de que corra cualquier código, incluyendo anti-tampering. Requiere frida-server activo.
 
 ---
 
