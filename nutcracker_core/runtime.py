@@ -84,24 +84,62 @@ def launch_with_fart(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            # stdin=PIPE (no DEVNULL): frida entra en REPL y bloquea en read()
+            # esperando input que nunca llega → permanece vivo mientras los
+            # timers del script FART disparan. Con DEVNULL lee EOF y sale al instante.
+            stdin=subprocess.PIPE,
             text=True,
         )
         time.sleep(3)
         if proc.poll() is not None:
             stderr_out = proc.stderr.read() if proc.stderr else ""
             stdout_out = proc.stdout.read() if proc.stdout else ""
-            detail = (stderr_out + stdout_out).strip()[:400]
+            # Descartar el banner de frida para mostrar el error real
+            combined = stderr_out + stdout_out
+            lines = [l for l in combined.splitlines()
+                     if not any(skip in l for skip in (
+                         "/ _  |", "| (_| |", "> _  |", "/_/ |_|",
+                         ". . . .", "frida.re", "Frida 1", "Commands:",
+                         "help      ->", "object?   ->", "exit/quit",
+                     ))]
+            detail = "\n".join(lines).strip()[:600] or combined.strip()[:600]
             return proc, detail
+
+        # Proceso vivo — vaciar stdout/stderr en background para que el buffer
+        # (~64KB) no se llene y bloquee a frida cuando el script hace console.log().
+        import threading
+
+        def _drain(stream: "object") -> None:
+            try:
+                for _ in stream:  # type: ignore[attr-defined]
+                    pass
+            except Exception:
+                pass
+
+        if proc.stdout:
+            threading.Thread(target=_drain, args=(proc.stdout,), daemon=True).start()
+        if proc.stderr:
+            threading.Thread(target=_drain, args=(proc.stderr,), daemon=True).start()
+
         return proc, None
+
+    _DEAD_SYSTEM_KEYS = ("deadsystemexception", "deadsystemruntimeexception", "dead system")
+
+    def _launch_with_retry(args: list[str], transport_flags: list[str] | None = None) -> "tuple[subprocess.Popen, str | None]":
+        proc, err = _launch(args)
+        return proc, err
+
+    adb_bin = tools.get("adb", "adb")
 
     cb(f"Lanzando {package} con script FART...")
 
     # ── Conexión por host TCP (frida -H host:port) ────────────────────────────
     if frida_host:
         cb(f"Conectando vía host TCP a {frida_host}...")
-        proc, err = _launch([
-            frida_bin, "-H", frida_host, "-f", package, "-l", str(script_path),
-        ])
+        proc, err = _launch_with_retry(
+            [frida_bin, "-H", frida_host, "-f", package, "-l", str(script_path)],
+            transport_flags=[frida_bin, "-H", frida_host],
+        )
         if err is None:
             return proc, None
         msg = f"frida terminó inesperadamente con -H {frida_host}: {err}"
@@ -110,9 +148,10 @@ def launch_with_fart(
 
     if _is_emulator(serial):
         cb("Conectando al emulador vía -U...")
-        proc, err = _launch([
-            frida_bin, "-U", "-f", package, "-l", str(script_path),
-        ])
+        proc, err = _launch_with_retry(
+            [frida_bin, "-U", "-f", package, "-l", str(script_path)],
+            transport_flags=[frida_bin, "-U"],
+        )
         if err is None:
             return proc, None
         msg = f"frida terminó inesperadamente: {err}"
@@ -120,9 +159,10 @@ def launch_with_fart(
         return None, msg
 
     # Dispositivo físico: -D serial, con fallback a -U
-    proc, err = _launch([
-        frida_bin, "-D", serial, "-f", package, "-l", str(script_path),
-    ])
+    proc, err = _launch_with_retry(
+        [frida_bin, "-D", serial, "-f", package, "-l", str(script_path)],
+        transport_flags=[frida_bin, "-D", serial],
+    )
     if err is None:
         return proc, None
 
@@ -133,9 +173,10 @@ def launch_with_fart(
         "not found",
     )):
         cb("Device no encontrado con -D; reintentando con -U...")
-        proc_u, err_u = _launch([
-            frida_bin, "-U", "-f", package, "-l", str(script_path),
-        ])
+        proc_u, err_u = _launch_with_retry(
+            [frida_bin, "-U", "-f", package, "-l", str(script_path)],
+            transport_flags=[frida_bin, "-U"],
+        )
         if err_u is None:
             return proc_u, None
         msg = f"frida terminó inesperadamente: {err_u}"
@@ -220,9 +261,9 @@ def launch_with_dexdump(
         capture_output=True, timeout=15,
     )
 
-    # Esperar PID
+    # Esperar PID — primera ronda (monkey, 15s)
     cb("Esperando que el proceso arranque...")
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 15
     pid: str | None = None
     while time.monotonic() < deadline:
         out = _adb_shell(adb, serial, f"pidof {package}", timeout=5)
@@ -231,7 +272,40 @@ def launch_with_dexdump(
             break
         time.sleep(1)
 
+    # Fallback 1: am start (más fiable que monkey en apps con anti-tampering)
     if not pid:
+        cb("monkey no produjo proceso — intentando am start...")
+        subprocess.run(
+            _adb_cmd(adb, serial, "shell",
+                     f"am start -a android.intent.action.MAIN "
+                     f"-c android.intent.category.LAUNCHER {package}"),
+            capture_output=True, timeout=15,
+        )
+        deadline2 = time.monotonic() + 20
+        while time.monotonic() < deadline2:
+            out = _adb_shell(adb, serial, f"pidof {package}", timeout=5)
+            if out.isdigit() or (out and out.split()[0].isdigit()):
+                pid = out.split()[0]
+                break
+            time.sleep(1)
+
+    # Fallback 2: frida-dexdump en modo spawn (-f) — pausa la app antes de
+    # que corra cualquier código (requiere frida-server activo)
+    if not pid:
+        cb("PID no encontrado — intentando spawn mode con frida-dexdump -f...")
+        if _is_emulator(serial):
+            spawn_result, spawn_err = _run_dexdump([
+                dexdump_bin, "-D", serial, "-f", package, "-o", str(output_dir),
+            ])
+        else:
+            spawn_result, spawn_err = _run_dexdump([
+                dexdump_bin, "-U", "-f", package, "-o", str(output_dir),
+            ])
+        if not spawn_err:
+            dex_files = sorted(output_dir.glob("*.dex"))
+            if dex_files:
+                cb(f"{len(dex_files)} DEX volcados en modo spawn")
+                return dex_files, None
         return [], f"El proceso {package} no arrancó en el {target_label}"
 
     cb(f"Proceso PID={pid} — esperando inicialización ({FRIDA_TIMEOUT}s)...")
