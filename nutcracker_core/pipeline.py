@@ -305,16 +305,18 @@ def do_fart_emulator(
         app_installed = False
         _frida_host = cfg_get(cfg, "strategies", "frida_host") or None
 
-        def _ensure_frida_server() -> bool:
+        def _ensure_frida_server(force_restart: bool = False) -> bool:
             nonlocal frida_ready
-            if frida_ready:
+            if frida_ready and not force_restart:
                 return True
+            frida_ready = False  # resetear para que setup_frida_server reintente
             ok = _with_spinner(
                 "Configurando frida-server en el emulador...",
                 lambda cb: setup_frida_server(
                     serial, sdk_tools, server_bin,
                     progress_callback=cb,
                     listen_all=bool(_frida_host),
+                    force_restart=force_restart,
                 ),
             )
             if not ok:
@@ -383,13 +385,26 @@ def do_fart_emulator(
                     method_used = "frida-gadget+frida-dexdump"
                 else:
                     # Gadget puede haber reinstalado un APK parcheado en el emulador.
-                    # Forzar reinstalación del APK original en el siguiente método.
+                    # Desinstalar el parcheado para que el siguiente método pueda
+                    # instalar el original sin UPDATE_INCOMPATIBLE (firma debug ≠ Play Store).
+                    subprocess.run(
+                        [sdk_tools["adb"], "-s", serial, "uninstall", package],
+                        capture_output=True, text=True, timeout=30,
+                    )
                     app_installed = False
                 continue
 
             if method == "frida_server":
-                if not _ensure_frida_server():
+                # force_restart: reinicia frida-server por si quedó corrupto tras un
+                # crash anterior (ej. DexGuard matando el proceso durante spawn).
+                if not _ensure_frida_server(force_restart=True):
                     continue
+                # Reinstalar APK original: gadget puede haber dejado APK parcheado.
+                subprocess.run(
+                    [sdk_tools["adb"], "-s", serial, "uninstall", package],
+                    capture_output=True, text=True, timeout=30,
+                )
+                app_installed = False
                 if not _ensure_installed(apk_path, package):
                     continue
 
@@ -416,8 +431,19 @@ def do_fart_emulator(
 
             if method == "fart":
                 console.print("[dim]  Intentando FART (classloader hook)...[/dim]")
-                if not _ensure_frida_server():
+                # force_restart: reinicia frida-server por si quedó corrupto tras un
+                # crash anterior (ej. DexGuard matando el proceso durante spawn).
+                if not _ensure_frida_server(force_restart=True):
                     continue
+                # Reinstalar siempre el APK original antes de FART: si un intento
+                # previo de gadget tuvo éxito dejó un APK parcheado con
+                # libfrida-gadget.so. Hacer spawn sobre ese APK causa doble
+                # inyección → DeadSystemException en el system_server.
+                subprocess.run(
+                    [sdk_tools["adb"], "-s", serial, "uninstall", package],
+                    capture_output=True, text=True, timeout=30,
+                )
+                app_installed = False
                 if not _ensure_installed(apk_path, package):
                     continue
 
@@ -730,24 +756,68 @@ def try_gadget_inject(
         console.print("  Reinstalando APK con gadget...")
 
         # Si el APK original es parte de un bundle, copiar los splits
-        # al work_dir y reemplazar base.apk por el parcheado para que
-        # install_apk los envíe todos juntos con adb install-multiple.
+        # al work_dir, REFIRMARLOS con el mismo keystore debug (Android exige
+        # firma consistente entre todos los splits) y renombrarlos con el
+        # prefijo del patched_apk para que find_split_apks los detecte.
         orig_splits = _find_split_apks(apk_path)
         if len(orig_splits) > 1:
+            patched_stem = patched_apk.stem  
+            orig_stem = apk_path.stem        
             for s in orig_splits:
-                if s.resolve() != apk_path.resolve():
-                    _shutil.copy2(s, work_dir / s.name)
-            # patched_apk ya está en work_dir; install_apk usará find_split_apks
-            # que ahora encontrará todos los splits en el mismo directorio.
+                if s.resolve() == apk_path.resolve():
+                    continue
+                new_name = s.name
+                if s.name.startswith(orig_stem + "."):
+                    new_name = patched_stem + s.name[len(orig_stem):]
+                dest = work_dir / new_name
+                _shutil.copy2(s, dest)
+                # Refirmar split con la misma firma debug que el base parcheado
+                rsign = _sp.run(
+                    [apksigner, "sign",
+                     "--ks", str(keystore),
+                     "--ks-pass", "pass:android",
+                     "--key-pass", "pass:android",
+                     "--ks-key-alias", "androiddebugkey",
+                     str(dest)],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if rsign.returncode != 0:
+                    console.print(
+                        f"[yellow]⚠[/yellow]  No se pudo refirmar split {s.name}: "
+                        f"{rsign.stderr[:150]}"
+                    )
+            console.print(
+                f"  Bundle detectado: {len(orig_splits)} splits copiados y "
+                f"refirmados con prefijo '{patched_stem}'"
+            )
 
         _install_msgs: list[str] = []
-        ok = _install_apk(
-            serial,
-            sdk_tools,
-            patched_apk,
-            package_name=package,
-            progress_callback=_install_msgs.append,
-        )
+        # Si hay splits, instalar todos juntos para no perder libs nativas
+        if len(orig_splits) > 1:
+            patched_splits = sorted(
+                p for p in work_dir.glob(f"{patched_apk.stem}*.apk")
+                if not p.stem.endswith(("_aligned", "_unsigned"))
+            )
+            console.print(f"  Instalando {len(patched_splits)} APKs (base+splits) con install-multiple...")
+            # Desinstalar primero (firma cambió)
+            subprocess.run([sdk_tools["adb"], "-s", serial, "uninstall", package],
+                           capture_output=True, text=True, timeout=30)
+            r = subprocess.run(
+                [sdk_tools["adb"], "-s", serial, "install-multiple", "-r", "-t", "-d",
+                 *[str(p) for p in patched_splits]],
+                capture_output=True, text=True, timeout=180,
+            )
+            ok = "Success" in (r.stdout + r.stderr)
+            if not ok:
+                _install_msgs.append((r.stdout + r.stderr)[-300:].strip())
+        else:
+            ok = _install_apk(
+                serial,
+                sdk_tools,
+                patched_apk,
+                package_name=package,
+                progress_callback=_install_msgs.append,
+            )
         if not ok:
             detail = _install_msgs[-1] if _install_msgs else "sin detalles"
             console.print(
