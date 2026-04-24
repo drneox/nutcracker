@@ -828,15 +828,15 @@ def _print_bypass_banner(dex_count: int) -> None:
     from rich.text import Text
     from rich.align import Align
 
-    _t = Text(justify="center")
-    _t.append("\n  ✔  " + t("cli_protection_broken_banner") + "  \n\n", style="bold yellow")
-    _t.append(
+    banner_text = Text(justify="center")
+    banner_text.append("\n  ✔  " + t("cli_protection_broken_banner") + "  \n\n", style="bold yellow")
+    banner_text.append(
         t("cli_protection_broken_frida", dex_count=dex_count),
         style="dim white",
     )
-    _t.append("\n")
+    banner_text.append("\n")
     console.print()
-    console.print(Panel(Align.center(_t), border_style="yellow", padding=(0, 4)))
+    console.print(Panel(Align.center(banner_text), border_style="yellow", padding=(0, 4)))
     console.print()
 
 
@@ -883,13 +883,13 @@ def _print_verdict(result, vuln_scan) -> None:
         else:
             detail = t("cli_protected_detail")
 
-    t_txt = Text(justify="center")
-    t_txt.append(f"\n  {icon}  {title}  {icon}\n\n", style=f"bold {color}")
-    t_txt.append(f"  {detail}  ", style="dim white")
-    t_txt.append("\n")
+    verdict_text = Text(justify="center")
+    verdict_text.append(f"\n  {icon}  {title}  {icon}\n\n", style=f"bold {color}")
+    verdict_text.append(f"  {detail}  ", style="dim white")
+    verdict_text.append("\n")
 
     console.print()
-    console.print(Panel(Align.center(t_txt), border_style=color, padding=(0, 4)))
+    console.print(Panel(Align.center(verdict_text), border_style=color, padding=(0, 4)))
     console.print()
 
 
