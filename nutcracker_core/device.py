@@ -120,6 +120,20 @@ def find_sdk_tools(sdk_root: Path | None = None) -> dict[str, str]:
     elif (found := shutil.which("frida-dexdump")):
         tools["frida-dexdump"] = found
 
+    # apksigner (build-tools del SDK, versión más reciente)
+    if sdk:
+        bt_dir = sdk / "build-tools"
+        if bt_dir.exists():
+            for ver_dir in sorted(bt_dir.iterdir(), reverse=True):
+                candidate = ver_dir / "apksigner"
+                if candidate.exists():
+                    tools["apksigner"] = str(candidate)
+                    break
+    if "apksigner" not in tools:
+        found = shutil.which("apksigner")
+        if found:
+            tools["apksigner"] = found
+
     return tools
 
 
@@ -383,6 +397,7 @@ def setup_frida_server(
     server_binary: Path,
     progress_callback: Callable[[str], None] | None = None,
     listen_all: bool = False,
+    force_restart: bool = False,
 ) -> bool:
     """
     Sube frida-server al device/emulador y lo arranca como daemon.
@@ -400,8 +415,11 @@ def setup_frida_server(
     # ¿Ya está corriendo?
     ps_out = _adb_shell(adb, serial, "ps -A | grep frida-server", timeout=10)
     if "frida-server" in ps_out:
-        cb("frida-server ya está corriendo")
-        return True
+        if not force_restart:
+            cb("frida-server ya está corriendo")
+            return True
+        cb("Reiniciando frida-server (force_restart)...")
+        _adb_shell(adb, serial, "killall frida-server 2>/dev/null; sleep 1", timeout=8)
 
     # Push del binario
     cb("Subiendo frida-server al device...")

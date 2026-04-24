@@ -595,47 +595,6 @@ _HOOK_RESTRICTION_ACTIVITY = """\
         _patched[name] = true;
         var jcls = Java.use(name);
 
-        // ── One-time: hookear clases de detección específicas de la app ─────────
-        // Corre antes de Activity.onCreate (desde callActivityOnCreate), así que
-        // SplashPresenter.onCreate ya verá los valores falseados.
-        if (!_patched['__app_detection_init']) {
-          _patched['__app_detection_init'] = true;
-          // OfficialDevice
-          try {
-            var OD = Java.use('com.mibanco.adcurpi.util.officialdevice.OfficialDevice');
-            OD.isQEmuEnvDetected.implementation = function() {
-              console.log('[Bypass] OfficialDevice.isQEmuEnvDetected → false');
-              return false;
-            };
-            OD.isMonkeyDetected.implementation = function() { return false; };
-            OD.isTaintTrackingDetected.implementation = function() { return false; };
-            console.log('[Bypass] ✔ OfficialDevice hooked');
-          } catch(e) {}
-          // FindEmulator
-          try {
-            var FE = Java.use('com.mibanco.adcurpi.util.officialdevice.FindEmulator');
-            FE.hasPipes.implementation = function() { return false; };
-            FE.hasGenyFiles.implementation = function() { return false; };
-            FE.hasEmulatorBuild.implementation = function() { return false; };
-            FE.hasKnownDeviceId.implementation = function() {
-              console.log('[Bypass] FindEmulator.hasKnownDeviceId → false');
-              return false;
-            };
-            FE.hasKnownImsi.implementation = function() { return false; };
-            FE.hasKnownPhoneNumber.implementation = function() { return false; };
-            console.log('[Bypass] ✔ FindEmulator hooked');
-          } catch(e) {}
-          // RootUtil
-          try {
-            var RU = Java.use('com.mibanco.adcurpi.util.RootUtil');
-            RU.isDeviceRooted.implementation = function() {
-              console.log('[Bypass] RootUtil.isDeviceRooted → false');
-              return false;
-            };
-            console.log('[Bypass] ✔ RootUtil hooked');
-          } catch(e) {}
-        }
-
         BLOCK_METHODS.forEach(function(m) {
           try {
             if (jcls[m]) {
@@ -741,8 +700,8 @@ _HOOK_PAIRIP = """\
       _attempts++;
       if (_hooked) { clearInterval(_timer); return; }
       if (_attempts > 60) { clearInterval(_timer); return; }  // timeout 3s
-      try {
-        Java.perform(function() {
+      Java.perform(function() {
+        try {
           var LC = Java.use('com.pairip.licensecheck.LicenseClient');
           LC.handleError.implementation = function() {
             console.log('[Bypass] PairIP LicenseClient.handleError → no-op (early)');
@@ -756,8 +715,8 @@ _HOOK_PAIRIP = """\
           _hooked = true;
           clearInterval(_timer);
           console.log('[Bypass] ✔ PairIP LicenseClient hooked (early, attempt #' + _attempts + ')');
-        });
-      } catch(e) {}
+        } catch(e) { /* LicenseClient no existe en esta app */ }
+      });
     }, 50);
     console.log('[Bypass] ✔ PairIP early timer iniciado');
   })();
