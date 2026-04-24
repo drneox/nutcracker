@@ -444,7 +444,7 @@ STRINGS: dict[str, dict[str, str]] = {
 
         # ── PDF footer / header ────────────────────────────────────────────────
         "generated_on": "Generado el",
-        "page": "Pagina",
+        "page": "Página",
         "security_report_header": "nutcracker  \u00b7  Security Report",
         "batch_report_header": "nutcracker  \u00b7  Batch Report",
 
