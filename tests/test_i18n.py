@@ -48,7 +48,7 @@ def test_t_returns_english():
 def test_t_returns_spanish():
     """t() returns the correct Spanish string after init('es')."""
     init("es")
-    assert t("page") == "Pagina"
+    assert t("page") == "Página"
     assert t("generated_on") == "Generado el"
     assert t("detector") == "Detector"
     init("en")  # reset
@@ -130,7 +130,7 @@ def test_pdf_footer_keys():
     assert t("generated_on") == "Generated on"
 
     init("es")
-    assert t("page") == "Pagina"
+    assert t("page") == "Página"
     assert t("generated_on") == "Generado el"
     init("en")  # reset
 
