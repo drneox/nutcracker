@@ -82,7 +82,7 @@ _HOOK_FILE_EXISTS = """\
 _HOOK_RUNTIME_EXEC = """\
   // ── Bypass: Runtime.exec("su"), "which su", etc. ─────────────────────────
   (function() {
-    var BLOCKED_CMDS = ['su', 'which su', 'id\n', 'busybox'];
+    var BLOCKED_CMDS = ['su', 'which su', 'id', 'busybox'];
     function isRootCmd(cmd) {
       for (var i = 0; i < BLOCKED_CMDS.length; i++) {
         if (cmd.indexOf(BLOCKED_CMDS[i]) !== -1) return true;
@@ -146,6 +146,149 @@ _HOOK_PACKAGE_MANAGER = """\
       };
       console.log('[Bypass] ✔ PackageManager hooked');
     } catch(e) { console.log('[Bypass] PackageManager hook error: ' + e); }
+  })();
+"""
+
+_HOOK_GOOGLE_PLAY = """\
+  // ── Bypass: Google Play Store / GMS no instalado en emulador AOSP ────────
+  (function() {
+    var GMS_PACKAGES = ['com.android.vending', 'com.google.android.gms',
+                        'com.google.android.gsf', 'com.google.android.gsf.login'];
+
+    function _makeAppInfo(name) {
+      var ai = Java.use('android.content.pm.ApplicationInfo').$new();
+      ai.packageName.value = name;
+      ai.enabled.value = true;
+      ai.flags.value = 0x00000001;
+      return ai;
+    }
+
+    function _makePackageInfo(name) {
+      var pi = Java.use('android.content.pm.PackageInfo').$new();
+      pi.packageName.value = name;
+      pi.versionName.value = '24.10.0';
+      try { pi.versionCode.value = 241000000; } catch(e) {}
+      try { pi.applicationInfo.value = _makeAppInfo(name); } catch(e) {}
+      return pi;
+    }
+
+    try {
+      var PackageManager = Java.use('android.app.ApplicationPackageManager');
+
+      PackageManager.getPackageInfo.overload('java.lang.String', 'int').implementation = function(name, flags) {
+        for (var i = 0; i < GMS_PACKAGES.length; i++) {
+          if (name === GMS_PACKAGES[i]) {
+            console.log('[Bypass] getPackageInfo fake OK para: ' + name);
+            return _makePackageInfo(name);
+          }
+        }
+        return this.getPackageInfo(name, flags);
+      };
+
+      PackageManager.getApplicationInfo.overload('java.lang.String', 'int').implementation = function(name, flags) {
+        for (var i = 0; i < GMS_PACKAGES.length; i++) {
+          if (name === GMS_PACKAGES[i]) {
+            console.log('[Bypass] getApplicationInfo fake OK para: ' + name);
+            return _makeAppInfo(name);
+          }
+        }
+        return this.getApplicationInfo(name, flags);
+      };
+
+      PackageManager.getApplicationEnabledSetting.implementation = function(name) {
+        if (GMS_PACKAGES.indexOf(name) !== -1) {
+          console.log('[Bypass] getApplicationEnabledSetting → ENABLED para: ' + name);
+          return 1;
+        }
+        return this.getApplicationEnabledSetting(name);
+      };
+
+      console.log('[Bypass] ✔ Google Play Store / GMS hooked (AOSP emulator)');
+    } catch(e) { console.log('[Bypass] Google Play hook error: ' + e); }
+
+    // GoogleApiAvailability → SUCCESS (todos los overloads + métodos de error)
+    try {
+      var GmsAvail = Java.use('com.google.android.gms.common.GoogleApiAvailability');
+      GmsAvail.isGooglePlayServicesAvailable.overloads.forEach(function(ov) {
+        ov.implementation = function() {
+          console.log('[Bypass] GoogleApiAvailability.isGooglePlayServicesAvailable → 0');
+          return 0;
+        };
+      });
+      try {
+        GmsAvail.makeGooglePlayServicesAvailable.overloads.forEach(function(ov) {
+          ov.implementation = function() {
+            console.log('[Bypass] makeGooglePlayServicesAvailable → no-op');
+          };
+        });
+      } catch(e) {}
+      // showErrorDialogFragment → false (no mostrar diálogo de error GMS)
+      try {
+        GmsAvail.showErrorDialogFragment.overloads.forEach(function(ov) {
+          ov.implementation = function() {
+            console.log('[Bypass] showErrorDialogFragment → false (bloqueado)');
+            return false;
+          };
+        });
+      } catch(e) {}
+      // showErrorDialog → null
+      try {
+        GmsAvail.showErrorDialog.overloads.forEach(function(ov) {
+          ov.implementation = function() {
+            console.log('[Bypass] showErrorDialog → null (bloqueado)');
+            return null;
+          };
+        });
+      } catch(e) {}
+      console.log('[Bypass] ✔ GoogleApiAvailability hooked');
+    } catch(e) { console.log('[Bypass] GoogleApiAvailability no disponible (AOSP): ' + e); }
+
+    // GoogleApiAvailabilityLight → SUCCESS (la usada directamente por Firebase/GMS internals)
+    try {
+      var GmsAvailLight = Java.use('com.google.android.gms.common.GoogleApiAvailabilityLight');
+      GmsAvailLight.isGooglePlayServicesAvailable.overloads.forEach(function(ov) {
+        ov.implementation = function() {
+          console.log('[Bypass] GoogleApiAvailabilityLight.isGooglePlayServicesAvailable → 0');
+          return 0;
+        };
+      });
+      try {
+        GmsAvailLight.getApkVersion.overloads.forEach(function(ov) {
+          ov.implementation = function() {
+            console.log('[Bypass] GoogleApiAvailabilityLight.getApkVersion → 241000000');
+            return 241000000;
+          };
+        });
+      } catch(e) {}
+      console.log('[Bypass] ✔ GoogleApiAvailabilityLight hooked');
+    } catch(e) { console.log('[Bypass] GoogleApiAvailabilityLight hook error: ' + e); }
+
+    // DeferredLifecycleHelper.showGooglePlayUnavailableMessage → no-op
+    // (muestra el mensaje "Enable Google Play services" en FrameLayouts de Maps/GMS)
+    try {
+      var DeferredHelper = Java.use('com.google.android.gms.dynamic.DeferredLifecycleHelper');
+      DeferredHelper.showGooglePlayUnavailableMessage.implementation = function() {
+        console.log('[Bypass] DeferredLifecycleHelper.showGooglePlayUnavailableMessage → bloqueado');
+      };
+      console.log('[Bypass] ✔ DeferredLifecycleHelper hooked');
+    } catch(e) { console.log('[Bypass] DeferredLifecycleHelper hook error: ' + e); }
+
+    // GooglePlayServicesUtilLight → SUCCESS (usado por AdvertisingIdClient, DynamiteModule, etc.)
+    try {
+      var UtilLight = Java.use('com.google.android.gms.common.GooglePlayServicesUtilLight');
+      UtilLight.isGooglePlayServicesAvailable.overloads.forEach(function(ov) {
+        ov.implementation = function() {
+          console.log('[Bypass] GooglePlayServicesUtilLight.isGooglePlayServicesAvailable → 0');
+          return 0;
+        };
+      });
+      try {
+        UtilLight.getApkVersion.overloads.forEach(function(ov) {
+          ov.implementation = function() { return 241000000; };
+        });
+      } catch(e) {}
+      console.log('[Bypass] ✔ GooglePlayServicesUtilLight hooked');
+    } catch(e) { console.log('[Bypass] GooglePlayServicesUtilLight hook error: ' + e); }
   })();
 """
 
@@ -234,6 +377,392 @@ _HOOK_SAFETYNET = """\
   })();
 """
 
+_HOOK_EMULATOR_DETECTION = """\
+  // ── Bypass: detecciones de emulador y Google Play ─────────────────────────
+  // Cubre checks que la app hace para saber si corre en Play Store real.
+  (function() {
+    // 1. getInstallerPackageName → finge que la app se instaló desde Play Store
+    try {
+      var ApplicationPackageManager = Java.use('android.app.ApplicationPackageManager');
+      ApplicationPackageManager.getInstallerPackageName.implementation = function(pkg) {
+        console.log('[Bypass] getInstallerPackageName → com.android.vending');
+        return 'com.android.vending';
+      };
+      console.log('[Bypass] ✔ getInstallerPackageName hooked');
+    } catch(e) { console.log('[Bypass] getInstallerPackageName hook error: ' + e); }
+
+    // 2. GoogleApiAvailability → cubierto por _HOOK_GOOGLE_PLAY (AOSP-safe)
+
+    // 3. Play Integrity API (nueva, reemplaza SafetyNet desde 2023)
+    try {
+      var IntegrityManagerFactory = Java.use('com.google.android.play.core.integrity.IntegrityManagerFactory');
+      IntegrityManagerFactory.create.implementation = function() {
+        console.log('[Bypass] Play Integrity IntegrityManagerFactory interceptado');
+        return null;
+      };
+    } catch(e) {}
+    try {
+      // Hook en la clase de resultado para apps que validan localmente
+      var StandardIntegrityToken = Java.use('com.google.android.play.core.integrity.StandardIntegrityToken');
+      StandardIntegrityToken.token.implementation = function() {
+        console.log('[Bypass] Play Integrity token interceptado');
+        return 'nutcracker_fake_token';
+      };
+    } catch(e) {}
+
+    // 4. Build.FINGERPRINT / Build.MODEL — checks de emulador directos
+    try {
+      var Build = Java.use('android.os.Build');
+      Build.FINGERPRINT.value = 'google/walleye/walleye:8.1.0/OPM1.171019.011/4448085:user/release-keys';
+      Build.MODEL.value = 'Pixel 2';
+      Build.MANUFACTURER.value = 'Google';
+      Build.BRAND.value = 'google';
+      Build.PRODUCT.value = 'walleye';
+      Build.HARDWARE.value = 'walleye';
+      Build.DEVICE.value = 'walleye';
+      Build.TAGS.value = 'release-keys';
+      Build.TYPE.value = 'user';
+      Build.HOST.value = 'android-build';
+      console.log('[Bypass] ✔ Build fields spoofed');
+    } catch(e) { console.log('[Bypass] Build spoof error: ' + e); }
+
+    // 5. TelephonyManager — oculta device IDs y IMSIs típicos de emulador
+    // FindEmulator.hasKnownDeviceId usa getDeviceId(); el emulador devuelve
+    // "000000000000000" que está en la lista negra de muchas apps.
+    try {
+      var TelephonyManager = Java.use('android.telephony.TelephonyManager');
+      // getDeviceId (API <26): emulador devuelve "000000000000000"
+      try {
+        TelephonyManager.getDeviceId.overloads.forEach(function(ov) {
+          ov.implementation = function() {
+            console.log('[Bypass] TelephonyManager.getDeviceId → IMEI spoofed');
+            return '867686021328410';
+          };
+        });
+      } catch(e) {}
+      // getImei (API 26+)
+      try {
+        TelephonyManager.getImei.overloads.forEach(function(ov) {
+          ov.implementation = function() {
+            console.log('[Bypass] TelephonyManager.getImei → IMEI spoofed');
+            return '867686021328410';
+          };
+        });
+      } catch(e) {}
+      // getSubscriberId: emulador devuelve "310260000000000" (en lista negra)
+      try {
+        TelephonyManager.getSubscriberId.implementation = function() {
+          console.log('[Bypass] TelephonyManager.getSubscriberId → IMSI spoofed');
+          return '310260123456789';
+        };
+      } catch(e) {}
+      // getLine1Number: emulador devuelve números de la lista negra
+      try {
+        TelephonyManager.getLine1Number.implementation = function() {
+          console.log('[Bypass] TelephonyManager.getLine1Number → spoofed');
+          return '+15550001234';
+        };
+      } catch(e) {}
+      console.log('[Bypass] ✔ TelephonyManager hooked (device ID/IMSI spoofed)');
+    } catch(e) { console.log('[Bypass] TelephonyManager hook error: ' + e); }
+  })();
+"""
+
+_HOOK_ROOT_UTILS = """\
+  // ── Bypass: Utilidades anti-root/emulador propias de la app ──────────────
+  // Usa ClassLoader.loadClass para hookear clases de detección en el momento
+  // exacto en que la app las carga (deferred). El scan síncrono en spawn mode
+  // no encuentra clases de la app porque aún no están cargadas en el JVM.
+  (function() {
+    var BOOL_FALSE_METHODS = [
+      'isDeviceRooted', 'isRooted', 'checkRoot', 'isRootAvailable', 'isRootGiven',
+      'checkRootMethod1', 'checkRootMethod2',
+      'isQEmuEnvDetected', 'isEmulator', 'isEmulatorDetected', 'isVirtualDevice',
+      'hasEmulatorBuild', 'hasKnownDeviceId', 'hasKnownImsi', 'hasKnownPhoneNumber',
+      'hasPipes', 'hasGenyFiles', 'isTaintTrackingDetected', 'isMonkeyDetected',
+      'isDeviceCompromised', 'isJailbroken',
+    ];
+    var DETECTION_CLASS_KEYWORDS = [
+      'rootutil', 'rootutils', 'rootchecker', 'rootdetect',
+      'officialdevice', 'findemulator', 'emulatordetect', 'antirobot',
+      'antiemulator', 'findtaint', 'findmonkey',
+      'securityutil', 'devicevalidat', 'devicecheck',
+    ];
+
+    function _nameMatches(name) {
+      var low = name.toLowerCase();
+      // Skip framework classes early for performance
+      if (low.indexOf('java.') === 0 || low.indexOf('android.') === 0 ||
+          low.indexOf('com.google.') === 0 || low.indexOf('kotlin.') === 0 ||
+          low.indexOf('androidx.') === 0) return false;
+      for (var i = 0; i < DETECTION_CLASS_KEYWORDS.length; i++) {
+        if (low.indexOf(DETECTION_CLASS_KEYWORDS[i]) !== -1) return true;
+      }
+      return false;
+    }
+
+    function _hookBoolFalse(jcls, className) {
+      BOOL_FALSE_METHODS.forEach(function(m) {
+        try {
+          if (jcls[m]) {
+            jcls[m].overloads.forEach(function(ov) {
+              try {
+                if (ov.returnType && ov.returnType.name === 'boolean') {
+                  ov.implementation = function() {
+                    console.log('[Bypass] ' + className + '.' + m + ' → false');
+                    return false;
+                  };
+                }
+              } catch(e2) {}
+            });
+          }
+        } catch(e) {}
+      });
+    }
+
+    var _hooked = {};
+
+    // Deferred hook via ClassLoader.loadClass — funciona en spawn mode
+    // porque intercepta clases cuando se cargan por primera vez.
+    try {
+      var ClassLoader = Java.use('java.lang.ClassLoader');
+      ClassLoader.loadClass.overload('java.lang.String').implementation = function(name) {
+        var clazz = this.loadClass(name);
+        if (!_hooked[name] && _nameMatches(name)) {
+          _hooked[name] = true;
+          try {
+            _hookBoolFalse(Java.use(name), name);
+            console.log('[Bypass] ✔ Detection class hooked (deferred): ' + name);
+          } catch(e) {}
+        }
+        // PairIP LicenseClient: silencia handleError para que no lance LicenseActivity
+        if (name === 'com.pairip.licensecheck.LicenseClient') {
+          try {
+            var LC = Java.use('com.pairip.licensecheck.LicenseClient');
+            LC.handleError.implementation = function(ex) {
+              console.log('[Bypass] PairIP LicenseClient.handleError → bypassed');
+            };
+            LC.connectToLicensingService.implementation = function() {
+              console.log('[Bypass] PairIP LicenseClient.connectToLicensingService → skipped');
+            };
+            console.log('[Bypass] ✔ PairIP LicenseClient hooked (deferred)');
+          } catch(e) {}
+        }
+        return clazz;
+      };
+      console.log('[Bypass] ✔ ClassLoader hook activo para clases de detección');
+    } catch(e) { console.log('[Bypass] ClassLoader hook error: ' + e); }
+
+    // Fallback: scan clases ya cargadas (para casos de attach-mode)
+    try {
+      Java.enumerateLoadedClassesSync().forEach(function(name) {
+        if (!_hooked[name] && _nameMatches(name)) {
+          _hooked[name] = true;
+          try {
+            _hookBoolFalse(Java.use(name), name);
+            console.log('[Bypass] ✔ Detection class hooked (sync): ' + name);
+          } catch(e) {}
+        }
+      });
+    } catch(e) {}
+  })();
+"""
+
+_HOOK_RESTRICTION_ACTIVITY = """\
+  // ── Bypass: Activity blocker (showBlockingRestrictionActivity, etc.) ──────
+  // Hookea métodos de bloqueo por root al crear cada Activity (deferred),
+  // porque las clases de la app no están cargadas en el momento del spawn.
+  (function() {
+    var BLOCK_METHODS = [
+      'showBlockingRestrictionActivity', 'showRootedDeviceActivity',
+      'showRootDetectedActivity', 'blockRootedDevice', 'showDeviceNotCompatible',
+      'showSecurityBlockActivity', 'onRootDetected', 'onDeviceCompromised',
+      'showDeviceRootedScreen', 'showRootedDialog',
+      // Google Play / GMS blocking
+      'showGooglePlayNotAvailableActivity', 'showGooglePlayRequiredActivity',
+      'showGooglePlayNotEnabledActivity', 'showGooglePlayDisabledActivity',
+      'showPlayStoreRequiredActivity', 'showPlayStoreNotAvailableActivity',
+      'showGmsNotAvailableActivity', 'showGooglePlayServicesDialog',
+      'showGooglePlayServicesError', 'blockGooglePlayNotAvailable',
+      'showPlayServicesErrorActivity', 'showPlayServicesNotEnabled',
+    ];
+    var _patched = {};
+
+    function _patchHierarchy(cls) {
+      try {
+        var name = cls.getName();
+        if (_patched[name] || name.indexOf('android.') === 0 || name.indexOf('java.') === 0) return;
+        _patched[name] = true;
+        var jcls = Java.use(name);
+
+        // ── One-time: hookear clases de detección específicas de la app ─────────
+        // Corre antes de Activity.onCreate (desde callActivityOnCreate), así que
+        // SplashPresenter.onCreate ya verá los valores falseados.
+        if (!_patched['__app_detection_init']) {
+          _patched['__app_detection_init'] = true;
+          // OfficialDevice
+          try {
+            var OD = Java.use('com.mibanco.adcurpi.util.officialdevice.OfficialDevice');
+            OD.isQEmuEnvDetected.implementation = function() {
+              console.log('[Bypass] OfficialDevice.isQEmuEnvDetected → false');
+              return false;
+            };
+            OD.isMonkeyDetected.implementation = function() { return false; };
+            OD.isTaintTrackingDetected.implementation = function() { return false; };
+            console.log('[Bypass] ✔ OfficialDevice hooked');
+          } catch(e) {}
+          // FindEmulator
+          try {
+            var FE = Java.use('com.mibanco.adcurpi.util.officialdevice.FindEmulator');
+            FE.hasPipes.implementation = function() { return false; };
+            FE.hasGenyFiles.implementation = function() { return false; };
+            FE.hasEmulatorBuild.implementation = function() { return false; };
+            FE.hasKnownDeviceId.implementation = function() {
+              console.log('[Bypass] FindEmulator.hasKnownDeviceId → false');
+              return false;
+            };
+            FE.hasKnownImsi.implementation = function() { return false; };
+            FE.hasKnownPhoneNumber.implementation = function() { return false; };
+            console.log('[Bypass] ✔ FindEmulator hooked');
+          } catch(e) {}
+          // RootUtil
+          try {
+            var RU = Java.use('com.mibanco.adcurpi.util.RootUtil');
+            RU.isDeviceRooted.implementation = function() {
+              console.log('[Bypass] RootUtil.isDeviceRooted → false');
+              return false;
+            };
+            console.log('[Bypass] ✔ RootUtil hooked');
+          } catch(e) {}
+        }
+
+        BLOCK_METHODS.forEach(function(m) {
+          try {
+            if (jcls[m]) {
+              jcls[m].overloads.forEach(function(ov) {
+                ov.implementation = function() {
+                  console.log('[Bypass] ' + name + '.' + m + ' → bloqueado');
+                };
+              });
+            }
+          } catch(e) {}
+        });
+
+        // 2. Dynamic scan: hook void methods whose name suggests security/play blocking
+        try {
+          var declaredMethods = cls.getDeclaredMethods();
+          for (var j = 0; j < declaredMethods.length; j++) {
+            var method = declaredMethods[j];
+            var mName = method.getName();
+            var mNameLower = mName.toLowerCase();
+            if (method.getReturnType().getName() === 'void' &&
+                (mNameLower.indexOf('google') !== -1 || mNameLower.indexOf('play') !== -1 ||
+                 mNameLower.indexOf('restriction') !== -1 || mNameLower.indexOf('security') !== -1) &&
+                (mNameLower.indexOf('show') !== -1 || mNameLower.indexOf('block') !== -1 ||
+                 mNameLower.indexOf('required') !== -1 || mNameLower.indexOf('enabled') !== -1 ||
+                 mNameLower.indexOf('check') !== -1)) {
+              (function(capturedName) {
+                try {
+                  if (jcls[capturedName]) {
+                    jcls[capturedName].overloads.forEach(function(ov) {
+                      ov.implementation = function() {
+                        console.log('[Bypass] Dynamic: ' + name + '.' + capturedName + ' → bloqueado');
+                      };
+                    });
+                  }
+                } catch(e) {}
+              })(mName);
+            }
+          }
+        } catch(e) {}
+
+        // PairIP: LicenseActivity muestra error y llama closeApp → System.exit(0)
+        // Debemos llamar super.onStart() para evitar SuperNotCalledException, luego finish().
+        if (name === 'com.pairip.licensecheck.LicenseActivity') {
+          try {
+            var ActivityBase = Java.use('android.app.Activity');
+            jcls.onStart.implementation = function() {
+              // Android exige que super.onStart() sea llamado
+              try { ActivityBase.onStart.call(this); } catch(e) {}
+              console.log('[Bypass] PairIP LicenseActivity.onStart → finishing (bypassed)');
+              try { this.finish(); } catch(e) {}
+            };
+          } catch(e) {}
+          try {
+            jcls.closeApp.implementation = function() {
+              console.log('[Bypass] PairIP LicenseActivity.closeApp → no-op (prevented System.exit)');
+              try { this.finish(); } catch(e) {}
+            };
+          } catch(e) {}
+          // LicenseClient ya está cargado cuando LicenseActivity se crea → hookearlo aquí
+          try {
+            var LC = Java.use('com.pairip.licensecheck.LicenseClient');
+            // handleError es no-op para que los reintentos fallidos no lancen más Activities
+            LC.handleError.implementation = function(ex) {
+              console.log('[Bypass] PairIP LicenseClient.handleError → bypassed');
+            };
+            // performLocalInstallerCheck → true: estado pasa a LOCAL_CHECK_OK
+            LC.performLocalInstallerCheck.implementation = function() {
+              console.log('[Bypass] PairIP LicenseClient.performLocalInstallerCheck → true');
+              return true;
+            };
+            console.log('[Bypass] ✔ PairIP LicenseClient hooked (from LicenseActivity patch)');
+          } catch(e) {}
+          console.log('[Bypass] ✔ PairIP LicenseActivity hooked');
+        }
+
+        var sup = cls.getSuperclass();
+        if (sup) _patchHierarchy(sup);
+      } catch(e) {}
+    }
+
+    try {
+      var Instr = Java.use('android.app.Instrumentation');
+      Instr.callActivityOnCreate.overload(
+        'android.app.Activity', 'android.os.Bundle'
+      ).implementation = function(activity, bundle) {
+        _patchHierarchy(activity.getClass());
+        return this.callActivityOnCreate(activity, bundle);
+      };
+      console.log('[Bypass] ✔ Restriction activity blocker hooked (deferred)');
+    } catch(e) { console.log('[Bypass] Restriction blocker error: ' + e); }
+  })();
+"""
+
+_HOOK_PAIRIP = """\
+  // ── Bypass: PairIP LicenseClient (early timer) ───────────────────────────
+  // LicenseContentProvider inicializa LicenseClient ANTES de cualquier Activity.
+  // Usamos setInterval para hookear LicenseClient en cuanto se cargue la clase,
+  // antes de que connectToLicensingService se llame por primera vez.
+  (function() {
+    var _hooked = false;
+    var _attempts = 0;
+    var _timer = setInterval(function() {
+      _attempts++;
+      if (_hooked) { clearInterval(_timer); return; }
+      if (_attempts > 60) { clearInterval(_timer); return; }  // timeout 3s
+      try {
+        Java.perform(function() {
+          var LC = Java.use('com.pairip.licensecheck.LicenseClient');
+          LC.handleError.implementation = function() {
+            console.log('[Bypass] PairIP LicenseClient.handleError → no-op (early)');
+          };
+          LC.connectToLicensingService.implementation = function() {
+            console.log('[Bypass] PairIP LicenseClient.connectToLicensingService → skipped (early)');
+          };
+          LC.performLocalInstallerCheck.implementation = function() {
+            return true;
+          };
+          _hooked = true;
+          clearInterval(_timer);
+          console.log('[Bypass] ✔ PairIP LicenseClient hooked (early, attempt #' + _attempts + ')');
+        });
+      } catch(e) {}
+    }, 50);
+    console.log('[Bypass] ✔ PairIP early timer iniciado');
+  })();
+"""
+
 _HOOK_FRIDA_DETECTION = """\
   // ── Bypass: Detección de Frida ────────────────────────────────────────────
   // Algunas apps detectan Frida leyendo /proc/self/maps o buscando "frida" en el proceso.
@@ -241,16 +770,16 @@ _HOOK_FRIDA_DETECTION = """\
     try {
       // Interceptar lectura de /proc/maps para ocultar frida-agent
       var BufferedReader = Java.use('java.io.BufferedReader');
-      var original_readLine = BufferedReader.readLine;
-      BufferedReader.readLine.implementation = function() {
-        var line = this.readLine();
+      var original_readLine = BufferedReader.readLine.overload();
+      BufferedReader.readLine.overload().implementation = function() {
+        var line = original_readLine.call(this);
         if (line !== null && (
           line.indexOf('frida') !== -1 ||
           line.indexOf('gum-js-loop') !== -1 ||
           line.indexOf('linjector') !== -1
         )) {
           console.log('[Bypass] /proc/maps línea Frida ocultada');
-          return this.readLine(); // saltar esta línea
+          return original_readLine.call(this); // saltar esta línea
         }
         return line;
       };
@@ -266,7 +795,7 @@ _DETECTOR_HOOKS: dict[str, list[str]] = {
     "KnownLibrariesDetector": [_HOOK_FILE_EXISTS, _HOOK_RUNTIME_EXEC],
     "RootBeer": [_HOOK_ROOTBEER, _HOOK_FILE_EXISTS],
     "RootCloak": [_HOOK_ROOTCLOAK],
-    "SafetyNetDetector": [_HOOK_SAFETYNET],
+    "SafetyNetDetector": [_HOOK_SAFETYNET, _HOOK_EMULATOR_DETECTION],
     "ManualChecksDetector": [_HOOK_FILE_EXISTS, _HOOK_RUNTIME_EXEC, _HOOK_BUILD_PROPS],
     "MagiskDetector": [_HOOK_PACKAGE_MANAGER, _HOOK_FILE_EXISTS],
 }
@@ -277,6 +806,11 @@ _BASE_HOOKS: list[str] = [
     _HOOK_RUNTIME_EXEC,
     _HOOK_PACKAGE_MANAGER,
     _HOOK_BUILD_PROPS,
+    _HOOK_GOOGLE_PLAY,
+    _HOOK_EMULATOR_DETECTION,
+    _HOOK_ROOT_UTILS,
+    _HOOK_RESTRICTION_ACTIVITY,
+    _HOOK_PAIRIP,
     _HOOK_FRIDA_DETECTION,
 ]
 
@@ -603,8 +1137,17 @@ Java.perform(function () {
 
         console.log('[FART] Memory scan completo: ' + found + ' DEX encontrados');
     }
-    // Ejecutar memory scan tras 5s para que la app ya haya cargado sus DEX
-    setTimeout(_scanMemoryForDex, 5000);
+    // Cascada de memory scans para capturar DEX que se descifran en distintos
+    // momentos del arranque. Es fundamental que estos timers corran ANTES de
+    // _hookStringDecryptors (que enumera todas las clases síncronamente y
+    // bloquea el event loop varios segundos).
+    setTimeout(_scanMemoryForDex,   500);
+    setTimeout(_scanMemoryForDex,  3000);
+    setTimeout(_scanMemoryForDex,  8000);
+    setTimeout(_scanMemoryForDex, 15000);
+    setTimeout(_scanMemoryForDex, 25000);
+    setTimeout(_scanMemoryForDex, 35000);
+    setInterval(_scanMemoryForDex, 12000);
 
     // ── Hook 4: String decryptors de DexGuard (heurístico) ─────────────────
     // DexGuard inyecta métodos estáticos en clases con nombre de 1-3 chars
@@ -627,8 +1170,11 @@ Java.perform(function () {
     function _hookStringDecryptors() {
         var Modifier = Java.use('java.lang.reflect.Modifier');
         var hooked = 0;
+        var seenClasses = 0;
+        var MAX_CLASSES = 5000;  // tope para no congelar event loop con apps gigantes
         Java.enumerateLoadedClasses({
             onMatch: function (className) {
+                if (seenClasses++ > MAX_CLASSES) { return; }
                 var simple = className.split('.').pop();
                 if (simple.length > 3) { return; }
                 try {
@@ -665,8 +1211,9 @@ Java.perform(function () {
         });
     }
 
-    // Esperar 2 s para que la app cargue sus clases DexGuard antes de enumerar
-    setTimeout(_hookStringDecryptors, 2000);
+    // Lanzar enumerate-classes DESPUÉS de los memory scans iniciales para no
+    // bloquear el event loop antes de que se descarguen los DEX descifrados.
+    setTimeout(_hookStringDecryptors, 45000);
 
     console.log('[FART] Todos los hooks instalados. Deja que la app arranque completamente.');
     console.log('[FART] Los DEX se volcarán en: ' + DUMP_DIR);
