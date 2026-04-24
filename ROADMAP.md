@@ -1,14 +1,14 @@
 # Roadmap — nutcracker
 
-`[ ]` pendiente · `[~]` en progreso · `[x]` completado
+`[ ]` pending · `[~]` in progress · `[x]` completed
 
 ## OSINT
-- [ ] **GitHub Search con token** — el scraping HTML actual falla sin login. Leer `GITHUB_TOKEN` del entorno y usar la REST API de code search; caer al scraping como fallback.
-- [ ] **Secretos de BuildConfig en el PDF** — se extraen internamente pero no se muestran en el reporte. Agregar subsección en `_osint_section`.
+- [ ] **GitHub Search with token** — the current HTML scraping fails without login. Read `GITHUB_TOKEN` from the environment and use the REST code search API; fall back to scraping as a fallback.
+- [ ] **BuildConfig secrets in the PDF** — extracted internally but not shown in the report. Add a subsection in `_osint_section`.
 
-## Plataformas
-- [ ] **Soporte iOS / IPA** — descarga con `ipatool`, análisis estático de Mach-O con `jtool2`/`class-dump`, secretos en `.plist`/`.strings`, análisis de `Info.plist` (permisos, ATS), detección de jailbreak checks. MVP solo estático; dinámico requiere jailbreak.
+## Platforms
+- [ ] **iOS / IPA support** — download with `ipatool`, static Mach-O analysis with `jtool2`/`class-dump`, secrets in `.plist`/`.strings`, `Info.plist` analysis (permissions, ATS), jailbreak check detection. MVP static only; dynamic requires jailbreak.
 
-## Arquitectura
-- [ ] **Separar `vuln_scanner.py`** — 1400+ líneas con tres responsabilidades. Partir en `scan_types.py` (dataclasses), `vuln_scanner.py` (regex + semgrep) y `leak_scanner.py` (apkleaks, gitleaks). Hacerlo antes de agregar nuevas fuentes de leaks o portar a Go.
-- [ ] **Portar scanner de secretos a Go** — `string_extractor.py` y las reglas HC* son los pasos más lentos. Binario Go `nutcracker-strings` que recibe un directorio y patrones, devuelve JSON. Python lo invoca como subprocess igual que semgrep. Prerequisito: separar módulos primero.
+## Architecture
+- [ ] **Split `vuln_scanner.py`** — 1400+ lines with three responsibilities. Split into `scan_types.py` (dataclasses), `vuln_scanner.py` (regex + semgrep) and `leak_scanner.py` (apkleaks, gitleaks). Do this before adding new leak sources or porting to Go.
+- [ ] **Port secret scanner to Go** — `string_extractor.py` and the HC* rules are the slowest steps. Go binary `nutcracker-strings` that takes a directory and patterns and returns JSON. Python invokes it as a subprocess, the same way it does semgrep. Prerequisite: split modules first.
