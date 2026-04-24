@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/nutcracker-logo.png" alt="Nutcracker logo" width="360">
+  <img src="https://github.com/user-attachments/assets/e4809ee3-a647-4120-8309-b7d928346a23" alt="Nutcracker logo" width="360">
 </p>
 
 <p align="center">
@@ -21,62 +21,65 @@
   <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=F3F4F6&labelColor=0B0F14" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/platform-Android-3FA34D?style=for-the-badge&logo=android&logoColor=F3F4F6&labelColor=0B0F14" alt="Android platform">
   <img src="https://img.shields.io/badge/dynamic%20analysis-Frida-B4232C?style=for-the-badge&labelColor=0B0F14" alt="Frida dynamic analysis">
+  <a href="https://github.com/drneox/nutcracker/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-22C55E?style=for-the-badge&logoColor=F3F4F6&labelColor=0B0F14" alt="MIT license">
+  </a>
 </p>
 
 # nutcracker v0.1 — Mobile Security & Offensive Threat Intelligence
 
-Herramienta de análisis de aplicaciones Android orientada a investigadores de seguridad.
-Descarga apps directamente desde Google Play, detecta e intenta eludir protecciones
-anti-root/RASP (DexGuard, Arxan, Appdome, Promon, RootBeer), las decompila, extrae secretos y endpoints hardcodeados,
-analiza configuraciones inseguras del manifest y lanza reconocimiento OSINT sobre el package ID,
-dominios, endpoints y secretos extraídos (subdominios vía crt.sh, leaks públicos en GitHub/Postman/FOFA/Wayback y búsquedas web opcionales).
-Todo el hallazgo se consolida en un informe PDF técnico listo para reportar.
+Android application analysis tool aimed at security researchers.
+Downloads apps directly from Google Play, detects and attempts to bypass
+anti-root/RASP protections (DexGuard, Arxan, Appdome, Promon, RootBeer), decompiles them, extracts hardcoded secrets and endpoints,
+analyzes insecure manifest configurations, and launches OSINT reconnaissance on the package ID,
+domains, endpoints and extracted secrets (subdomains via crt.sh, public leaks on GitHub/Postman/FOFA/Wayback and optional web searches).
+All findings are consolidated into a technical PDF report ready for reporting.
 
 ---
 
-## Características principales
+## Key Features
 
-- Descarga APKs desde Google Play (vía apkeep + AAS token), APKPure o URL directa
-- Soporte para App Bundles (AAB): detección de splits y `adb install-multiple`
-- Detección estática de protecciones: DexGuard, Arxan, Appdome, RootBeer, Promon Shield, etc.
-- Filtrado inteligente de SDKs de analytics (AppMetrica, AppsFlyer, etc.) para evitar falsos positivos
-- Desofuscación dinámica mediante `frida_server`, `gadget` o `fart`, según el pipeline configurado
-- Instrumentación opcional con Frida Gadget como ruta embebida de fallback
-- Escáner de vulnerabilidades: semgrep (OWASP MASTG) + 38 reglas regex internas
-- Búsqueda de leaks/secretos configurable: reglas HC internas + apkleaks + gitleaks sobre código decompilado y APK original
-- Módulo OSINT opcional: subdominios vía crt.sh, leaks públicos en GitHub/Postman/FOFA/Wayback, filtro anti-falsos-positivos y búsquedas web opcionales vía DuckDuckGo
-- Análisis de AndroidManifest.xml: permisos peligrosos, componentes exportados, `network security config` y configuraciones inseguras
-- Informe PDF completo: portada, resumen ejecutivo, anti-root, bypass RASP, configuraciones inseguras, leaks, OSINT y vulnerabilidades
-- Modo batch para escanear múltiples apps en secuencia
-- Módulos controlables por feature flags en `config.yaml`
+- Downloads APKs from Google Play (via apkeep + AAS token), APKPure or direct URL
+- App Bundle (AAB) support: split detection and `adb install-multiple`
+- Static protection detection: DexGuard, Arxan, Appdome, RootBeer, Promon Shield, etc.
+- Smart analytics SDK filtering (AppMetrica, AppsFlyer, etc.) to avoid false positives
+- Dynamic deobfuscation via `frida_server`, `gadget` or `fart`, depending on the configured pipeline
+- Optional Frida Gadget instrumentation as an embedded fallback path
+- Vulnerability scanner: semgrep (OWASP MASTG) + 38 internal regex rules
+- Configurable leak/secret search: internal HC rules + apkleaks + gitleaks on decompiled code and original APK
+- Optional OSINT module: subdomains via crt.sh, public leaks on GitHub/Postman/FOFA/Wayback, false-positive filter and optional web searches via DuckDuckGo
+- AndroidManifest.xml analysis: dangerous permissions, exported components, `network security config` and insecure configurations
+- Complete PDF report: cover page, executive summary, anti-root, RASP bypass, insecure configurations, leaks, OSINT and vulnerabilities
+- Batch mode to scan multiple apps in sequence
+- Modules controllable via feature flags in `config.yaml`
 
 ---
 
-## Requisitos del sistema
+## System Requirements
 
-### macOS (instalación con Homebrew)
+### macOS (install with Homebrew)
 
 ```bash
-brew install apkeep       # descarga APKs de Google Play / APKPure
-brew install jadx         # decompila APKs a Java + XML
-brew install apktool      # desempaqueta/reempaqueta APKs (necesario para gadget_inject)
-brew install semgrep      # análisis estático (reglas OWASP MASTG)
+brew install apkeep       # download APKs from Google Play / APKPure
+brew install jadx         # decompile APKs to Java + XML
+brew install apktool      # unpack/repack APKs (required for gadget_inject)
+brew install semgrep      # static analysis (OWASP MASTG rules)
 brew install android-platform-tools  # adb
 ```
 
 ### Linux (Ubuntu/Debian)
 
 ```bash
-# Herramientas base
+# Base tools
 sudo apt update
 sudo apt install -y openjdk-21-jre-headless jadx apktool adb curl
 
-# semgrep (vía pipx recomendado)
+# semgrep (via pipx recommended)
 python3 -m pip install --user pipx
 python3 -m pipx ensurepath
 pipx install semgrep
 
-# apkeep (binario oficial)
+# apkeep (official binary)
 APKEEP_VERSION="0.18.0"
 curl -L -o /tmp/apkeep.tgz \
   "https://github.com/EFForg/apkeep/releases/download/v${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-musl.tar.gz"
@@ -85,40 +88,40 @@ sudo install /tmp/apkeep /usr/local/bin/apkeep
 apkeep --version
 ```
 
-> Si usas otra distro (Fedora/Arch), instala equivalentes de `openjdk`, `jadx`, `apktool` y `adb`,
-> y mantén `apkeep` desde su release oficial.
+> For other distros (Fedora/Arch), install the equivalent packages for `openjdk`, `jadx`, `apktool` and `adb`,
+> and keep `apkeep` from its official release.
 
-### Java (requerido por jadx y apktool)
+### Java (required by jadx and apktool)
 
 ```bash
-# Java 11+ requerido. Ejemplo con OpenJDK:
+# Java 11+ required. Example with OpenJDK:
 brew install openjdk@21
 ```
 
-Versión probada: `openjdk 23.0.1`
+Tested version: `openjdk 23.0.1`
 
-### Android SDK (requerido para emulador y firma de APKs)
+### Android SDK (required for emulator and APK signing)
 
-Instalar desde [Android Studio](https://developer.android.com/studio) o con `sdkmanager`.
-La herramienta detecta el SDK automáticamente en `~/Library/Android/sdk` (macOS).
+Install from [Android Studio](https://developer.android.com/studio) or with `sdkmanager`.
+The tool automatically detects the SDK at `~/Library/Android/sdk` (macOS).
 
-Componentes necesarios:
+Required components:
 
 ```bash
-# Desde Android Studio → SDK Manager, o con sdkmanager:
+# From Android Studio → SDK Manager, or with sdkmanager:
 sdkmanager "platform-tools"                     # adb
-sdkmanager "emulator"                           # emulador AVD
+sdkmanager "emulator"                           # AVD emulator
 sdkmanager "build-tools;34.0.0"                 # apksigner, zipalign
-sdkmanager "system-images;android-34;google_apis;arm64-v8a"  # imagen AVD
+sdkmanager "system-images;android-34;google_apis;arm64-v8a"  # AVD image
 avdmanager create avd -n nutcracker_avd -k "system-images;android-34;google_apis;arm64-v8a"
 ```
 
-> `apksigner` y `zipalign` son necesarios para el parcheado de APKs Bundle y para
-> la inyección de Frida Gadget. Se encuentran en `~/Library/Android/sdk/build-tools/<ver>/`.
+> `apksigner` and `zipalign` are required for APK Bundle patching and for
+> Frida Gadget injection. They can be found at `~/Library/Android/sdk/build-tools/<ver>/`.
 
 ---
 
-## Instalación Python
+## Python Installation
 
 ```bash
 git clone <repo>
@@ -128,47 +131,47 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Dependencias Python (requirements.txt)
+### Python Dependencies (requirements.txt)
 
-| Paquete | Uso |
+| Package | Purpose |
 |---|---|
-| `androguard` | Análisis estático de APKs (DEX, manifest, strings) |
+| `androguard` | Static APK analysis (DEX, manifest, strings) |
 | `click` | CLI |
-| `rich` | Salida en terminal con colores y spinners |
-| `pyyaml` | Lectura de `config.yaml` |
-| `fpdf2` | Generación de informes PDF |
-| `loguru` | Logging estructurado |
-| `requests` | HTTP (descarga frida-server, comunicación interna) |
+| `rich` | Terminal output with colors and spinners |
+| `pyyaml` | Read `config.yaml` |
+| `fpdf2` | PDF report generation |
+| `loguru` | Structured logging |
+| `requests` | HTTP (download frida-server, internal communication) |
 
-> **Nota:** `frida`, `frida-tools`, `frida-dexdump`, `semgrep` y `apkleaks` son
-> herramientas de sistema (pip o Homebrew), no dependencias del proyecto.
-> Se validan con `shutil.which()` antes de usarse; si no están instaladas,
-> el módulo correspondiente se salta con un warning.
+> **Note:** `frida`, `frida-tools`, `frida-dexdump`, `semgrep` and `apkleaks` are
+> system tools (pip or Homebrew), not project dependencies.
+> They are validated with `shutil.which()` before use; if not installed,
+> the corresponding module is skipped with a warning.
 
 ---
 
-## Uso con Docker (híbrido)
+## Docker Usage (hybrid)
 
-Este modo corre `nutcracker` dentro de Docker y usa un emulador/dispositivo conectado en el host.
-Es la opción recomendada para Windows + WSL.
+This mode runs `nutcracker` inside Docker and uses an emulator/device connected on the host.
+This is the recommended option for Windows + WSL.
 
-### 1) Construir y abrir shell del contenedor
+### 1) Build and open a container shell
 
 ```bash
 docker compose build
 docker compose run --rm nutcracker
 ```
 
-### 2) Verificar que ADB del contenedor ve el host
+### 2) Verify that the container's ADB can see the host
 
-Dentro del contenedor:
+Inside the container:
 
 ```bash
 adb devices
 frida-ls-devices
 ```
 
-Si no aparece nada, en el host (Windows/Linux/macOS) reinicia ADB:
+If nothing appears, restart ADB on the host (Windows/Linux/macOS):
 
 ```bash
 adb kill-server
@@ -176,107 +179,107 @@ adb start-server
 adb devices
 ```
 
-### 3) Ejecutar análisis desde el contenedor
+### 3) Run analysis from the container
 
 ```bash
 python nutcracker.py analyze downloads/app.apk
 ```
 
-### Notas para Windows + WSL
+### Notes for Windows + WSL
 
-- El emulador suele correr en Windows, no en WSL.
-- El contenedor se conecta al `adb server` del host vía `ADB_SERVER_SOCKET=tcp:host.docker.internal:5037`.
-- Si Frida no resuelve `-D emulator-xxxx`, usar `-U` (el flujo del proyecto ya contempla esto en emulador).
+- The emulator typically runs on Windows, not inside WSL.
+- The container connects to the host's `adb server` via `ADB_SERVER_SOCKET=tcp:host.docker.internal:5037`.
+- If Frida cannot resolve `-D emulator-xxxx`, use `-U` (the project pipeline already handles this for emulators).
 
 ---
 
-## Reglas de análisis estático (semgrep)
+## Static Analysis Rules (semgrep)
 
-Las reglas OWASP MASTG para código decompilado con jadx provienen de:
+OWASP MASTG rules for jadx-decompiled code come from:
 [mindedsecurity/semgrep-rules-android-security](https://github.com/mindedsecurity/semgrep-rules-android-security)
 
 ```bash
 git clone https://github.com/mindedsecurity/semgrep-rules-android-security \
     semgrep_rules_android
 
-# Para actualizar:
+# To update:
 git -C ./semgrep_rules_android pull
 ```
 
-El path se configura en `config.yaml`:
+The path is configured in `config.yaml`:
 ```yaml
 strategies:
   scanner_config: "p/secrets ./semgrep_rules_android/rules"
 ```
 
-> **Nota:** Los perfiles `p/android`, `p/secrets` y `p/owasp-top-ten` ya no están
-> disponibles en el registro público de semgrep (HTTP 404 desde ~2025). Usar las reglas locales.
+> **Note:** The `p/android`, `p/secrets` and `p/owasp-top-ten` profiles are no longer
+> available in the semgrep public registry (HTTP 404 since ~2025). Use the local rules instead.
 
 ---
 
-## Obtener el AAS Token de Google Play
+## Obtaining the Google Play AAS Token
 
-apkeep requiere un AAS token de larga duración para descargar desde Google Play.
+apkeep requires a long-lived AAS token to download from Google Play.
 
 ```bash
-# Asistente interactivo (guiado paso a paso en el dispositivo):
+# Interactive assistant (step-by-step guided on the device):
 python nutcracker.py setup-token
 
-# Opcional: elegir dispositivo y método
+# Optional: choose device and method
 python nutcracker.py setup-token --serial emulator-5554 --method auto
 ```
 
 ---
 
-## Uso básico
+## Basic Usage
 
 ```bash
 source .venv/bin/activate
 
-# Analizar una APK local:
+# Analyze a local APK:
 python nutcracker.py analyze downloads/app.apk
 
-# Descargar y analizar desde Google Play (URL o package ID):
-python nutcracker.py scan 'https://play.google.com/store/apps/details?id=com.ejemplo.app'
-python nutcracker.py analyze com.ejemplo.app
+# Download and analyze from Google Play (URL or package ID):
+python nutcracker.py scan 'https://play.google.com/store/apps/details?id=com.example.app'
+python nutcracker.py analyze com.example.app
 
-# Escaneo masivo desde un listado de paquetes:
+# Batch scan from a package list:
 python nutcracker.py batch packages.txt
 ```
 
-### Comando `launch` — bypass manual con Frida
+### `launch` command — manual Frida bypass
 
-Permite lanzar una app ya instalada usando el último bypass script generado para ese paquete:
+Launches an already-installed app using the last bypass script generated for that package:
 
 ```bash
-# Usa el bypass script más reciente para el paquete:
-python nutcracker.py launch com.ejemplo.app
+# Use the most recent bypass script for the package:
+python nutcracker.py launch com.example.app
 
-# Especificar emulador concreto:
-python nutcracker.py launch com.ejemplo.app --serial emulator-5554
+# Specify a particular emulator:
+python nutcracker.py launch com.example.app --serial emulator-5554
 
-# Especificar un script manualmente:
-python nutcracker.py launch com.ejemplo.app --script frida_scripts/bypass_com.ejemplo.app_....js
+# Specify a script manually:
+python nutcracker.py launch com.example.app --script frida_scripts/bypass_com.example.app_....js
 
-# Pasar la ruta del APK directamente (extrae el package del nombre de archivo):
-python nutcracker.py launch downloads/com.ejemplo.app/com.ejemplo.app.apk
+# Pass the APK path directly (extracts the package from the filename):
+python nutcracker.py launch downloads/com.example.app/com.example.app.apk
 ```
 
-El comando:
-1. Reinicia frida-server en el dispositivo (mata el proceso anterior si existe).
-2. Ejecuta `adb root` para obtener contexto `u:r:su:s0` — **requerido en Android 14** para que frida-server pueda leer `/sys/fs/selinux/policy`.
-3. Lanza la app vía `frida -f <package> -l <script>` con el script de bypass.
+The command:
+1. Restarts frida-server on the device (kills any existing process).
+2. Runs `adb root` to obtain context `u:r:su:s0` — **required on Android 14** so frida-server can read `/sys/fs/selinux/policy`.
+3. Launches the app via `frida -f <package> -l <script>` with the bypass script.
 
 ---
 
-## Configuración (`config.yaml` / `config.yaml.example`)
+## Configuration (`config.yaml` / `config.yaml.example`)
 
-Usa [config.yaml.example](config.yaml.example) como fuente de verdad.
-La práctica recomendada es copiar ese archivo a `config.yaml` y ajustar solo los valores que necesites.
+Use [config.yaml.example](config.yaml.example) as the source of truth.
+The recommended practice is to copy that file to `config.yaml` and adjust only the values you need.
 
 ```yaml
 google_play:
-  email: "tu@gmail.com"
+  email: "you@gmail.com"
   aas_token: "aas_et/..."
 
 downloader:
@@ -288,182 +291,186 @@ reports:
   save_json: false
   save_pdf: true
 
-features:                       # Feature flags: habilita o deshabilita módulos
-  anti_root_analysis: true      # Detección de protecciones anti-root
-  decompilation: true           # Decompilación (jadx o runtime, según el pipeline)
-  manifest_scan: true           # Análisis de configuraciones inseguras del manifest
-  vuln_scan: false              # Escáner de vulnerabilidades (regex + semgrep)
-  leak_scan: true               # Escáner de leaks/secretos
-  osint_scan: true              # OSINT: subdominios y leaks públicos
-  report_pdf: true              # Generar informe PDF
-  report_json: false            # Generar informe JSON
+features:                       # Feature flags: enable or disable modules
+  anti_root_analysis: true      # Anti-root protection detection
+  decompilation: true           # Decompilation (jadx or runtime, depending on pipeline)
+  manifest_scan: true           # Insecure manifest configuration analysis
+  vuln_scan: false              # Vulnerability scanner (regex + semgrep)
+  leak_scan: true               # Leak/secret scanner
+  osint_scan: true              # OSINT: subdomains and public leaks
+  report_pdf: true              # Generate PDF report
+  report_json: false            # Generate JSON report
 
 leak_scan:
-  native: true                  # Reglas HC internas sobre código decompilado
-  apkleaks: true                # apkleaks sobre el APK original
-  gitleaks: true                # gitleaks sobre código decompilado
+  native: true                  # Internal HC rules on decompiled code
+  apkleaks: true                # apkleaks on the original APK
+  gitleaks: true                # gitleaks on decompiled code
 
 osint:
-  crt_sh: true                  # Enumeración de subdominios vía crt.sh
-  github_search: true           # Búsqueda de leaks públicos en GitHub
-  github_token: ''              # PAT opcional para usar la API de Code Search
-  fofa_search: false            # Búsqueda de activos expuestos en FOFA
-  fofa_key: ''                  # API key de FOFA para search/all
-  postman_search: true          # Búsqueda de colecciones públicas en Postman
-  execute_dorks: false          # Búsquedas web opcionales vía DuckDuckGo
+  crt_sh: true                  # Subdomain enumeration via crt.sh
+  github_search: true           # Search for public leaks on GitHub
+  github_token: ''              # Optional PAT for the Code Search API
+  fofa_search: false            # Search for exposed assets on FOFA
+  fofa_key: ''                  # FOFA API key for search/all
+  postman_search: true          # Search for public Postman collections
+  execute_dorks: false          # Optional web searches via DuckDuckGo
   dork_engines:
     - duckduckgo
-  dork_max_per_engine: 5        # Máximo de queries web por motor
-  dork_max_results_per_dork: 5  # Máximo de resultados por query
-  wayback_search: true          # Búsqueda de URLs históricas en archive.org
-  wayback_limit_per_domain: 200 # Máximo de URLs archivadas por dominio
-  wayback_filter_interesting: true  # Filtra a rutas/queries sensibles
+  dork_max_per_engine: 5        # Maximum web queries per engine
+  dork_max_results_per_dork: 5  # Maximum results per query
+  wayback_search: true          # Search historical URLs on archive.org
+  wayback_limit_per_domain: 200 # Maximum archived URLs per domain
+  wayback_filter_interesting: true  # Filter to sensitive paths/queries
 
 strategies:
-  anti_root_engine: native      # Motor de detección anti-root
+  anti_root_engine: native      # Anti-root detection engine
   scanner_engine: auto          # auto | semgrep | regex | none
   scanner_config: "p/secrets ./semgrep_rules_android/rules"
   show_emulator: true
   runtime_target: emulator      # auto | emulator | device
   default_emulator_avd: ""
   default_device_id: ""
-  frida_host: ""               # host:port para Frida TCP
-  frida_server_version: ""     # versión explícita de frida-server
+  frida_host: ""               # host:port for Frida TCP
+  frida_server_version: ""     # explicit frida-server version
 
 pipelines:
-  protected:                    # Apps con protección detectada
-    decompilation: runtime      # Decompilación vía runtime (frida-dexdump)
-    fallback_jadx: true         # Si runtime falla, intentar jadx
-    runtime_methods:            # Se ejecutarán en el orden listado abajo
-    # - frida_server: extracción runtime usando Frida con frida-server en el dispositivo o emulador
-    # - gadget: instrumentación mediante Frida Gadget embebido en la APK
-    # - fart: flujo alternativo de extracción runtime de DEX
+  protected:                    # Apps with detected protection
+    decompilation: runtime      # Runtime decompilation (frida-dexdump)
+    fallback_jadx: true         # If runtime fails, try jadx
+    runtime_methods:            # Executed in the order listed below
+    # - frida_server: runtime extraction using Frida with frida-server on the device or emulator
+    # - gadget: instrumentation via Frida Gadget embedded in the APK
+    # - fart: alternative runtime DEX extraction flow
     - frida_server
     - gadget
     - fart
-  unprotected:                  # Apps sin protección
-    decompilation_jadx: true    # Decompilación estática directa
+  unprotected:                  # Apps without protection
+    decompilation_jadx: true    # Direct static decompilation
 
 auto:
-  unattended: true              # Modo sin intervención manual
+  unattended: true              # Unattended mode (no manual intervention)
 
 batch:
-  list_file: ""                # Archivo de lista opcional para batch
+  list_file: ""                # Optional list file for batch mode
   stop_on_error: false
 ```
 
 ---
 
-## Flujo de análisis dinámico
+## Dynamic Analysis Flow
 
 ```
 APK
- └─► Instalar en emulador AVD
-      ├─► frida-dexdump        (estrategia principal: vuelca DEX desde memoria)
-      │    └─► falla →
-      ├─► Frida Gadget inject   (si pipeline.protected incluye gadget)
-      │    └─► falla →
+ └─► Install on AVD emulator
+      ├─► frida-dexdump        (primary strategy: dumps DEX from memory)
+      │    └─► fails →
+      ├─► Frida Gadget inject   (if pipeline.protected includes gadget)
+      │    └─► fails →
       └─► FART (classloader hook via Frida script)
-               └─► jadx → escaneo → PDF
+               └─► jadx → scan → PDF
 ```
 
-### Secciones del informe PDF
+### PDF Report Sections
 
-| Sección | Descripción |
+| Section | Description |
 |---|---|
-| Cover | Veredicto binario de protección (SIN PROTECCION / PROTECCION ROTA / PROTEGIDA) y metadata de la APK |
-| Executive Summary | Resumen ejecutivo con datos de la app y riesgo por módulo |
-| Anti-Root Analysis | Protecciones detectadas vs eludidas (5 detectores) |
-| Bypass RASP | Técnicas de bypass para cada protección encontrada |
-| Misconfigurations | Análisis del AndroidManifest.xml: `debuggable`, `allowBackup`, `cleartext`, componentes exportados y permisos peligrosos |
-| Leaks | Secretos hardcodeados: API keys, tokens, credenciales AWS/Firebase |
-| Vulnerabilidades | Hallazgos de semgrep + regex clasificados por severidad |
+| Cover | Binary protection verdict (NO PROTECTION / PROTECTION BROKEN / PROTECTED) and APK metadata |
+| Executive Summary | Executive summary with app data and risk per module |
+| Anti-Root Analysis | Detected vs bypassed protections (5 detectors) |
+| Bypass RASP | Bypass techniques for each found protection |
+| Misconfigurations | AndroidManifest.xml analysis: `debuggable`, `allowBackup`, `cleartext`, exported components and dangerous permissions |
+| Leaks | Hardcoded secrets: API keys, tokens, AWS/Firebase credentials |
+| Vulnerabilities | semgrep + regex findings classified by severity |
 
-### Reducción de falsos positivos
+### False Positive Reduction
 
-Los detectores implementan múltiples capas de filtrado:
+Detectors implement multiple filtering layers:
 
-- **Anti-root**: Whitelist de 30+ namespaces de SDKs de analytics (AppMetrica, AppsFlyer, Adjust, etc.). Strings de root-check de SDKs no se cuentan como protección de la app.
-- **DexGuard**: Requiere firma de vendor (guardsquare, arxan) como evidencia obligatoria. Multidex + alta entropía sin vendor sig no se reporta.
-- **Leaks (regex)**: Patrones de ignore para HC002 (passwords), HC006 (crypto keys), AUTH001 (tokens en logs) que filtran constantes de framework.
-- **Leaks (apkleaks)**: Post-filtrado de categorías ruidosas y patrones de FP (versiones JWT, X.509, firmas de Facebook SDK).
+- **Anti-root**: Whitelist of 30+ analytics SDK namespaces (AppMetrica, AppsFlyer, Adjust, etc.). Root-check strings from SDKs are not counted as app-level protection.
+- **DexGuard**: Requires vendor signature (guardsquare, arxan) as mandatory evidence. Multidex + high entropy without vendor sig is not reported.
+- **Leaks (regex)**: Ignore patterns for HC002 (passwords), HC006 (crypto keys), AUTH001 (tokens in logs) that filter framework constants.
+- **Leaks (apkleaks)**: Post-filtering of noisy categories and FP patterns (JWT versions, X.509, Facebook SDK signatures).
 
-### Soporte para App Bundles (AAB)
+### App Bundle (AAB) Support
 
-Cuando apkeep descarga solo el split base (`base.apk`), la herramienta:
-1. Detecta splits adicionales en la misma carpeta del paquete
-2. Usa `adb install-multiple` con todos los splits (excluye artefactos `_patched`, `_unsigned`, `_resign`)
-3. Si no hay splits locales: parchea el `AndroidManifest.xml` binario para anular
-   `requiredSplitTypes` y reinstala
+When apkeep downloads only the base split (`base.apk`), the tool:
+1. Detects additional splits in the same package folder
+2. Uses `adb install-multiple` with all splits (excludes `_patched`, `_unsigned`, `_resign` artifacts)
+3. If no local splits exist: patches the binary `AndroidManifest.xml` to override
+   `requiredSplitTypes` and reinstalls
 
-### Android 14 y SELinux
+### Android 14 and SELinux
 
-En Android 14 (API 34), frida-server necesita contexto SELinux `u:r:su:s0` para leer
-`/sys/fs/selinux/policy` durante el spawn. Sin este contexto, frida lanza `InvocationTargetException`.
+On Android 14 (API 34), frida-server needs SELinux context `u:r:su:s0` to read
+`/sys/fs/selinux/policy` during spawn. Without this context, frida throws `InvocationTargetException`.
 
-El comando `launch` y el pipeline automático ejecutan `adb root` antes de iniciar frida-server.
-Requiere un AVD con imagen `google_apis` (no `google_play`) o acceso root en el dispositivo físico.
+The `launch` command and the automatic pipeline run `adb root` before starting frida-server.
+Requires an AVD with a `google_apis` image (not `google_play`) or root access on a physical device.
 
-### Fallbacks en `launch_with_dexdump`
+### Fallbacks in `launch_with_dexdump`
 
-Cuando la app no arranca con `monkey` (anti-tampering a nivel nativo, detección de emulador), el sistema intenta automáticamente:
+When the app doesn't start with `monkey` (native-level anti-tampering, emulator detection), the system automatically tries:
 
-1. **`am start`** — alternativa más fiable que monkey en apps con restricciones en el intent handler
-2. **`frida-dexdump -f` (spawn mode)** — pausa la app antes de que corra cualquier código, incluyendo anti-tampering. Requiere frida-server activo.
+1. **`am start`** — more reliable alternative to monkey for apps with restrictions in the intent handler
+2. **`frida-dexdump -f` (spawn mode)** — pauses the app before any code runs, including anti-tampering. Requires an active frida-server.
 
 ---
 
 ## Roadmap
 
-Ver [ROADMAP.md](ROADMAP.md) para las tareas pendientes: mejoras OSINT, soporte iOS/IPA y migración parcial a Go.
+See [ROADMAP.md](ROADMAP.md) for pending tasks: OSINT improvements, iOS/IPA support and partial migration to Go.
 
 ---
 
-## Estructura del proyecto
+## Project Structure
 
 ```
 nutcracker/
-├── nutcracker.py                   # CLI principal (click)
-├── config.yaml                     # Configuración local
-├── config.yaml.example             # Plantilla de configuración
-├── setup.sh                        # Script de instalación rápida
-├── requirements.txt                # Dependencias Python
-├── docker-compose.yml              # Entorno Docker para ejecución híbrida
-├── Dockerfile                      # Imagen base del proyecto
-├── docs/assets/                    # Logo y recursos del README
-├── downloads/                      # APKs descargadas
-├── decompiled/                     # Código decompilado por jadx / frida-dexdump
-├── frida_scripts/                  # Scripts Frida de bypass generados
-├── reports/                        # PDFs e informes JSON generados
-├── semgrep_rules_android/          # Reglas OWASP MASTG
-├── tools/                          # Utilidades auxiliares
+├── nutcracker.py                   # Main CLI (click)
+├── config.yaml                     # Local configuration
+├── config.yaml.example             # Configuration template
+├── setup.sh                        # Quick install script
+├── requirements.txt                # Python dependencies
+├── docker-compose.yml              # Docker environment for hybrid execution
+├── Dockerfile                      # Project base image
+├── docs/assets/                    # Logo and README assets
+├── downloads/                      # Downloaded APKs
+├── decompiled/                     # Code decompiled by jadx / frida-dexdump
+├── frida_scripts/                  # Generated Frida bypass scripts
+├── reports/                        # Generated PDFs and JSON reports
+├── semgrep_rules_android/          # OWASP MASTG rules
+├── tools/                          # Auxiliary utilities
 └── nutcracker_core/
-  ├── __init__.py                 # Paquete principal
-    ├── analyzer.py                 # Análisis estático principal (androguard)
-  ├── apk_tools.py                # Utilidades de manipulación e instalación de APKs
-  ├── config.py                   # Carga y acceso a config.yaml
-  ├── device.py                   # Dispositivos, SDK, Frida y utilidades adb
-    ├── downloader.py               # Descarga APKs (Google Play / APKPure / URL directa)
-    ├── decompiler.py               # Interfaz jadx
-    ├── deobfuscator.py             # Flujo FART para dispositivo físico
-  ├── frida_bypass.py             # Scripts Frida (bypass, FART)
-    ├── manifest_analyzer.py        # Análisis de AndroidManifest.xml y configuraciones inseguras
-  ├── osint.py                    # Subdominios, leaks públicos, Wayback y búsquedas web opcionales
-    ├── pdf_reporter.py             # Generación del informe PDF (fpdf2)
-    ├── pipeline.py                 # Pipeline de análisis end-to-end
-  ├── reporter.py                 # Reportes JSON y salida en consola
-  ├── runtime.py                  # Orquestación de análisis dinámico
-    ├── string_extractor.py         # Extracción de strings del APK
+  ├── __init__.py                 # Main package
+    ├── analyzer.py                 # Main static analysis (androguard)
+  ├── apk_tools.py                # APK manipulation and installation utilities
+  ├── config.py                   # config.yaml loading and access
+  ├── device.py                   # Devices, SDK, Frida and adb utilities
+    ├── downloader.py               # Download APKs (Google Play / APKPure / direct URL)
+    ├── decompiler.py               # jadx interface
+    ├── deobfuscator.py             # FART flow for physical device
+  ├── frida_bypass.py             # Frida scripts (bypass, FART)
+    ├── manifest_analyzer.py        # AndroidManifest.xml and insecure configuration analysis
+  ├── osint.py                    # Subdomains, public leaks, Wayback and optional web searches
+    ├── pdf_reporter.py             # PDF report generation (fpdf2)
+    ├── pipeline.py                 # End-to-end analysis pipeline
+  ├── reporter.py                 # JSON reports and console output
+  ├── runtime.py                  # Dynamic analysis orchestration
+    ├── string_extractor.py         # APK string extraction
   ├── vuln_scanner.py             # Semgrep + regex + apkleaks + gitleaks
     └── detectors/
-    ├── __init__.py             # Export del subpaquete de detectores
-    ├── appdome.py              # Detector de Appdome
-    ├── base.py                 # Base común para detectores
-        ├── dexguard.py             # Detector DexGuard / Arxan (requiere firma de vendor)
-        ├── libraries.py            # Detector librerías anti-root (solo clases, no strings)
-        ├── magisk.py               # Detector Magisk / SuperSU / KernelSU / Frida
-        ├── safetynet.py            # Detector SafetyNet / Play Integrity API
-        └── manual_checks.py        # Checks manuales (con filtrado de SDKs de analytics)
+    ├── __init__.py             # Detectors subpackage export
+    ├── appdome.py              # Appdome detector
+    ├── base.py                 # Common base for detectors
+        ├── dexguard.py             # DexGuard / Arxan detector (requires vendor signature)
+        ├── libraries.py            # Anti-root library detector (classes only, no strings)
+        ├── magisk.py               # Magisk / SuperSU / KernelSU / Frida detector
+        ├── safetynet.py            # SafetyNet / Play Integrity API detector
+        └── manual_checks.py        # Manual checks (with analytics SDK filtering)
 ```
 
+---
 
+## License
+
+This project is licensed under the [MIT License](LICENSE).
