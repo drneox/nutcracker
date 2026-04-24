@@ -21,6 +21,9 @@
   <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=F3F4F6&labelColor=0B0F14" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/platform-Android-3FA34D?style=for-the-badge&logo=android&logoColor=F3F4F6&labelColor=0B0F14" alt="Android platform">
   <img src="https://img.shields.io/badge/dynamic%20analysis-Frida-B4232C?style=for-the-badge&labelColor=0B0F14" alt="Frida dynamic analysis">
+  <a href="https://github.com/drneox/nutcracker/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-22C55E?style=for-the-badge&logoColor=F3F4F6&labelColor=0B0F14" alt="MIT license">
+  </a>
 </p>
 
 # nutcracker v0.1 — Mobile Security & Offensive Threat Intelligence
@@ -465,3 +468,9 @@ nutcracker/
         ├── safetynet.py            # SafetyNet / Play Integrity API detector
         └── manual_checks.py        # Manual checks (with analytics SDK filtering)
 ```
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
