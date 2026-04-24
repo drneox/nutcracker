@@ -350,8 +350,8 @@ def _query_relevance_tokens(query: str) -> list[str]:
     - Dominios (`api.example.io`, `example.io`): aporta el FQDN completo,
       el eTLD+1 (`example.io`) y el "brand" (`example`). El brand debe
       tener ≥ 4 caracteres para evitar tokens genéricos (`api`, `io`).
-    - Package IDs (`com.appexample`): aporta el package completo y el
-      último segmento si es ≥ 4 chars (`appexample`).
+    - Package IDs (`com.example.app`): aporta el package completo y el
+      último segmento si es ≥ 4 chars (`myapp`).
     - Queries con operadores (`site:foo.com inurl:api`, `"foo.com" filetype:json`):
       extrae dominios y strings entre comillas embebidos y los procesa igual.
     - Otros: el propio string en minúsculas si tiene ≥ 4 chars.
@@ -490,7 +490,7 @@ def search_postman(
                     public_url = f"https://www.postman.com/search?q={requests.utils.quote(query)}&type={entity_type or 'all'}"
 
                 # Filtro anti-FP: Postman hace fuzzy match por tokens
-                # (p.ej. "api.example.io" devuelve "Qase.io API"). Sólo
+                # (p.ej. "api.example.io" puede devolver resultados no relacionados). Sólo
                 # conservamos resultados que mencionen un token distintivo
                 # de la query en nombre / summary / URL / handle.
                 if not _result_mentions_query(
