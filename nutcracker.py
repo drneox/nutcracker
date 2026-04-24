@@ -38,6 +38,8 @@ from nutcracker_core.frida_bypass import (
     generate_bypass_script,
     generate_fart_script,
 )
+from nutcracker_core import i18n
+from nutcracker_core.i18n import t
 from nutcracker_core.manifest_analyzer import analyze_decompiled_dir, Misconfiguration
 from nutcracker_core.pdf_reporter import generate_pdf_report
 from nutcracker_core.reporter import print_report, save_json_report, save_analysis_json, print_vuln_report, print_masvs_summary
@@ -61,6 +63,14 @@ _MANIFEST_ANALYSIS = None  # ManifestAnalysisResult del último scan
 _OSINT_RESULT = None       # OsintResult del último scan
 _LAUNCH_APP: bool = False  # --launch: lanzar app con bypass script tras el análisis
 _LAUNCH_SERIAL: str | None = None  # --serial para --launch
+
+
+def _init_i18n(config: dict) -> None:
+    """Initialize the i18n module from the loaded config."""
+    language = str(cfg_get(config, "language", default="en")).strip().lower()
+    if language not in i18n.SUPPORTED_LANGUAGES:
+        console.print(f"[yellow]⚠[/yellow]  {t('unsupported_language', lang=language)}")
+    i18n.init(language)
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -467,6 +477,7 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
     global _CFG
     config = load_config(config_path)
     _CFG = config
+    _init_i18n(config)
     output_dir = output_dir or cfg_get(config, "downloader", "output_dir") or "./downloads"
 
     if not keep_apk:
@@ -633,6 +644,7 @@ def analyze(apk_path: str, config_path: str, report: str | None, launch: bool, s
     _LAUNCH_SERIAL = serial
     config = load_config(config_path)
     _CFG = config
+    _init_i18n(config)
     save_json_cfg = bool(
         cfg_get(config, "features", "report_json", default=cfg_get(config, "reports", "save_json", default=False))
     )
@@ -816,16 +828,15 @@ def _print_bypass_banner(dex_count: int) -> None:
     from rich.text import Text
     from rich.align import Align
 
-    t = Text(justify="center")
-    t.append("\n  ✔  PROTECCION ROTA  \n\n", style="bold yellow")
-    t.append(
-        f"  Frida/frida-dexdump volcó {dex_count} DEX del proceso.\n"
-        "  Las protecciones anti-root no pudieron evitar la extracción del bytecode.  ",
+    banner_text = Text(justify="center")
+    banner_text.append("\n  ✔  " + t("cli_protection_broken_banner") + "  \n\n", style="bold yellow")
+    banner_text.append(
+        t("cli_protection_broken_frida", dex_count=dex_count),
         style="dim white",
     )
-    t.append("\n")
+    banner_text.append("\n")
     console.print()
-    console.print(Panel(Align.center(t), border_style="yellow", padding=(0, 4)))
+    console.print(Panel(Align.center(banner_text), border_style="yellow", padding=(0, 4)))
     console.print()
 
 
@@ -855,36 +866,30 @@ def _print_verdict(result, vuln_scan) -> None:
     if not protected:
         color  = "red"
         icon   = "✘"
-        title  = "SIN PROTECCION"
-        detail = "No se detectaron mecanismos de proteccion anti-root / RASP activos."
+        title  = t("cli_no_protection_banner")
+        detail = t("cli_no_protection_detail")
     elif was_bypassed:
         color  = "yellow"
         icon   = "⚡"
-        title  = "PROTECCION ROTA"
-        detail = (
-            f"Protecciones detectadas pero eludidas en runtime "
-            f"({method}, {dex_count} DEX extraidos)."
-        )
+        title  = t("cli_protection_broken_banner")
+        detail = t("cli_bypassed_detail", method=method, dex_count=dex_count)
     else:
         color  = "green"
         icon   = "✔"
-        title  = "PROTEGIDA"
+        title  = t("cli_protected_banner")
         if has_vulns:
             n = len(vuln_scan.findings)
-            detail = (
-                "Protecciones activas detectadas. "
-                f"Se hallaron {n} vulnerabilidad{'es' if n != 1 else ''} en analisis estatico."
-            )
+            detail = t("cli_protected_vulns_detail", count=n)
         else:
-            detail = "Protecciones activas detectadas. No se encontraron vulnerabilidades expuestas."
+            detail = t("cli_protected_detail")
 
-    t = Text(justify="center")
-    t.append(f"\n  {icon}  {title}  {icon}\n\n", style=f"bold {color}")
-    t.append(f"  {detail}  ", style="dim white")
-    t.append("\n")
+    verdict_text = Text(justify="center")
+    verdict_text.append(f"\n  {icon}  {title}  {icon}\n\n", style=f"bold {color}")
+    verdict_text.append(f"  {detail}  ", style="dim white")
+    verdict_text.append("\n")
 
     console.print()
-    console.print(Panel(Align.center(t), border_style=color, padding=(0, 4)))
+    console.print(Panel(Align.center(verdict_text), border_style=color, padding=(0, 4)))
     console.print()
 
 
@@ -899,8 +904,8 @@ def _post_analysis_flow(result, apk_path: Path):
     )
 
     _label = "[green]ℹ[/green]" if result.protected else "[yellow]ℹ[/yellow]"
-    _estado = "tiene" if result.protected else "no tiene"
-    console.print(f"{_label}  La app [bold]{_estado} protección anti-root / RASP[/bold].")
+    _estado = t("cli_app_has_protection") if result.protected else t("cli_app_no_protection")
+    console.print(f"{_label}  La app [bold]{_estado} {t('cli_anti_root_label')}[/bold].")
 
     # ── Selección automática del mejor método ─────────────────────────────────
     decomp_mode = _pipeline_decompilation_mode(result.protected)
@@ -975,7 +980,7 @@ def _post_analysis_flow(result, apk_path: Path):
 def _should_fallback_jadx(protected: bool) -> bool:
     """Determina si se debe intentar decompilación jadx como fallback."""
     if not _feature_enabled("decompilation", default=True):
-        console.print("[dim]  features.decompilation=false — omitiendo decompilación.[/dim]")
+        console.print(f"[dim]{t('cli_skipping_decompilation')}[/dim]")
         return False
     if protected:
         fallback = cfg_get(_CFG, "pipelines", "protected", "fallback_jadx", default=True)
@@ -1162,8 +1167,7 @@ def _decompile_and_scan(
 
     java_count = len(list(clean_dir.rglob("*.java")))
     console.print(
-        f"[green]✔[/green] Código fuente limpio: [bold]{clean_dir}[/bold] "
-        f"({java_count} archivos .java)"
+        f"[green]✔[/green] {t('cli_clean_source', path=clean_dir, count=java_count)}"
     )
 
     if dex_count > 0:
@@ -1186,14 +1190,14 @@ def _decompile_and_scan(
     if _feature_enabled("manifest_scan", default=True):
         manifest_analysis = _do_manifest_scan(clean_dir)
     else:
-        console.print("[dim]  features.manifest_scan=false — omitiendo análisis del manifest.[/dim]")
+        console.print(f"[dim]{t('cli_skipping_manifest_scan')}[/dim]")
 
     # Escaneo de vulnerabilidades y leaks (antes de OSINT para alimentarlo)
     scan_result = None
     vuln_enabled = _feature_enabled("vuln_scan", default=True)
     leak_enabled = _feature_enabled("leak_scan", default=True)
     if not vuln_enabled and not leak_enabled:
-        console.print("[dim]  features.vuln_scan=false y features.leak_scan=false — omitiendo escaneo.[/dim]")
+        console.print(f"[dim]{t('cli_skipping_vuln_scan')}[/dim]")
     elif _ask_or_auto(
         "\n  ¿Escanear el código desofuscado en busca de vulnerabilidades?",
         "vuln_scan",
@@ -1239,7 +1243,7 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
     """Ejecuta el pipeline OSINT si está habilitado en config."""
     global _OSINT_RESULT
     if not _feature_enabled("osint_scan", default=True):
-        console.print("[dim]  features.osint_scan=false — omitiendo OSINT.[/dim]")
+        console.print(f"[dim]{t('cli_skipping_osint')}[/dim]")
         return None
 
     crt_sh = bool(cfg_get(_CFG, "osint", "crt_sh", default=True))
@@ -1306,12 +1310,12 @@ def _print_osint_report(osint: OsintResult) -> None:
 
     # ── Secretos ──────────────────────────────────────────────────────────
     if osint.secrets:
-        console.print(f"\n[bold]OSINT — Secretos de BuildConfig:[/bold]  {len(osint.secrets)} encontrados")
+        console.print(f"\n[bold]{t('cli_osint_secrets_header', count=len(osint.secrets))}[/bold]")
         table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
-        table.add_column("Campo", style="bold cyan")
-        table.add_column("Valor", style="dim", max_width=50, no_wrap=True)
-        table.add_column("Servicio", style="yellow")
-        table.add_column("Archivo", style="dim")
+        table.add_column(t("cli_osint_field_col"), style="bold cyan")
+        table.add_column(t("cli_osint_value_col"), style="dim", max_width=50, no_wrap=True)
+        table.add_column(t("cli_osint_service_col"), style="yellow")
+        table.add_column(t("cli_osint_file_col"), style="dim")
         for s in osint.secrets[:20]:
             val = s.value if len(s.value) <= 50 else s.value[:47] + "..."
             table.add_row(s.name, val, s.service or "-", s.file)
@@ -1321,17 +1325,17 @@ def _print_osint_report(osint: OsintResult) -> None:
 
     # ── Dominios ──────────────────────────────────────────────────────────
     if osint.domains_scanned:
-        console.print(f"\n[bold]OSINT — Dominios propios:[/bold]  {', '.join(osint.domains_scanned)}")
+        console.print(f"\n[bold]{t('cli_osint_domains_header')}[/bold]  {', '.join(osint.domains_scanned)}")
 
     # ── Subdominios ───────────────────────────────────────────────────────
     if osint.subdomains:
-        console.print(f"\n[bold]OSINT — Subdominios (crt.sh):[/bold]  {len(osint.subdomains)} encontrados")
+        console.print(f"\n[bold]{t('cli_osint_subdomains_header', count=len(osint.subdomains))}[/bold]")
         # Clasificar
         dev_subs = [s for s in osint.subdomains if any(
             e in s.name for e in ("dev", "qa", "uat", "test", "staging", "pre.")
         )]
         if dev_subs:
-            console.print(f"  [yellow]⚠ {len(dev_subs)} entornos dev/qa/staging expuestos:[/yellow]")
+            console.print(f"  [yellow]⚠ {t('cli_osint_dev_exposed', count=len(dev_subs))}[/yellow]")
             for s in dev_subs[:10]:
                 console.print(f"    [yellow]▸[/yellow] {s.name}")
         # Mostrar los primeros
@@ -1343,7 +1347,7 @@ def _print_osint_report(osint: OsintResult) -> None:
 
     # ── Leaks públicos ────────────────────────────────────────────────────
     if osint.public_leaks:
-        console.print(f"\n[bold]OSINT — Leaks públicos:[/bold]  {len(osint.public_leaks)} encontrados")
+        console.print(f"\n[bold]{t('cli_osint_public_leaks_header', count=len(osint.public_leaks))}[/bold]")
         for leak in osint.public_leaks[:10]:
             console.print(f"  [{leak.source}] {leak.title}")
             if leak.url:
@@ -1351,7 +1355,7 @@ def _print_osint_report(osint: OsintResult) -> None:
 
     # ── Auth flows hardcodeados ───────────────────────────────────────────
     if osint.auth_flows:
-        console.print(f"\n[yellow][bold]OSINT — Auth hardcodeados:[/bold] {len(osint.auth_flows)} detectados[/yellow]")
+        console.print(f"\n[yellow][bold]{t('cli_osint_auth_header', count=len(osint.auth_flows))}[/bold][/yellow]")
         for af in osint.auth_flows[:5]:
             console.print(f"  [yellow]⚠[/yellow] {af['type']} en {af['file']}:{af['line']}")
 
@@ -1364,7 +1368,7 @@ def _save_osint_json(osint: OsintResult, package: str) -> None:
     out = reports_dir / f"osint_{package}.json"
     with out.open("w", encoding="utf-8") as fh:
         json.dump(osint.to_dict(), fh, ensure_ascii=False, indent=2)
-    console.print(f"[dim]OSINT guardado en:[/dim] [bold]{out}[/bold]")
+    console.print(f"[dim]{t('cli_osint_saved')}[/dim] [bold]{out}[/bold]")
 
 
 
@@ -1374,7 +1378,7 @@ def _print_manifest_report(analysis) -> None:
 
     misconfigs = analysis.misconfigurations
     if not misconfigs:
-        console.print("[green]✔[/green] Sin misconfigurations detectadas en el manifest.")
+        console.print(f"[green]✔[/green] {t('cli_no_manifest_misconfigs')}")
         return
 
     severity_order = {"critical": 0, "high": 1, "medium": 2, "info": 3}
@@ -1396,14 +1400,14 @@ def _print_manifest_report(analysis) -> None:
         for sev, cnt in sorted(counts.items(), key=lambda kv: severity_order.get(kv[0], 9))
     ]
     console.print(
-        f"\n[bold]Misconfigurations del manifest:[/bold]  " + "  ".join(summary_parts)
+        f"\n[bold]{t('cli_manifest_misconfigs_header')}[/bold]  " + "  ".join(summary_parts)
     )
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
-    table.add_column("Sev.", style="bold", width=9, no_wrap=True)
-    table.add_column("Hallazgo")
-    table.add_column("Evidencia", style="dim")
-    table.add_column("Ubicación", style="dim")
+    table.add_column(t("cli_manifest_sev_col"), style="bold", width=9, no_wrap=True)
+    table.add_column(t("cli_manifest_finding_col"))
+    table.add_column(t("cli_manifest_evidence_col"), style="dim")
+    table.add_column(t("cli_manifest_location_col"), style="dim")
 
     for m in misconfigs_sorted:
         color = severity_color.get(m.severity, "")
@@ -1417,7 +1421,7 @@ def _print_manifest_report(analysis) -> None:
     # Mostrar recomendaciones de los críticos y altos
     shown = [m for m in misconfigs_sorted if m.severity in ("critical", "high")]
     if shown:
-        console.print("\n[bold]Recomendaciones:[/bold]")
+        console.print(f"\n[bold]{t('cli_manifest_recs_header')}[/bold]")
         for m in shown:
             color = severity_color.get(m.severity, "")
             console.print(f"  [{color}]▸[/{color}] [bold]{m.title}[/bold]")
@@ -1432,7 +1436,7 @@ def _do_decompile(apk_path: Path, package: str) -> Path | None:
         return None
 
     output_dir = Path("./decompiled")
-    console.print(f"  Decompilando con [bold]{tool}[/bold] → {output_dir}/{package}/")
+    console.print(f"  {t('cli_decompiling_with', tool=tool, output_dir=output_dir, package=package)}")
 
     try:
         with Progress(
@@ -1444,27 +1448,27 @@ def _do_decompile(apk_path: Path, package: str) -> Path | None:
             progress.add_task(f"Decompilando {package}...", total=None)
             dest = decompile(apk_path, output_dir)
 
-        console.print(f"[green]✔[/green] Código fuente en: [bold]{dest}[/bold]")
+        console.print(f"[green]✔[/green] {t('cli_source_code_at')} [bold]{dest}[/bold]")
 
         java_files = list(dest.rglob("*.java"))
         smali_files = list(dest.rglob("*.smali"))
         if java_files:
-            console.print(f"   {len(java_files)} archivos .java generados")
+            console.print(f"   {t('cli_java_files', count=len(java_files))}")
         elif smali_files:
-            console.print(f"   {len(smali_files)} archivos .smali generados")
+            console.print(f"   {t('cli_smali_files', count=len(smali_files))}")
 
         # Análisis de misconfigs del manifest
         if _feature_enabled("manifest_scan", default=True):
             _do_manifest_scan(dest)
         else:
-            console.print("[dim]  features.manifest_scan=false — omitiendo análisis del manifest.[/dim]")
+            console.print(f"[dim]{t('cli_skipping_manifest_scan')}[/dim]")
 
         # Escaneo de vulnerabilidades y leaks (antes de OSINT para alimentarlo)
         scan_result = None
         vuln_enabled = _feature_enabled("vuln_scan", default=True)
         leak_enabled = _feature_enabled("leak_scan", default=True)
         if not vuln_enabled and not leak_enabled:
-            console.print("[dim]  features.vuln_scan=false y features.leak_scan=false — omitiendo escaneo.[/dim]")
+            console.print(f"[dim]{t('cli_skipping_vuln_scan')}[/dim]")
         elif _ask_or_auto("\n  ¿Escanear el código en busca de vulnerabilidades?", "vuln_scan", default=True):
             scan_result = _do_vuln_scan(
                 dest,
@@ -1553,16 +1557,16 @@ def _do_vuln_scan(
             else "[bold]regex interno[/bold] [dim](semgrep no instalado)[/dim]"
         )
     console.print(
-        "  Vulnerability scan (código): "
-        + ("[green]habilitado[/green]" if include_vuln_scan else "[yellow]deshabilitado[/yellow]")
+        "  " + t("cli_vuln_scan_header") +
+        ("[green]" + t("cli_vuln_scan_enabled") + "[/green]" if include_vuln_scan else "[yellow]" + t("cli_vuln_scan_disabled") + "[/yellow]")
     )
     console.print(
-        "  Vulnerability scan engine: "
-        + (engine_label if include_vuln_scan else "[dim]desactivado[/dim]")
+        "  " + t("cli_vuln_engine_header") +
+        (engine_label if include_vuln_scan else "[dim]" + t("cli_vuln_scan_disabled") + "[/dim]")
     )
     console.print(
-        "  Leak scan: "
-        + ("[green]habilitado[/green]" if include_leak_scan else "[yellow]deshabilitado[/yellow]")
+        "  " + t("cli_leak_scan_header") +
+        ("[green]" + t("cli_vuln_scan_enabled") + "[/green]" if include_leak_scan else "[yellow]" + t("cli_vuln_scan_disabled") + "[/yellow]")
     )
     # Detalle de motores de leak realmente activos
     leak_parts = []
@@ -1572,8 +1576,8 @@ def _do_vuln_scan(
         leak_parts.append("apkleaks")
     if include_leak_scan and use_gitleaks:
         leak_parts.append("gitleaks")
-    leak_engine_label = ", ".join(leak_parts) if leak_parts else "[dim]desactivados[/dim]"
-    console.print(f"  Leak engines: {leak_engine_label}")
+    leak_engine_label = ", ".join(leak_parts) if leak_parts else ("[dim]" + t("cli_leak_engines_disabled") + "[/dim]")
+    console.print(f"  {t('cli_leak_engines_header')} {leak_engine_label}")
 
     if not include_vuln_scan:
         if include_leak_scan:
@@ -1736,9 +1740,7 @@ def _do_vuln_scan(
 
         engine_used = scan_result.scanner_engine
         console.print(
-            f"  [dim]Escáner usado: {engine_used} — "
-            f"{scan_result.files_scanned} archivos, "
-            f"{len(scan_result.findings)} hallazgos[/dim]"
+            f"  [dim]{t('cli_scanner_used_dim', engine=engine_used, files=scan_result.files_scanned, findings=len(scan_result.findings))}[/dim]"
         )
 
     print_vuln_report(scan_result, source_dir)
@@ -1821,7 +1823,7 @@ def _generate_pdf(result, vuln_scan=None) -> None:
         vuln_scan = _load_vuln_json(result.package)
         if vuln_scan is not None:
             console.print(
-                f"[dim]  Cargando {len(vuln_scan.findings)} hallazgos de vulnerabilidades previos...[/dim]"
+                f"[dim]  {t('cli_loading_prev_findings', count=len(vuln_scan.findings))}[/dim]"
             )
 
     reports_dir = Path("./reports")
@@ -1830,9 +1832,9 @@ def _generate_pdf(result, vuln_scan=None) -> None:
     try:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                       console=console, transient=True) as progress:
-            progress.add_task("Generando informe PDF...", total=None)
+            progress.add_task(t("cli_generating_pdf"), total=None)
             generate_pdf_report(result, pdf_path, scan=vuln_scan, manifest=_MANIFEST_ANALYSIS, osint=_OSINT_RESULT)
-        console.print(f"[green]✔[/green] Informe PDF guardado en: [bold]{pdf_path}[/bold]")
+        console.print(f"[green]✔[/green] {t('cli_pdf_saved')} [bold]{pdf_path}[/bold]")
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Error generando PDF:[/red] {exc}")
 
@@ -1861,7 +1863,7 @@ def _save_vuln_json(scan_result, output_path: Path) -> None:
     }
     with output_path.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
-    console.print(f"[dim]Informe de vulnerabilidades guardado en:[/dim] [bold]{output_path}[/bold]")
+    console.print(f"[dim]{t('cli_vuln_json_saved')}[/dim] [bold]{output_path}[/bold]")
 
 
 # ── Comando: batch ───────────────────────────────────────────────────────────
@@ -1915,6 +1917,7 @@ def batch(
     started_at = time.perf_counter()
     config = load_config(config_path)
     _CFG = config
+    _init_i18n(config)
 
     batch_cfg   = cfg_get(config, "batch") or {}
     _keep_apk   = keep_apk or bool(batch_cfg.get("keep_apk",   cfg_get(config, "downloader", "keep_apk", default=False)))
@@ -1941,7 +1944,7 @@ def batch(
         console.print("[yellow]La lista está vacía. No hay nada que escanear.[/yellow]")
         return
 
-    console.print(f"[bold cyan]Batch scan:[/bold cyan] {len(targets)} objetivo(s) encontrado(s) en [bold]{list_file}[/bold]")
+    console.print(f"[bold cyan]Batch scan:[/bold cyan] {t('cli_batch_scan_header', count=len(targets), file=list_file)}")
     console.rule()
 
     results_summary: list[dict] = []

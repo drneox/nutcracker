@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from nutcracker_core.i18n import t
+
 # Namespace Android en los XMLs de jadx
 _NS = "http://schemas.android.com/apk/res/android"
 
@@ -40,16 +42,16 @@ _DANGEROUS_PERMISSIONS = {
 }
 
 # Patrones para detectar secrets en strings.xml
+# Tuple: (rule_id, regex, i18n_key)
 _SECRET_PATTERNS: list[tuple[str, str, str]] = [
-    # (nombre, regex, descripción)
-    ("api_key",         r'(?i)(api[_\-]?key|apikey)\s*=?\s*["\']([A-Za-z0-9_\-]{16,})["\']',  "API Key hardcodeada"),
-    ("aws_key",         r'AKIA[0-9A-Z]{16}',                                                     "AWS Access Key"),
-    ("firebase_url",    r'https://[a-z0-9\-]+\.firebaseio\.com',                                 "Firebase Realtime DB URL"),
-    ("firebase_key",    r'AIza[0-9A-Za-z\\-_]{35}',                                             "Firebase API Key"),
-    ("google_maps_key", r'AIza[0-9A-Za-z\\-_]{35}',                                             "Google Maps API Key"),
-    ("jwt_token",       r'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}',  "JWT Token hardcodeado"),
-    ("private_ip",      r'https?://(?:192\.168|10\.\d+|172\.(?:1[6-9]|2\d|3[01]))\.\d+\.\d+',  "IP privada hardcodeada"),
-    ("password_field",  r'(?i)<string[^>]+name="[^"]*passw[^"]*"[^>]*>([^\s<]{6,})<',           "Posible contraseña hardcodeada"),
+    ("api_key",         r'(?i)(api[_\-]?key|apikey)\s*=?\s*["\']([A-Za-z0-9_\-]{16,})["\']',  "secret_api_key"),
+    ("aws_key",         r'AKIA[0-9A-Z]{16}',                                                     "secret_aws_key"),
+    ("firebase_url",    r'https://[a-z0-9\-]+\.firebaseio\.com',                                 "secret_firebase_url"),
+    ("firebase_key",    r'AIza[0-9A-Za-z\\-_]{35}',                                             "secret_firebase_key"),
+    ("google_maps_key", r'AIza[0-9A-Za-z\\-_]{35}',                                             "secret_google_maps_key"),
+    ("jwt_token",       r'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}',  "secret_jwt_token"),
+    ("private_ip",      r'https?://(?:192\.168|10\.\d+|172\.(?:1[6-9]|2\d|3[01]))\.\d+\.\d+',  "secret_private_ip"),
+    ("password_field",  r'(?i)<string[^>]+name="[^"]*passw[^"]*"[^>]*>([^\s<]{6,})<',           "secret_password"),
 ]
 
 
@@ -101,45 +103,38 @@ def analyze_decompiled_dir(
         manifest_path = decompiled_dir / "AndroidManifest.xml"
 
     if manifest_path.exists():
-        _cb("Analizando AndroidManifest.xml...")
+        _cb(t("analyzing_manifest_progress"))
         _analyze_manifest(manifest_path, result)
     else:
         result.misconfigurations.append(Misconfiguration(
             severity="medium",
             category="manifest",
-            title="AndroidManifest.xml no encontrado",
-            description="No se pudo localizar el manifest decompilado.",
+            title=t("manifest_not_found_title"),
+            description=t("manifest_not_found_desc"),
             location=str(decompiled_dir),
-            recommendation="Asegúrate de decompilar con jadx -d <output> <apk>.",
+            recommendation=t("manifest_not_found_rec"),
         ))
 
     # ── 2. network_security_config.xml ───────────────────────────────────────
     nsc_candidates = list(decompiled_dir.rglob("network_security_config.xml"))
     if nsc_candidates:
-        _cb("Analizando network_security_config.xml...")
+        _cb(t("analyzing_nsc_progress"))
         result.has_network_security_config = True
         _analyze_network_security_config(nsc_candidates[0], result)
     elif result.cleartext_traffic:
         result.misconfigurations.append(Misconfiguration(
             severity="high",
             category="network",
-            title="Sin Network Security Config y cleartext activo",
-            description=(
-                "La app permite tráfico en texto claro (usesCleartextTraffic=true) "
-                "y no define un network_security_config.xml para restringirlo."
-            ),
+            title=t("no_nsc_cleartext_title"),
+            description=t("no_nsc_cleartext_desc"),
             location="AndroidManifest.xml",
-            recommendation=(
-                "Define res/xml/network_security_config.xml con "
-                "<base-config cleartextTrafficPermitted=\"false\"> y añade "
-                "android:networkSecurityConfig al <application>."
-            ),
+            recommendation=t("no_nsc_cleartext_rec"),
         ))
 
     # ── 3. strings.xml (solo el principal, no i18n) ───────────────────────────
     strings_main = decompiled_dir / "resources" / "res" / "values" / "strings.xml"
     if strings_main.exists():
-        _cb("Escaneando strings.xml en busca de secrets...")
+        _cb(t("scanning_strings_progress"))
         _analyze_strings(strings_main, result)
 
     return result
@@ -193,10 +188,10 @@ def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
         result.misconfigurations.append(Misconfiguration(
             severity="info",
             category="manifest",
-            title="Error al parsear AndroidManifest.xml",
-            description="El XML no pudo ser parseado correctamente.",
+            title=t("manifest_parse_error_title"),
+            description=t("manifest_parse_error_desc"),
             location=str(path),
-            recommendation="Verifica que jadx decompilara el APK correctamente.",
+            recommendation=t("manifest_parse_error_rec"),
         ))
         return
 
@@ -213,13 +208,10 @@ def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
         result.misconfigurations.append(Misconfiguration(
             severity="medium",
             category="manifest",
-            title=f"targetSdkVersion bajo ({result.target_sdk})",
-            description=(
-                f"targetSdkVersion={result.target_sdk} no aprovecha las protecciones "
-                "de Scoped Storage, restricciones de fondo, etc. disponibles desde API 28+."
-            ),
-            location="AndroidManifest.xml → uses-sdk",
-            recommendation="Actualizar targetSdkVersion a ≥ 34 (Android 14).",
+            title=t("low_target_sdk_title", version=result.target_sdk),
+            description=t("low_target_sdk_desc", version=result.target_sdk),
+            location="AndroidManifest.xml \u2192 uses-sdk",
+            recommendation=t("low_target_sdk_rec"),
         ))
 
     # ── Permisos peligrosos ───────────────────────────────────────────────────
@@ -232,14 +224,10 @@ def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
         result.misconfigurations.append(Misconfiguration(
             severity="info",
             category="permissions",
-            title=f"{len(result.dangerous_permissions)} permiso(s) de alto riesgo",
-            description="\n".join(f"  • {p}" for p in sorted(result.dangerous_permissions)),
-            location="AndroidManifest.xml → uses-permission",
-            recommendation=(
-                "Audita si cada permiso es estrictamente necesario. "
-                "ACCESS_BACKGROUND_LOCATION, REQUEST_INSTALL_PACKAGES y READ_SMS "
-                "requieren justificación especial en Google Play."
-            ),
+            title=t("dangerous_perms_title", count=len(result.dangerous_permissions)),
+            description="\n".join(f"  \u2022 {p}" for p in sorted(result.dangerous_permissions)),
+            location="AndroidManifest.xml \u2192 uses-permission",
+            recommendation=t("dangerous_perms_rec"),
         ))
 
     # ── Flags de <application> ────────────────────────────────────────────────
@@ -257,13 +245,10 @@ def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
         result.misconfigurations.append(Misconfiguration(
             severity="critical",
             category="manifest",
-            title="android:debuggable=\"true\"",
-            description=(
-                "La app está marcada como depurable. Permite adb shell run-as, "
-                "adjuntar debugger, leer el sandbox de la app y volcar memoria."
-            ),
-            location="AndroidManifest.xml → <application>",
-            recommendation="Eliminar android:debuggable o establecerlo en false en builds de producción.",
+            title=t("debuggable_title"),
+            description=t("debuggable_desc"),
+            location="AndroidManifest.xml \u2192 <application>",
+            recommendation=t("debuggable_rec"),
         ))
 
     allow_backup = _attr(app_el, "allowBackup")
@@ -272,13 +257,10 @@ def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
         result.misconfigurations.append(Misconfiguration(
             severity="high",
             category="manifest",
-            title="android:allowBackup=\"true\" (o no definido)",
-            description=(
-                "Permite backup ADB del sandbox de la app sin root: "
-                "adb backup -f app.ab com.package → expone bases de datos, tokens, etc."
-            ),
-            location="AndroidManifest.xml → <application>",
-            recommendation="Establecer android:allowBackup=\"false\" o definir reglas de backup explícitas.",
+            title=t("allow_backup_title"),
+            description=t("allow_backup_desc"),
+            location="AndroidManifest.xml \u2192 <application>",
+            recommendation=t("allow_backup_rec"),
         ))
 
     cleartext = _attr(app_el, "usesCleartextTraffic")
@@ -287,16 +269,10 @@ def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
         result.misconfigurations.append(Misconfiguration(
             severity="high",
             category="network",
-            title="android:usesCleartextTraffic=\"true\"",
-            description=(
-                "La app permite conexiones HTTP sin cifrar. "
-                "Las credenciales y datos sensibles pueden viajar en texto plano."
-            ),
-            location="AndroidManifest.xml → <application>",
-            recommendation=(
-                "Eliminar usesCleartextTraffic=true y forzar HTTPS en todos los endpoints. "
-                "Usar Network Security Config para dominios legacy si es necesario."
-            ),
+            title=t("cleartext_title"),
+            description=t("cleartext_desc"),
+            location="AndroidManifest.xml \u2192 <application>",
+            recommendation=t("cleartext_rec"),
         ))
 
     nsc = _attr(app_el, "networkSecurityConfig")
@@ -304,16 +280,10 @@ def _analyze_manifest(path: Path, result: ManifestAnalysisResult) -> None:
         result.misconfigurations.append(Misconfiguration(
             severity="medium",
             category="network",
-            title="Sin android:networkSecurityConfig",
-            description=(
-                "No se define una política de seguridad de red explícita. "
-                "Desde Android 9+ el sistema aplica defaults, pero no hay certificate pinning ni restricciones custom."
-            ),
-            location="AndroidManifest.xml → <application>",
-            recommendation=(
-                "Definir android:networkSecurityConfig=\"@xml/network_security_config\" "
-                "con certificate pinning para los dominios de producción."
-            ),
+            title=t("no_nsc_title"),
+            description=t("no_nsc_desc"),
+            location="AndroidManifest.xml \u2192 <application>",
+            recommendation=t("no_nsc_rec"),
         ))
 
     # ── Componentes exportados sin permiso ────────────────────────────────────
@@ -347,16 +317,10 @@ def _check_exported_components(app_el: ET.Element, result: ManifestAnalysisResul
                 result.misconfigurations.append(Misconfiguration(
                     severity=severity,
                     category="manifest",
-                    title=f"<{tag}> exportado sin permiso: {name.split('.')[-1]}",
-                    description=(
-                        f"El componente {name} es accesible desde otras apps "
-                        f"sin requerir ningún permiso."
-                    ),
-                    location=f"AndroidManifest.xml → <{tag} android:name=\"{name}\">",
-                    recommendation=(
-                        f"Añadir android:exported=\"false\" si no es necesario externamente, "
-                        f"o protegerlo con android:permission=\"...signature...\"."
-                    ),
+                    title=t("exported_component_title", tag=tag, name=name.split(".")[-1]),
+                    description=t("exported_component_desc", fullname=name),
+                    location=f'AndroidManifest.xml \u2192 <{tag} android:name="{name}">',
+                    recommendation=t("exported_component_rec"),
                 ))
 
 
@@ -376,16 +340,10 @@ def _analyze_network_security_config(path: Path, result: ManifestAnalysisResult)
                 result.misconfigurations.append(Misconfiguration(
                     severity="high",
                     category="network",
-                    title="Confía en CAs del usuario (MITM posible)",
-                    description=(
-                        "La Network Security Config confía en certificados instalados por el usuario. "
-                        "Un atacante puede instalar su propia CA y realizar MITM."
-                    ),
+                    title=t("user_ca_title"),
+                    description=t("user_ca_desc"),
                     location=str(path),
-                    recommendation=(
-                        "Eliminar <certificates src=\"user\"/> del bloque de producción. "
-                        "Solo usar para debug builds con <debug-overrides>."
-                    ),
+                    recommendation=t("user_ca_rec"),
                 ))
 
     # Verificar cleartext por dominio
@@ -396,13 +354,10 @@ def _analyze_network_security_config(path: Path, result: ManifestAnalysisResult)
             result.misconfigurations.append(Misconfiguration(
                 severity="medium",
                 category="network",
-                title=f"Cleartext permitido para dominio(s): {', '.join(domains)}",
-                description=(
-                    f"La config de red permite tráfico HTTP sin cifrar "
-                    f"hacia: {', '.join(domains)}."
-                ),
+                title=t("cleartext_domain_title", domains=", ".join(domains)),
+                description=t("cleartext_domain_desc", domains=", ".join(domains)),
                 location=str(path),
-                recommendation="Migrar a HTTPS y eliminar cleartextTrafficPermitted=true.",
+                recommendation=t("cleartext_domain_rec"),
             ))
 
     # Detectar si hay certificate pinning configurado
@@ -411,16 +366,10 @@ def _analyze_network_security_config(path: Path, result: ManifestAnalysisResult)
         result.misconfigurations.append(Misconfiguration(
             severity="medium",
             category="network",
-            title="Sin certificate pinning en Network Security Config",
-            description=(
-                "Se encontró network_security_config.xml pero no define <pin-set>. "
-                "Sin pinning, cualquier CA de confianza del sistema puede emitir certs válidos."
-            ),
+            title=t("no_cert_pinning_title"),
+            description=t("no_cert_pinning_desc"),
             location=str(path),
-            recommendation=(
-                "Agregar <pin-set expiration=\"...\"><pin digest=\"SHA-256\">...</pin></pin-set> "
-                "para los dominios de producción."
-            ),
+            recommendation=t("no_cert_pinning_rec"),
         ))
 
 
@@ -432,7 +381,7 @@ def _analyze_strings(path: Path, result: ManifestAnalysisResult) -> None:
 
     lines = content.splitlines()
 
-    for rule_id, pattern, title in _SECRET_PATTERNS:
+    for rule_id, pattern, title_key in _SECRET_PATTERNS:
         seen = False
         for line in lines:
             if seen:
@@ -445,11 +394,8 @@ def _analyze_strings(path: Path, result: ManifestAnalysisResult) -> None:
                 result.misconfigurations.append(Misconfiguration(
                     severity="high",
                     category="secrets",
-                    title=title,
+                    title=t(title_key),
                     description=evidence,
                     location="res/values/strings.xml",
-                    recommendation=(
-                        "Mover valores sensibles fuera del APK. "
-                        "Usar Android Keystore, variables de entorno o un secrets manager."
-                    ),
+                    recommendation=t("secret_rec"),
                 ))
