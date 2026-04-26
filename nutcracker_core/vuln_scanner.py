@@ -108,6 +108,13 @@ RULES: list[VulnRule] = [
             '"bad_token"', '"retry_token"', '"dummy_token"',
             # FP: claves de cabecera HTTP (no credenciales)
             '"lock-token"', '"data_callback_token"', '"data_media_session_token"',
+            # FP: toString() de data class — keyword aparece dentro de un string label
+            # p.ej. m1920j("ResetPassword(token=", this.token, ", email=", this.email, ")")
+            # El regex matchea token=", this.token, " como si fuera token = "valor"
+            '"token="', '"password="', '"secret="', '"passwd="', '"pwd="',
+            # FP: el "valor" es una referencia a campo de instancia (this.token, this.password…)
+            # — no es un literal hardcodeado
+            'this.token', 'this.password', 'this.passwd', 'this.secret', 'this.pwd',
         ],
         # FP: valor == identificador SCREAMING_SNAKE_CASE (ej. TOKEN = "TOKEN" o
         # API_OBTENER_USUARIO_DESDE_TOKEN = "API_OBTENER_USUARIO_DESDE_TOKEN")
