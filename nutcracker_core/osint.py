@@ -711,6 +711,8 @@ def search_fofa(
                 if "820001" in str(errmsg) and not _use_basic:
                     import sys
                     print(f"[FOFA] {t('osint_fofa_basic_fields')}", file=sys.stderr)
+                    if progress_callback:
+                        progress_callback(t("osint_fofa_basic_fields"))
                     _use_basic = True
                     fields = fields_basic
                     data = _do_request(fields)
@@ -834,14 +836,24 @@ def search_shodan(
                 headers={"User-Agent": _USER_AGENT},
                 timeout=_REQUESTS_TIMEOUT,
             )
-            if resp.status_code == 401:
+            if resp.status_code in (401, 403):
                 import sys
-                print("[Shodan] API key invalida o sin permisos.", file=sys.stderr)
+                # Intentar leer el mensaje de error del cuerpo
+                try:
+                    err_body = resp.json().get("error", "")
+                except Exception:
+                    err_body = ""
+                errmsg = err_body or ("invalid API key" if resp.status_code == 401 else "requires paid membership")
+                print(f"[Shodan] {errmsg}", file=sys.stderr)
                 if progress_callback:
-                    progress_callback(t("osint_shodan_error", err="invalid API key"))
+                    progress_callback(t("osint_shodan_error", err=errmsg))
                 break
             if resp.status_code != 200:
-                continue
+                import sys
+                print(f"[Shodan] HTTP {resp.status_code}", file=sys.stderr)
+                if progress_callback:
+                    progress_callback(t("osint_shodan_error", err=f"HTTP {resp.status_code}"))
+                break
 
             data = resp.json()
 
