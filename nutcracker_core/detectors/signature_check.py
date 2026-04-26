@@ -10,6 +10,7 @@ Busca patrones que indican que la app comprueba su propia firma en runtime:
 """
 
 from .base import BaseDetector, DetectionResult
+from nutcracker_core.i18n import t
 
 # Clases y métodos que implican verificación activa de la firma del APK
 SIGNATURE_CHECK_INDICATORS: list[str] = [
@@ -44,7 +45,7 @@ SIGNATURE_STRING_INDICATORS: list[str] = [
 class SignatureCheckDetector(BaseDetector):
     """Detecta verificación de integridad de firma del APK en runtime."""
 
-    name = "Verificación de firma del APK"
+    name = "APK signature verification"
     strength = "medium"
 
     def detect(self, apk, dx, all_strings: set, all_classes: set) -> DetectionResult:
@@ -54,14 +55,14 @@ class SignatureCheckDetector(BaseDetector):
         for indicator in SIGNATURE_CHECK_INDICATORS:
             for cls in all_classes:
                 if indicator.lower() in cls.lower():
-                    found.append(f"[Clase] {cls!r}")
+                    found.append(t("ev_class", item=cls))
                     break
 
         # Buscar en strings
         for indicator in SIGNATURE_STRING_INDICATORS:
             for s in all_strings:
                 if indicator.lower() in s.lower():
-                    found.append(f"[String] {s!r}")
+                    found.append(t("ev_string", item=s))
                     break
 
         # Buscar acceso a PackageManager.getPackageInfo con flags de firma via dx
@@ -71,12 +72,8 @@ class SignatureCheckDetector(BaseDetector):
                     src = str(method.get_method().get_descriptor())
                     # getPackageInfo en cualquier clase del APK (no libs de sistema)
                     class_name = str(cls_obj.name)
-                    if (
-                        "getPackageInfo" in src
-                        and not class_name.startswith("Landroid/")
-                        and not class_name.startswith("Ljava/")
-                    ):
-                        found.append(f"[Método] {class_name}->{src}")
+                    if "getPackageInfo" in src and not class_name.startswith("Landroid/") and not class_name.startswith("Ljava/"):
+                        found.append(t("ev_method", classname=class_name, src=src))
                         break
         except Exception:  # noqa: BLE001
             pass
