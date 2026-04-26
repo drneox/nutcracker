@@ -25,6 +25,8 @@ from urllib.parse import quote_plus
 import requests
 from rich.console import Console
 
+from .i18n import t
+
 console = Console()
 
 # ── Constantes ────────────────────────────────────────────────────────────────
@@ -179,7 +181,7 @@ def extract_buildconfig_secrets(
     buildconfig_files: list[Path] = []
 
     if progress_callback:
-        progress_callback("Buscando archivos BuildConfig...")
+        progress_callback(t("osint_searching_buildconfig"))
 
     # BuildConfig normales
     for f in source_dir.rglob("BuildConfig.java"):
@@ -208,7 +210,7 @@ def extract_buildconfig_secrets(
                 buildconfig_files.append(f)
 
     if progress_callback:
-        progress_callback(f"Analizando {len(buildconfig_files)} archivos BuildConfig...")
+        progress_callback(t("osint_analyzing_buildconfig", count=len(buildconfig_files)))
 
     for fpath in buildconfig_files:
         try:
@@ -255,7 +257,7 @@ def extract_buildconfig_secrets(
                 })
 
     if progress_callback:
-        progress_callback(f"BuildConfig: {len(secrets)} secretos, {len(auth_flows)} auth flows")
+        progress_callback(t("osint_buildconfig_stats", secrets=len(secrets), auth_flows=len(auth_flows)))
 
     return secrets, auth_flows
 
@@ -327,14 +329,14 @@ def enumerate_subdomains(
                         )
         except (requests.RequestException, json.JSONDecodeError, ValueError):
             if progress_callback:
-                progress_callback(f"crt.sh: error consultando {domain}")
+                progress_callback(t("osint_crtsh_error", domain=domain))
             continue
 
         # Rate limiting cortés
         time.sleep(1)
 
     if progress_callback:
-        progress_callback(f"crt.sh: {len(subdomains)} subdominios encontrados")
+        progress_callback(t("osint_crtsh_found", count=len(subdomains)))
 
     return sorted(subdomains.values(), key=lambda s: s.name)
 
@@ -424,7 +426,7 @@ def search_postman(
 
     for query in queries:
         if progress_callback:
-            progress_callback(f"Postman: buscando '{query}'...")
+            progress_callback(t("osint_postman_searching", query=query))
 
         url = "https://www.postman.com/_api/ws/proxy"
         payload = {
@@ -512,7 +514,7 @@ def search_postman(
         time.sleep(1)
 
     if progress_callback:
-        progress_callback(f"Postman: {len(results)} resultados")
+        progress_callback(t("osint_postman_results", count=len(results)))
 
     return results
 
@@ -550,7 +552,7 @@ def search_github_code(
     for query in queries:
         if progress_callback:
             mode = "API" if use_api else "web"
-            progress_callback(f"GitHub ({mode}): buscando '{query}'...")
+            progress_callback(t("osint_github_searching", mode=mode, query=query))
 
         if use_api:
             try:
@@ -564,7 +566,7 @@ def search_github_code(
                     # Rate-limit o scope insuficiente — degradar a web.
                     if progress_callback:
                         progress_callback(
-                            "GitHub API: rate-limit o sin scope, usando modo web"
+                            t("osint_github_ratelimit")
                         )
                     use_api = False
                 elif resp.status_code == 422:
@@ -598,7 +600,7 @@ def search_github_code(
                         ))
                     if progress_callback and total > 10:
                         progress_callback(
-                            f"GitHub: {total} resultados totales para '{query}' (mostrando 10)"
+                            t("osint_github_results_total", total=total, query=query)
                         )
             except requests.RequestException:
                 pass
@@ -632,7 +634,7 @@ def search_github_code(
         time.sleep(2)  # GitHub rate limita agresivamente en ambos modos
 
     if progress_callback:
-        progress_callback(f"GitHub: {len(results)} hallazgos")
+        progress_callback(t("osint_github_results", count=len(results)))
 
     return results
 
@@ -657,7 +659,7 @@ def search_fofa(
 
     for query in queries:
         if progress_callback:
-            progress_callback(f"FOFA: buscando '{query}'...")
+            progress_callback(t("osint_fofa_searching", query=query))
 
         fofa_query = f'domain="{query}" || host="{query}"'
         qbase64 = base64.b64encode(fofa_query.encode("utf-8")).decode("ascii")
@@ -683,7 +685,7 @@ def search_fofa(
                 import sys
                 print(f"[FOFA] Error API: {errmsg}", file=sys.stderr)
                 if progress_callback:
-                    progress_callback(f"FOFA error: {errmsg}")
+                    progress_callback(t("osint_fofa_error", err=errmsg))
                 continue
 
             for item in data.get("results", []):
@@ -715,7 +717,7 @@ def search_fofa(
         time.sleep(1)
 
     if progress_callback:
-        progress_callback(f"FOFA: {len(results)} resultados")
+        progress_callback(t("osint_fofa_results", count=len(results)))
 
     return results
 
@@ -862,7 +864,7 @@ def execute_dorks(
         for idx, query in enumerate(queries, 1):
             if progress_callback:
                 progress_callback(
-                    f"DuckDuckGo ({idx}/{len(queries)}): {query[:60]}"
+                    t("osint_ddg_query", idx=idx, total=len(queries), query=query[:60])
                 )
             results.extend(
                 search_duckduckgo(query, max_results=max_results_per_dork)
@@ -870,7 +872,7 @@ def execute_dorks(
             time.sleep(1)  # cortesía entre requests
 
     if progress_callback:
-        progress_callback(f"Búsquedas web: {len(results)} resultados")
+        progress_callback(t("osint_web_results", count=len(results)))
 
     return results
 
@@ -961,7 +963,7 @@ def search_wayback_many(
     results: list[PublicLeak] = []
     for idx, domain in enumerate(domains, 1):
         if progress_callback:
-            progress_callback(f"Wayback ({idx}/{len(domains)}): {domain}")
+            progress_callback(t("osint_wayback_scanning", idx=idx, total=len(domains), domain=domain))
         results.extend(
             search_wayback(
                 domain,
@@ -971,7 +973,7 @@ def search_wayback_many(
         )
         time.sleep(0.5)
     if progress_callback:
-        progress_callback(f"Wayback: {len(results)} URLs archivadas")
+        progress_callback(t("osint_wayback_results", count=len(results)))
     return results
 
 
@@ -1368,7 +1370,7 @@ def run_osint(
 
     if not domains:
         if progress_callback:
-            progress_callback("OSINT: no se encontraron dominios propios para analizar")
+            progress_callback(t("osint_no_domains"))
         return result
 
     # 3. Enumeración de subdominios
@@ -1436,9 +1438,9 @@ def run_osint(
 
     if progress_callback:
         progress_callback(
-            f"OSINT completo: "
-            f"{len(result.subdomains)} subdominios, "
-            f"{len(result.public_leaks)} leaks públicos"
+            t("osint_complete",
+              subdomains=len(result.subdomains),
+              leaks=len(result.public_leaks))
         )
 
     return result
