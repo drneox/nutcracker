@@ -18,6 +18,7 @@ import zipfile
 from pathlib import Path
 
 from .base import BaseDetector, DetectionResult
+from nutcracker_core.i18n import t
 
 # ── Firmas de vendor ──────────────────────────────────────────────────────────
 
@@ -37,6 +38,12 @@ _HIGH_ENTROPY_THRESHOLD = 4.5    # bits de Shannon para string cifrada
 _HIGH_ENTROPY_MIN_LEN = 8        # longitud mínima para evaluar entropía
 _HIGH_ENTROPY_MIN_COUNT = 80     # umbral de cantidad para ser sospechoso
 _DECRYPT_KEYWORDS = ("decrypt", "decipher", "AesCipher", "StringObf", "obfusc",)
+
+# Entropía de Shannon del contenido raw del DEX dentro del APK.
+# Un DEX normal tiene entropía ~5-6 bits (mezcla de código + data).
+# Un DEX cifrado (DexGuard encrypt-classes) tiene entropía >7.5 bits.
+_DEX_ENCRYPTED_ENTROPY = 7.5    # bits — DEX raw casi aleatorio = cifrado
+_DEX_ENCRYPTED_MIN_SIZE = 50_000  # ignorar DEX stub muy pequeños
 
 
 def _pkg_to_path(package: str) -> str:
@@ -117,6 +124,7 @@ class DexGuardDetector(BaseDetector):
         vendor_in_app = False   # vendor sig en namespace propio de la app
         vendor_in_sdk = False   # vendor sig en un SDK de terceros
         sdk_names: set[str] = set()
+        dex_encrypted = False
 
         for sig in _VENDOR_SIGS:
             sig_lo = sig.lower()
@@ -126,11 +134,11 @@ class DexGuardDetector(BaseDetector):
                 if sig_lo in cls.lower():
                     if app_package and not _is_app_class(cls, app_package):
                         ns = _extract_namespace(cls)
-                        details.append(f"Firma de vendor en clase (SDK: {ns}): '{cls[:80]}'")
+                        details.append(t("ev_dxg_vendor_class_sdk", ns=ns, cls=cls[:80]))
                         vendor_in_sdk = True
                         sdk_names.add(ns)
                     else:
-                        details.append(f"Firma de vendor en clase: '{cls[:80]}'")
+                        details.append(t("ev_dxg_vendor_class", cls=cls[:80]))
                         vendor_in_app = True
                     break
 
@@ -140,11 +148,11 @@ class DexGuardDetector(BaseDetector):
                     owner = _find_string_owner_class(dx, s) if dx else None
                     if owner and app_package and not _is_app_class(owner, app_package):
                         ns = _extract_namespace(owner)
-                        details.append(f"Firma de vendor en strings (SDK: {ns}): '{s[:80]}'")
+                        details.append(t("ev_dxg_vendor_string_sdk", ns=ns, s=s[:80]))
                         vendor_in_sdk = True
                         sdk_names.add(ns)
                     elif owner and app_package and _is_app_class(owner, app_package):
-                        details.append(f"Firma de vendor en strings: '{s[:80]}'")
+                        details.append(t("ev_dxg_vendor_string", s=s[:80]))
                         vendor_in_app = True
                     else:
                         # No se pudo resolver el dueño via dx — inferir por
@@ -155,12 +163,10 @@ class DexGuardDetector(BaseDetector):
                             v in s.lower() for v in ("dexguard", "guardsquare", "arxan")
                         )
                         if _is_sdk_string:
-                            details.append(
-                                f"Firma de vendor en strings (SDK de terceros): '{s[:80]}'"
-                            )
+                            details.append(t("ev_dxg_vendor_string_3p_sdk", s=s[:80]))
                             vendor_in_sdk = True
                         else:
-                            details.append(f"Firma de vendor en strings: '{s[:80]}'")
+                            details.append(t("ev_dxg_vendor_string", s=s[:80]))
                             vendor_in_app = True
                     break
 
@@ -173,22 +179,47 @@ class DexGuardDetector(BaseDetector):
             ratio = short / total_classes
             if ratio > _OBFUSCATED_CLASS_RATIO:
                 details.append(
-                    f"Alto ratio de clases ofuscadas: {ratio:.0%} "
-                    f"({short:,}/{total_classes:,} con nombre de 1-2 chars)"
+                    t("ev_dxg_obf_ratio", ratio=f"{ratio:.0%}", short=f"{short:,}", total=f"{total_classes:,}")
                 )
 
-        # ── 3. Múltiples DEX en el APK ───────────────────────────────────────
+        # ── 3. Múltiples DEX en el APK + entropía de DEX raw (cifrado nativo) ──
         try:
             apk_path = getattr(apk, "filename", None)
             if apk_path:
                 with zipfile.ZipFile(apk_path, "r") as zf:
                     dex_files = [n for n in zf.namelist() if n.endswith(".dex")]
-                if len(dex_files) > 1:
-                    sample = ", ".join(dex_files[:6])
-                    suffix = " ..." if len(dex_files) > 6 else ""
-                    details.append(
-                        f"Múltiples DEX en el APK ({len(dex_files)}): {sample}{suffix}"
-                    )
+                    if len(dex_files) > 1:
+                        sample = ", ".join(dex_files[:6])
+                        suffix = " ..." if len(dex_files) > 6 else ""
+                        details.append(
+                            t("ev_dxg_multi_dex", count=len(dex_files), sample=sample, suffix=suffix)
+                        )
+
+                    # Heurística: DEX cifrado en el APK
+                    # DexGuard puede cifrar el bytecode dentro del APK y
+                    # descifrarlo en memoria via JNI. El resultado es un DEX
+                    # con entropía casi máxima (~8 bits) que androguard no
+                    # puede parsear → all_classes y all_strings quedan vacíos.
+                    for dex_entry in dex_files:
+                        try:
+                            raw = zf.read(dex_entry)
+                        except Exception:
+                            continue
+                        if len(raw) < _DEX_ENCRYPTED_MIN_SIZE:
+                            continue
+                        # Calcular entropía de bytes (256 símbolos)
+                        freq: dict[int, int] = {}
+                        for b in raw:
+                            freq[b] = freq.get(b, 0) + 1
+                        n = len(raw)
+                        byte_entropy = -sum(
+                            (c / n) * math.log2(c / n) for c in freq.values()
+                        )
+                        if byte_entropy >= _DEX_ENCRYPTED_ENTROPY:
+                            details.append(
+                                t("ev_dxg_encrypted_dex", entry=dex_entry, entropy=byte_entropy, size_kb=len(raw) // 1024)
+                            )
+                            dex_encrypted = True
         except Exception:  # noqa: BLE001
             pass
 
@@ -201,8 +232,7 @@ class DexGuardDetector(BaseDetector):
         )
         if high_entropy_count > _HIGH_ENTROPY_MIN_COUNT:
             details.append(
-                f"Strings con alta entropía (posiblemente cifradas): "
-                f"{high_entropy_count:,}"
+                t("ev_dxg_high_entropy", count=f"{high_entropy_count:,}")
             )
 
         # ── 5. Keywords de cifrado en el pool de strings ─────────────────────
@@ -213,30 +243,32 @@ class DexGuardDetector(BaseDetector):
         ]
         if crypto_hits:
             sample = ", ".join(f"'{h[:40]}'" for h in crypto_hits[:3])
-            details.append(f"Indicadores de cifrado en strings: {sample}")
+            details.append(t("ev_dxg_crypto_indicators", sample=sample))
 
-        # Requiere firma de vendor como evidencia obligatoria.
-        # Sin ella, multidex + alta entropía es normal en apps con muchos SDKs.
-        # Si la firma solo aparece en un SDK de terceros, se reporta pero
-        # no se marca como protección de la app.
-        has_vendor_sig = any(
-            "vendor" in d.lower() for d in details
-        )
+        # DEX cifrado detectado: evidencia independiente de vendor sigs.
+        # Si androguard no pudo parsear nada (all_classes vacío) pero el
+        # DEX raw tiene entropía ~8 bits, la ausencia de firmas es esperada.
 
         if vendor_in_app:
             detected = len(details) >= 2
         elif vendor_in_sdk:
             detected = True
             sdk_list = ", ".join(sorted(sdk_names)) if sdk_names else "SDK de terceros"
-            details.append(
-                f"DexGuard embebido en {sdk_list}"
-            )
+            details.append(t("ev_dxg_embedded_in", sdk_list=sdk_list))
+        elif dex_encrypted:
+            # DEX cifrado sin firma de vendor visible: DexGuard o protector
+            # nativo similar (Arxan, Naga, etc.). Reportar como detected.
+            detected = True
         else:
             detected = False
+
+        strength = self.strength
+        if dex_encrypted and not vendor_in_app and not vendor_in_sdk:
+            strength = "medium"  # sin firma de vendor, confianza reducida
 
         return DetectionResult(
             name=self.name,
             detected=detected,
-            strength=self.strength,
+            strength=strength,
             details=details,
         )

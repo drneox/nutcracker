@@ -5,6 +5,7 @@ Detecta: RootBeer, RootCloak, Xposed, DexGuard, Promon Shield, Appdome, etc.
 """
 
 from .base import BaseDetector, DetectionResult
+from nutcracker_core.i18n import t
 
 # Mapa: nombre_legible -> [prefijos de paquete/clase a buscar]
 KNOWN_LIBRARIES: dict[str, list[str]] = {
@@ -59,7 +60,7 @@ KNOWN_LIBRARIES: dict[str, list[str]] = {
 class KnownLibrariesDetector(BaseDetector):
     """Detecta librerías anti-root conocidas en el bytecode de la APK."""
 
-    name = "Librerías anti-root conocidas"
+    name = "Known anti-root libraries"
     strength = "high"
 
     def detect(self, apk, dx, all_strings: set, all_classes: set) -> DetectionResult:
@@ -74,7 +75,7 @@ class KnownLibrariesDetector(BaseDetector):
                 search_set = all_classes
                 for item in search_set:
                     if pattern.lower() in item.lower():
-                        found.append(f"[{lib_name}] Encontrado: {item!r}")
+                        found.append(t("ev_lib_found", lib_name=lib_name, item=item))
                         break  # Un match por librería es suficiente
                 else:
                     continue

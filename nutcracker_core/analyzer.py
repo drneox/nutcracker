@@ -24,6 +24,8 @@ _loguru_logger.disable("androguard")
 
 from androguard.misc import AnalyzeAPK
 
+from .i18n import t
+
 
 class _AndroguardStream:
     """Captura writes a stderr/stdout y los redirige al callback de progreso."""
@@ -117,7 +119,7 @@ def _resolve_apk_path(apk_path: Path) -> tuple[Path, Path | None]:
 
         if not apk_entries:
             raise FileNotFoundError(
-                f"No se encontró ningún .apk dentro del XAPK: {apk_path}"
+                t("log_no_apk_in_xapk", path=apk_path)
             )
 
         # Preferir base.apk o el que tenga el nombre más corto (suele ser el principal)
@@ -249,9 +251,9 @@ class APKAnalyzer:
     def _extract_metadata(self, apk) -> dict[str, str]:
         """Extrae metadatos básicos de la APK."""
         try:
-            package = apk.get_package() or "desconocido"
+            package = apk.get_package() or t("log_unknown")
         except Exception:
-            package = "desconocido"
+            package = t("log_unknown")
 
         try:
             version_name = apk.get_androidversion_name() or "?"
@@ -306,26 +308,26 @@ class APKAnalyzer:
         return classes
 
     def _run_builtin_detectors(self, apk, dx) -> list[DetectionResult]:
-        self._log("Indexando strings del bytecode...")
+        self._log(t("log_indexing_strings"))
         all_strings = self._build_string_set(dx)
 
-        self._log("Indexando clases del bytecode...")
+        self._log(t("log_indexing_classes"))
         all_classes = self._build_class_set(dx)
 
         self._log(
-            f"Índice listo: {len(all_strings):,} strings, {len(all_classes):,} clases"
+            t("log_index_ready", strings=f"{len(all_strings):,}", classes=f"{len(all_classes):,}")
         )
 
         detection_results: list[DetectionResult] = []
         for detector in self._detectors:
-            self._log(f"Ejecutando detector: {detector.name}...")
+            self._log(t("log_running_detector", name=detector.name))
             result = detector.detect(apk, dx, all_strings, all_classes)
             detection_results.append(result)
         return detection_results
 
     def _run_apkid_detector(self, real_apk: Path) -> list[DetectionResult]:
         """Ejecuta APKiD y traduce su salida a DetectionResult."""
-        self._log("Ejecutando APKiD...")
+        self._log(t("log_running_apkid"))
 
         try:
             proc = subprocess.run(
@@ -335,21 +337,21 @@ class APKAnalyzer:
                 timeout=180,
             )
         except FileNotFoundError:
-            self._log("APKiD no encontrado en PATH; usando detectores native")
+            self._log(t("log_apkid_not_found"))
             return []
         except subprocess.TimeoutExpired:
-            self._log("APKiD excedió el tiempo límite; usando detectores native")
+            self._log(t("log_apkid_timeout"))
             return []
 
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "").strip()[:180]
-            self._log(f"APKiD falló (rc={proc.returncode}): {detail}")
+            self._log(t("log_apkid_failed", rc=proc.returncode, detail=detail))
             return []
 
         try:
             data = json.loads(proc.stdout)
         except json.JSONDecodeError:
-            self._log("APKiD devolvió salida inválida; usando detectores native")
+            self._log(t("log_apkid_invalid_output"))
             return []
 
         files = data.get("files", [])
@@ -429,19 +431,19 @@ class APKAnalyzer:
         """
         apk_path = Path(apk_path)
         if not apk_path.exists():
-            raise FileNotFoundError(f"APK no encontrada: {apk_path}")
+            raise FileNotFoundError(t("log_apk_not_found", path=apk_path))
 
         # Extraer APK base si es un XAPK
         real_apk, tmp_dir = _resolve_apk_path(apk_path)
         if real_apk != apk_path:
-            self._log(f"XAPK detectado — analizando APK interna: {real_apk.name}")
+            self._log(t("log_xapk_detected", name=real_apk.name))
 
         try:
-            self._log(f"Cargando APK: {real_apk.name}")
+            self._log(t("log_loading_apk", name=real_apk.name))
             with _capture_androguard(self._progress):
                 apk, _, dx = AnalyzeAPK(str(real_apk))
 
-            self._log("Extrayendo metadatos...")
+            self._log(t("log_extracting_metadata"))
             metadata = self._extract_metadata(apk)
 
             detection_results: list[DetectionResult]

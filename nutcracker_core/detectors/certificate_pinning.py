@@ -12,6 +12,7 @@ solo que no hay evidencia de pinning implementado (not_tested).
 """
 
 from .base import BaseDetector, DetectionResult
+from nutcracker_core.i18n import t
 
 # Señales positivas de pinning en clases / métodos
 PINNING_CLASS_INDICATORS: list[str] = [
@@ -56,14 +57,14 @@ class CertificatePinningDetector(BaseDetector):
         for indicator in PINNING_CLASS_INDICATORS:
             for cls in all_classes:
                 if indicator.lower() in cls.lower():
-                    found.append(f"[Clase] {cls!r}")
+                    found.append(t("ev_class", item=cls))
                     break
 
         # Buscar en strings (resources, assets, strings.xml, código)
         for indicator in PINNING_STRING_INDICATORS:
             for s in all_strings:
                 if indicator.lower() in s.lower():
-                    found.append(f"[String] {s!r}")
+                    found.append(t("ev_string", item=s))
                     break
 
         # Buscar en archivos XML del APK (Network Security Config)

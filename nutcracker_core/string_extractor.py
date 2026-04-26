@@ -20,6 +20,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .i18n import t
+
 
 # ── Patrones ──────────────────────────────────────────────────────────────────
 
@@ -153,7 +155,7 @@ def extract_strings(
 
     for i, fpath in enumerate(java_files):
         if progress_callback and i % 200 == 0:
-            progress_callback(f"Extrayendo strings... {i}/{total} archivos")
+            progress_callback(t("se_extracting", current=i, total=total))
 
         try:
             text = fpath.read_text(encoding="utf-8", errors="replace")
@@ -216,6 +218,6 @@ def extract_strings(
                     result.tokens.append(_hit(tok, lineno))
 
     if progress_callback:
-        progress_callback("Extracción de strings completada.")
+        progress_callback(t("se_extraction_complete"))
 
     return result
