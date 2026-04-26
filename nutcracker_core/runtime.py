@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from .i18n import t
+
 # Tiempos de espera
 DUMP_TIMEOUT = 300   # segundos esperando volcados DEX de FART
 POLL_INTERVAL = 4    # segundos entre comprobaciones
@@ -75,7 +77,7 @@ def launch_with_fart(
     cb = progress_callback or (lambda _: None)
     frida_bin = tools.get("frida")
     if not frida_bin:
-        msg = "frida CLI no encontrado — instala con: pip install frida-tools"
+        msg = t("rt_frida_cli_not_found")
         cb(msg)
         return None, msg
 
@@ -131,30 +133,30 @@ def launch_with_fart(
 
     adb_bin = tools.get("adb", "adb")
 
-    cb(f"Lanzando {package} con script FART...")
+    cb(t("rt_launching", package=package))
 
     # ── Conexión por host TCP (frida -H host:port) ────────────────────────────
     if frida_host:
-        cb(f"Conectando vía host TCP a {frida_host}...")
+        cb(t("rt_connecting_tcp", host=frida_host))
         proc, err = _launch_with_retry(
             [frida_bin, "-H", frida_host, "-f", package, "-l", str(script_path)],
             transport_flags=[frida_bin, "-H", frida_host],
         )
         if err is None:
             return proc, None
-        msg = f"frida terminó inesperadamente con -H {frida_host}: {err}"
+        msg = t("rt_frida_failed_host", host=frida_host, err=err)
         cb(msg)
         return None, msg
 
     if _is_emulator(serial):
-        cb("Conectando al emulador vía -U...")
+        cb(t("rt_connecting_emulator"))
         proc, err = _launch_with_retry(
             [frida_bin, "-U", "-f", package, "-l", str(script_path)],
             transport_flags=[frida_bin, "-U"],
         )
         if err is None:
             return proc, None
-        msg = f"frida terminó inesperadamente: {err}"
+        msg = t("rt_frida_failed", err=err)
         cb(msg)
         return None, msg
 
@@ -172,18 +174,18 @@ def launch_with_fart(
         "no usb device", "failed to enumerate devices",
         "not found",
     )):
-        cb("Device no encontrado con -D; reintentando con -U...")
+        cb(t("rt_device_not_found_retry"))
         proc_u, err_u = _launch_with_retry(
             [frida_bin, "-U", "-f", package, "-l", str(script_path)],
             transport_flags=[frida_bin, "-U"],
         )
         if err_u is None:
             return proc_u, None
-        msg = f"frida terminó inesperadamente: {err_u}"
+        msg = t("rt_frida_failed", err=err_u)
         cb(msg)
         return None, msg
 
-    msg = f"frida terminó inesperadamente: {err}"
+    msg = t("rt_frida_failed", err=err)
     cb(msg)
     return None, msg
 
@@ -214,9 +216,9 @@ def launch_with_dexdump(
     dexdump_bin = tools.get("frida-dexdump")
 
     if not dexdump_bin:
-        return [], "frida-dexdump no encontrado — instala con: pip install frida-dexdump"
+        return [], t("rt_dexdump_not_found")
     if not adb:
-        return [], "adb no encontrado"
+        return [], t("rt_adb_not_found")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -233,7 +235,7 @@ def launch_with_dexdump(
 
     # ── Remote host: use -H + -f (spawn mode) ────────────────────────────
     if frida_host:
-        cb(f"Volcando DEX vía frida-dexdump -H {frida_host} -f {package}...")
+        cb(t("rt_dexdump_via_host", host=frida_host, package=package))
         result, run_err = _run_dexdump([
             dexdump_bin, "-H", frida_host, "-f", package,
             "-o", str(output_dir),
@@ -243,13 +245,13 @@ def launch_with_dexdump(
         dex_files = sorted(output_dir.glob("*.dex"))
         if not dex_files:
             detail = (result.stderr + result.stdout).strip()[:300]
-            return [], f"frida-dexdump no volcó ningún DEX: {detail}"
-        cb(f"{len(dex_files)} DEX volcados en {output_dir}")
+            return [], t("rt_dexdump_no_dex", detail=detail)
+        cb(t("rt_dex_dumped_in", count=len(dex_files), output_dir=output_dir))
         return dex_files, None
 
     # ── Local (USB/emulator): launch app, get PID, attach with -p ─────────
-    target_label = "emulador" if _is_emulator(serial) else "dispositivo"
-    cb(f"Arrancando {package} en el {target_label}...")
+    target_label = t("rt_target_emulator") if _is_emulator(serial) else t("rt_target_device")
+    cb(t("rt_starting_in", package=package, target=target_label))
     subprocess.run(
         _adb_cmd(adb, serial, "shell", f"am force-stop {package}"),
         capture_output=True, timeout=10,
@@ -262,7 +264,7 @@ def launch_with_dexdump(
     )
 
     # Esperar PID — primera ronda (monkey, 15s)
-    cb("Esperando que el proceso arranque...")
+    cb(t("rt_waiting_pid"))
     deadline = time.monotonic() + 15
     pid: str | None = None
     while time.monotonic() < deadline:
@@ -274,7 +276,7 @@ def launch_with_dexdump(
 
     # Fallback 1: am start (más fiable que monkey en apps con anti-tampering)
     if not pid:
-        cb("monkey no produjo proceso — intentando am start...")
+        cb(t("rt_monkey_failed"))
         subprocess.run(
             _adb_cmd(adb, serial, "shell",
                      f"am start -a android.intent.action.MAIN "
@@ -292,7 +294,7 @@ def launch_with_dexdump(
     # Fallback 2: frida-dexdump en modo spawn (-f) — pausa la app antes de
     # que corra cualquier código (requiere frida-server activo)
     if not pid:
-        cb("PID no encontrado — intentando spawn mode con frida-dexdump -f...")
+        cb(t("rt_pid_not_found_spawn"))
         if _is_emulator(serial):
             spawn_result, spawn_err = _run_dexdump([
                 dexdump_bin, "-D", serial, "-f", package, "-o", str(output_dir),
@@ -304,14 +306,14 @@ def launch_with_dexdump(
         if not spawn_err:
             dex_files = sorted(output_dir.glob("*.dex"))
             if dex_files:
-                cb(f"{len(dex_files)} DEX volcados en modo spawn")
+                cb(t("rt_dex_dumped_spawn", count=len(dex_files)))
                 return dex_files, None
-        return [], f"El proceso {package} no arrancó en el {target_label}"
+        return [], t("rt_process_not_started", package=package, target=target_label)
 
-    cb(f"Proceso PID={pid} — esperando inicialización ({FRIDA_TIMEOUT}s)...")
+    cb(t("rt_waiting_init", pid=pid, timeout=FRIDA_TIMEOUT))
     time.sleep(FRIDA_TIMEOUT)
 
-    cb(f"Volcando DEX de memoria con frida-dexdump (PID={pid})...")
+    cb(t("rt_dumping_dex", pid=pid))
 
     if _is_emulator(serial):
         result, run_err = _run_dexdump([dexdump_bin, "-U", "-p", pid, "-o", str(output_dir)])
@@ -329,7 +331,7 @@ def launch_with_dexdump(
             "no usb device", "failed to enumerate devices",
             "not found",
         )):
-            cb("frida-dexdump no encontró device; reintentando con -U...")
+            cb(t("rt_dexdump_device_retry"))
             result, run_err = _run_dexdump([dexdump_bin, "-U", "-p", pid, "-o", str(output_dir)])
             if run_err:
                 return [], run_err
@@ -337,9 +339,9 @@ def launch_with_dexdump(
 
     if not dex_files:
         detail = (result.stderr + result.stdout).strip()[:300]
-        return [], f"frida-dexdump no volcó ningún DEX: {detail}"
+        return [], t("rt_dexdump_no_dex", detail=detail)
 
-    cb(f"{len(dex_files)} DEX volcados en {output_dir}")
+    cb(t("rt_dex_dumped_in", count=len(dex_files), output_dir=output_dir))
     return dex_files, None
 
 
@@ -393,11 +395,11 @@ def wait_for_dumps(
 
         if count >= min_dex:
             if count == last_count:
-                cb(f"{count} DEX volcados en {remote_dir} (estabilizado)")
+                cb(t("rt_count_stable", count=count, dir=remote_dir))
                 return True
-            cb(f"{count} DEX detectados — esperando estabilización...")
+            cb(t("rt_count_waiting", count=count))
         else:
-            cb(f"Esperando volcados en {remote_dir} ({remaining}s)...")
+            cb(t("rt_waiting_dumps", dir=remote_dir, remaining=remaining))
 
         last_count = count
         time.sleep(POLL_INTERVAL)
@@ -423,7 +425,7 @@ def pull_dumps(
     remote_dir = f"/data/user/0/{package}/files/frida_dump/"
     local_dir.mkdir(parents=True, exist_ok=True)
 
-    cb(f"Descargando volcados desde {serial}:{remote_dir}...")
+    cb(t("rt_downloading_dumps", serial=serial, dir=remote_dir))
     subprocess.run(
         _adb_cmd(adb, serial, "pull", remote_dir, str(local_dir)),
         capture_output=True,
@@ -431,8 +433,23 @@ def pull_dumps(
         timeout=120,
     )
 
-    dex_files = sorted(local_dir.rglob("*.dex"))
-    cb(f"Descargados: {len(dex_files)} archivos .dex")
+    all_dex = sorted(local_dir.rglob("*.dex"))
+
+    # Filtrar DEX inválidos: vacíos o sin magic "dex\n"
+    dex_files: list[Path] = []
+    for dex in all_dex:
+        if dex.stat().st_size < 8:
+            cb(t("rt_dex_empty", name=dex.name))
+            continue
+        try:
+            if not dex.read_bytes()[:4].startswith(b"dex\n"):
+                cb(t("rt_dex_invalid_magic", name=dex.name))
+                continue
+        except Exception:  # noqa: BLE001
+            pass
+        dex_files.append(dex)
+
+    cb(t("rt_downloaded_valid", count=len(dex_files), discarded=len(all_dex) - len(dex_files)))
     return dex_files
 
 

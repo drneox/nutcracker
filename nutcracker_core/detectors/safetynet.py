@@ -6,6 +6,7 @@ o ha sido comprometido, a través de los servidores de Google.
 """
 
 from .base import BaseDetector, DetectionResult
+from nutcracker_core.i18n import t
 
 # Clases y strings relacionados con SafetyNet
 SAFETYNET_INDICATORS: list[str] = [
@@ -49,14 +50,14 @@ class SafetyNetDetector(BaseDetector):
         for indicator in SAFETYNET_INDICATORS:
             for item in combined:
                 if indicator.lower() in item.lower():
-                    found.append(f"[SafetyNet] {item!r}")
+                    found.append(t("ev_safetynet", item=item))
                     break
 
         # Verificar Play Integrity
         for indicator in PLAY_INTEGRITY_INDICATORS:
             for item in combined:
                 if indicator.lower() in item.lower():
-                    found.append(f"[Play Integrity] {item!r}")
+                    found.append(t("ev_play_integrity", item=item))
                     break
 
         # Verificar en el manifest (permisos o dependencias relevantes)

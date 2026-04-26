@@ -13,6 +13,7 @@ buscan:
 from __future__ import annotations
 
 from .base import BaseDetector, DetectionResult
+from nutcracker_core.i18n import t
 
 # ── Firmas de clases / packages ───────────────────────────────────────────────
 
@@ -78,7 +79,7 @@ class AppdomeDetector(BaseDetector):
                 if sig_lower in cls.lower() and len(cls) < 300
             ]
             for m in matches[:2]:
-                entry = f"[Clase] {m!r}"
+                entry = t("ev_class", item=m)
                 if entry not in found:
                     found.append(entry)
 
@@ -87,7 +88,7 @@ class AppdomeDetector(BaseDetector):
             sig_lower = sig.lower()
             for s in all_strings:
                 if sig_lower in s.lower() and len(s) < 300:
-                    entry = f"[String] {s!r}"
+                    entry = t("ev_string", item=s)
                     if entry not in found:
                         found.append(entry)
                     break
@@ -98,7 +99,7 @@ class AppdomeDetector(BaseDetector):
                 asset_lower = asset.lower()
                 for sig in ASSET_SIGS:
                     if sig.lower() in asset_lower:
-                        entry = f"[Asset] {asset!r}"
+                        entry = t("ev_asset", item=asset)
                         if entry not in found:
                             found.append(entry)
                         break
@@ -111,7 +112,7 @@ class AppdomeDetector(BaseDetector):
             if manifest_xml is not None:
                 manifest_str = manifest_xml if isinstance(manifest_xml, str) else ""
                 if "appdome" in manifest_str.lower():
-                    found.append("[Manifest] meta-data con referencia a AppDome")
+                    found.append(t("ev_manifest_appdome"))
         except Exception:  # noqa: BLE001
             pass
 

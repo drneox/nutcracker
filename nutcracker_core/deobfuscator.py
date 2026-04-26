@@ -94,12 +94,28 @@ def decompile_dumps(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     any_success = False
+    last_errors: list[str] = []
 
     for i, dex in enumerate(dex_files, 1):
         if progress_callback:
             progress_callback(
                 f"Decompilando {dex.name} ({i}/{len(dex_files)})..."
             )
+
+        # Verificar magic bytes del DEX antes de intentar decompilación
+        try:
+            magic = dex.read_bytes()[:8]
+            if not magic.startswith(b"dex\n"):
+                last_errors.append(
+                    f"{dex.name}: magic inválido {magic!r} (no es DEX estándar)"
+                )
+                if progress_callback:
+                    progress_callback(
+                        f"⚠ {dex.name}: magic inválido, saltando..."
+                    )
+                continue
+        except Exception:  # noqa: BLE001
+            pass
 
         cmd = [
             jadx,
@@ -111,7 +127,7 @@ def decompile_dumps(
         ]
 
         try:
-            subprocess.run(
+            result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -121,17 +137,38 @@ def decompile_dumps(
             java_files = list(output_dir.rglob("*.java"))
             if java_files:
                 any_success = True
+            else:
+                # Capturar diagnóstico de jadx para mostrarlo al usuario
+                stderr_snippet = (result.stderr or "").strip()
+                if stderr_snippet:
+                    last_errors.append(
+                        f"{dex.name} (exit={result.returncode}): "
+                        f"{stderr_snippet[-400:]}"
+                    )
+                elif result.returncode != 0:
+                    last_errors.append(
+                        f"{dex.name}: jadx salió con código {result.returncode} sin salida"
+                    )
         except subprocess.TimeoutExpired:
+            last_errors.append(f"{dex.name}: timeout (>300s)")
             if progress_callback:
                 progress_callback(f"Timeout decompilando {dex.name}, continuando...")
         except Exception as exc:  # noqa: BLE001
+            last_errors.append(f"{dex.name}: {exc}")
             if progress_callback:
                 progress_callback(f"Error en {dex.name}: {exc}")
 
     if not any_success:
+        diag = ""
+        if last_errors:
+            diag = "\n  Diagnóstico:\n" + "\n".join(f"    • {e}" for e in last_errors[-3:])
         raise RuntimeError(
-            f"jadx no generó ningún archivo .java en {output_dir}. "
-            "Comprueba que los DEX volcados sean válidos."
+            f"jadx no generó ningún archivo .java en {output_dir}.{diag}\n"
+            "  Posibles causas:\n"
+            "    · Los DEX volcados tienen magic inválido (dump incompleto/corrupto)\n"
+            "    · La app usa DexGuard con cifrado de clases en memoria\n"
+            "    · jadx no soporta el formato de este DEX\n"
+            "  Prueba: frida-dexdump -U -f <package> --sleep 5 para dar más tiempo al unpack"
         )
 
     return output_dir
