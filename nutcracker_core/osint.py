@@ -651,15 +651,20 @@ def search_fofa(
     Busca activos expuestos en FOFA a partir de dominios propios.
 
     Usa la API `search/all` con `key` y `qbase64`. Devuelve hasta 10
-    resultados por query con los campos `host,ip,port,title,cve_id`.
-    El campo `cve_id` contiene CVEs asociadas al activo (requiere plan
-    Enterprise de FOFA; se omite silenciosamente si no está disponible).
+    resultados por query con los campos:
+      host, ip, port, title, cve_id, product, version, os, protocol
+
+    Requiere plan de pago de FOFA. Los campos enriquecidos (cve_id,
+    product, version, os) se omiten silenciosamente si no están disponibles.
     """
     if not fofa_key:
         return []
 
     results: list[PublicLeak] = []
-    fields = "host,ip,port,title,cve_id"
+    fields = "host,ip,port,title,cve_id,product,version,os,protocol"
+    # Índices según el orden de fields
+    _F_HOST, _F_IP, _F_PORT, _F_TITLE = 0, 1, 2, 3
+    _F_CVE, _F_PROD, _F_VER, _F_OS, _F_PROTO = 4, 5, 6, 7, 8
 
     for query in queries:
         if progress_callback:
@@ -696,13 +701,21 @@ def search_fofa(
                 if not isinstance(item, list) or len(item) < 4:
                     continue
 
-                host = item[0] or ""
-                ip_addr = item[1] or ""
-                port = str(item[2] or "")
-                title = item[3] or ""
+                def _get(idx: int) -> str:
+                    val = item[idx] if len(item) > idx else ""
+                    return str(val).strip() if val else ""
+
+                host = _get(_F_HOST)
+                ip_addr = _get(_F_IP)
+                port = _get(_F_PORT)
+                title = _get(_F_TITLE)
+                product = _get(_F_PROD)
+                version = _get(_F_VER)
+                os_name = _get(_F_OS)
+                protocol = _get(_F_PROTO)
 
                 # cve_id puede ser string CSV o lista; normalizar a lista
-                raw_cve = item[4] if len(item) > 4 else ""
+                raw_cve = item[_F_CVE] if len(item) > _F_CVE else ""
                 if isinstance(raw_cve, list):
                     cve_list = [c.strip() for c in raw_cve if c and c.strip()]
                 elif isinstance(raw_cve, str) and raw_cve.strip():
@@ -716,9 +729,20 @@ def search_fofa(
                 if not _result_mentions_query(query, host, ip_addr, title, url):
                     continue
 
-                snippet = f"ip={ip_addr} port={port}".strip()
+                # Construir snippet enriquecido
+                parts = [f"ip={ip_addr}", f"port={port}"]
+                if protocol:
+                    parts.append(f"proto={protocol}")
+                if product:
+                    prod_str = f"product={product}"
+                    if version:
+                        prod_str += f" {version}"
+                    parts.append(prod_str)
+                if os_name:
+                    parts.append(f"os={os_name}")
                 if cve_list:
-                    snippet += " | CVEs: " + ", ".join(cve_list)
+                    parts.append("CVEs: " + ", ".join(cve_list))
+                snippet = " | ".join(p for p in parts if p.strip(" ="))
 
                 results.append(PublicLeak(
                     source="fofa",
