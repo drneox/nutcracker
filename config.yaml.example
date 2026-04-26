@@ -38,6 +38,8 @@ osint:
   github_token: ''     # optional GitHub PAT for Code Search API (better results / rate limits)
   fofa_search: false   # search exposed assets in FOFA
   fofa_key: ''         # FOFA API key for /api/v1/search/all
+  shodan_search: false  # search exposed assets in Shodan
+  shodan_key: ''        # Shodan API key for host search
   postman_search: true # search for public collections in Postman
   execute_dorks: false # opt-in: run web searches (DuckDuckGo) against target domains
   dork_engines:        # engines used when execute_dorks=true
