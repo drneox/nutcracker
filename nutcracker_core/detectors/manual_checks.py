@@ -12,6 +12,7 @@ de la app (no solo strings sueltas de SDKs de terceros).
 """
 
 from .base import BaseDetector, DetectionResult
+from nutcracker_core.i18n import t
 
 # Rutas de binarios comúnmente asociados con root
 ROOT_BINARY_PATHS: list[str] = [
@@ -108,7 +109,7 @@ def _is_sdk_class(cls_name: str) -> bool:
 class ManualChecksDetector(BaseDetector):
     """Detecta comprobaciones manuales de root implementadas en el código."""
 
-    name = "Comprobaciones manuales de root"
+    name = "Manual root checks"
     strength = "medium"
 
     def detect(self, apk, dx, all_strings: set, all_classes: set) -> DetectionResult:
@@ -119,21 +120,21 @@ class ManualChecksDetector(BaseDetector):
         for path in ROOT_BINARY_PATHS:
             for s in all_strings:
                 if path.lower() in s.lower():
-                    found.append(f"[Ruta root] {s!r}")
+                    found.append(t("ev_root_path", s=s))
                     break
 
         # Buscar propiedades de build inseguras
         for prop in ROOT_BUILD_PROPS:
             for s in all_strings:
                 if prop.lower() in s.lower():
-                    found.append(f"[Build prop] {s!r}")
+                    found.append(t("ev_build_prop", s=s))
                     break
 
         # Buscar comandos ejecutados vía Runtime
         for cmd in ROOT_EXEC_COMMANDS:
             for s in all_strings:
                 if cmd.lower() in s.lower():
-                    found.append(f"[Runtime.exec] {s!r}")
+                    found.append(t("ev_runtime_exec", s=s))
                     break
 
         # Buscar indicadores genéricos en nombres de clases y métodos.
@@ -143,9 +144,9 @@ class ManualChecksDetector(BaseDetector):
             for cls in all_classes:
                 if indicator.lower() in cls.lower():
                     if _is_sdk_class(cls):
-                        found.append(f"[SDK] {cls!r}")
+                        found.append(t("ev_sdk_class", cls=cls))
                     else:
-                        found.append(f"[Clase/método] {cls!r}")
+                        found.append(t("ev_class_method", cls=cls))
                         has_app_level_evidence = True
                     break
 
@@ -157,9 +158,7 @@ class ManualChecksDetector(BaseDetector):
             if runtime_exec:
                 xrefs = list(runtime_exec.get_xref_from())
                 if xrefs:
-                    found.append(
-                        f"[Runtime.exec] Encontradas {len(xrefs)} llamadas a Runtime.exec()"
-                    )
+                    found.append(t("ev_runtime_exec_count", count=len(xrefs)))
         except Exception:  # noqa: BLE001
             pass
 

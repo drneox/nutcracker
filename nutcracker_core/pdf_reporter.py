@@ -154,8 +154,8 @@ class APKReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  https://github.com/drneox/nutcracker",
-                  align="L")
+        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  nutcracker.sh",
+                  align="L", link="https://nutcracker.sh")
         self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
     def section_title(self, text: str) -> None:
@@ -195,7 +195,8 @@ def _cover_page(
 
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*C["muted"])
-    pdf.cell(0, 5, "https://github.com/drneox/nutcracker", align="C",
+    pdf.cell(0, 5, "nutcracker.sh", align="C",
+             link="https://nutcracker.sh",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_font("Helvetica", "", 11)
@@ -1283,8 +1284,8 @@ class BatchReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  \u00b7  https://github.com/drneox/nutcracker",
-                  align="L")
+        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  \u00b7  nutcracker.sh",
+                  align="L", link="https://nutcracker.sh")
         self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
     def section_title(self, text: str) -> None:

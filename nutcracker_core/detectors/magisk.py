@@ -6,6 +6,7 @@ y herramientas de bypass de root como Frida.
 """
 
 from .base import BaseDetector, DetectionResult
+from nutcracker_core.i18n import t
 
 # Package IDs y strings asociados con frameworks de root.
 # NOTA: solo patrones específicos (full package/path). Se eliminaron strings
@@ -85,7 +86,7 @@ class MagiskDetector(BaseDetector):
                 and len(item) < 300
             ]
             for match in matches[:3]:
-                entry = f"[Root Framework] {match!r}"
+                entry = t("ev_root_framework", item=match)
                 if entry not in found:
                     found.append(entry)
 
@@ -94,7 +95,7 @@ class MagiskDetector(BaseDetector):
         for indicator in FRIDA_INDICATORS:
             for item in combined:
                 if indicator.lower() in item.lower() and len(item) < 300:
-                    entry = f"[Frida/Bypass] {item!r}"
+                    entry = t("ev_frida_bypass", item=item)
                     if entry not in found:
                         found.append(entry)
                     break
@@ -110,10 +111,7 @@ class MagiskDetector(BaseDetector):
             if pkg_manager_calls:
                 xrefs = list(pkg_manager_calls.get_xref_from())
                 if xrefs:
-                    found.append(
-                        f"[PackageManager] La app consulta paquetes instalados "
-                        f"({len(xrefs)} llamadas — posible detección de apps root)"
-                    )
+                    found.append(t("ev_package_manager", count=len(xrefs)))
         except Exception:  # noqa: BLE001
             pass
 
