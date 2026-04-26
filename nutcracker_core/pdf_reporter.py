@@ -958,13 +958,17 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
             pdf.add_page()
 
         total_cves = sum(len(l.vulns) for l in exposed)
-        title = t("osint_exposed_assets_title", count=len(exposed))
-        if total_cves:
-            title += t("osint_exposed_assets_cves", count=total_cves)
+        base_title = t("osint_exposed_assets_title", count=len(exposed))
+        cve_suffix = t("osint_exposed_assets_cves", count=total_cves) if total_cves else ""
         pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(*C["warning"])
-        pdf.cell(0, 7, _safe(title),
-                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        if cve_suffix:
+            pdf.set_text_color(*C["warning"])
+            pdf.cell(pdf.get_string_width(_safe(base_title)), 7, _safe(base_title), new_x=XPos.RIGHT, new_y=YPos.LAST)
+            pdf.set_text_color(*C["danger"])
+            pdf.cell(0, 7, _safe(cve_suffix), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        else:
+            pdf.set_text_color(*C["warning"])
+            pdf.cell(0, 7, _safe(base_title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
         pdf.ln(1)
 
