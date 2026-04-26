@@ -137,6 +137,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "misconfigs_card": "Misconfigs",
         "leaks_card": "Leaks",
         "vulns_card": "Vulns",
+        "exposed_assets_card": "Exposed Assets",
+        "exposed_assets_card_cves": "{count} CVEs",
 
         # ── PDF protections section ────────────────────────────────────────────
         "protections_section_title": "Discovered Protections",
@@ -830,6 +832,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "misconfigs_card": "Misconfigs",
         "leaks_card": "Leaks",
         "vulns_card": "Vulns",
+        "exposed_assets_card": "Activos Expuestos",
+        "exposed_assets_card_cves": "{count} CVEs",
 
         # ── PDF protections section ────────────────────────────────────────────
         "protections_section_title": "Protecciones Descubiertas",
