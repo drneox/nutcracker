@@ -913,9 +913,15 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
         pdf.set_text_color(*C["text"])
 
         for idx, leak in enumerate(osint.public_leaks):
-            if pdf.will_page_break(6):
+            has_snippet = bool(leak.snippet)
+            row_needed = row_h + (4 if has_snippet else 0)
+            if pdf.will_page_break(row_needed + 2):
                 pdf.add_page()
             bg = C["row_alt"] if idx % 2 else C["row_normal"]
+            # Highlight FOFA rows that have CVEs
+            has_vulns = bool(getattr(leak, "vulns", None))
+            if has_vulns:
+                bg = (255, 243, 230)  # warm orange tint
             pdf.set_fill_color(*bg)
 
             pdf.set_font("Helvetica", "B", 6.5)
@@ -937,6 +943,21 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
                 pdf.set_font("Helvetica", "I", 6)
                 pdf.set_text_color(*C["muted"])
                 pdf.cell(w_link, row_h, "N/A", fill=True,
+                         new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.set_text_color(*C["text"])
+
+            # Sub-row: enriched details (snippet) — shown for FOFA and any
+            # entry that carries ip/product/CVE info in the snippet field
+            if has_snippet:
+                pdf.set_fill_color(*bg)
+                pdf.set_font("Helvetica", "I", 5.5)
+                snippet_color = C["danger"] if has_vulns else C["muted"]
+                pdf.set_text_color(*snippet_color)
+                pdf.cell(w_plat, 4, "", fill=True,
+                         new_x=XPos.RIGHT, new_y=YPos.TOP)
+                pdf.cell(w_title + w_link, 4,
+                         _safe(leak.snippet[:110]),
+                         fill=True,
                          new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 pdf.set_text_color(*C["text"])
 
