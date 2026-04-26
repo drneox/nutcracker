@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nutcracker — CLI principal.
+nutcracker - CLI principal.
 
 Uso:
     python nutcracker.py scan <url_o_package_id>           # descarga desde APKPure + analiza
@@ -116,19 +116,19 @@ def _launch_frida_bypass(
 
     adb = _shutil.which("adb")
     if not adb:
-        console.print("[red]Error:[/red] adb no encontrado en PATH.")
+        console.print(f"[red]Error:[/red] {t('cli_dep_adb_missing')}")
         return
 
     frida_bin = str(Path(sys.executable).parent / "frida")
     if not Path(frida_bin).exists():
         frida_bin = _shutil.which("frida") or ""
     if not frida_bin:
-        console.print("[red]Error:[/red] frida no encontrado. Instala frida-tools.")
+        console.print(f"[red]Error:[/red] {t('cli_dep_frida_missing')}")
         return
 
     adb_args = [adb] + (["-s", serial] if serial else [])
 
-    console.print("[dim]  Reiniciando frida-server en el dispositivo...[/dim]")
+    console.print(f"[dim]  {t('cli_restarting_frida')}[/dim]")
     subprocess.run(adb_args + ["shell", "killall frida-server 2>/dev/null; true"], capture_output=True)
     subprocess.run(adb_args + ["root"], capture_output=True)
     _time.sleep(2)
@@ -167,12 +167,12 @@ def _ask_or_auto(prompt: str, key: str, default: bool = False) -> bool:
     """Usa el flag de config si está explícitamente configurado; si no, pregunta."""
     cfg_val = _auto(key)
     if cfg_val is not None:
-        tag = "si" if cfg_val else "no"
-        console.print(f"[dim]  (config auto.{key}={tag} — saltando pregunta)[/dim]")
+        tag = "yes" if cfg_val else "no"
+        console.print(f"[dim]  {t('pipe_auto_skip', key=key, tag=tag)}[/dim]")
         return cfg_val
     if _unattended():
-        tag = "si" if default else "no"
-        console.print(f"[dim]  (auto.unattended=true — {prompt} => {tag})[/dim]")
+        tag = "yes" if default else "no"
+        console.print(f"[dim]  {t('pipe_unattended_skip', prompt=prompt, tag=tag)}[/dim]")
         return default
     return click.confirm(prompt, default=default)
 
@@ -210,11 +210,7 @@ def _validate_all_dependencies(protected: bool = True) -> bool:
         decompilation_mode = _pipeline_decompilation_mode(protected)
         if decompilation_mode == "jadx":
             if not _shutil.which("jadx"):
-                errors.append(
-                    "jadx no encontrado. "
-                    "Instala con: brew install jadx (macOS) "
-                    "o descarga desde https://github.com/skylot/jadx/releases"
-                )
+                errors.append(t("cli_dep_jadx_missing"))
     
     # ── Desofuscación runtime ─────────────────────────────────────────────────
     runtime_target = str(
@@ -235,76 +231,50 @@ def _validate_all_dependencies(protected: bool = True) -> bool:
             has_emulator = bool(sdk_tools.get("emulator")) and bool(list_avds(sdk_tools))
             
             if runtime_target == "emulator" and not has_emulator:
-                errors.append("No hay AVD disponible (Android SDK/emulator no encontrado)")
+                errors.append(t("cli_dep_no_avd"))
             
             if not get_frida_version():
-                errors.append(
-                    "frida no está instalado. "
-                    "Instala con: pip install frida frida-tools"
-                )
+                errors.append(t("cli_dep_frida_missing"))
         
         # Dispositivo físico
         if runtime_target in ("auto", "device"):
             if not _shutil.which("adb"):
-                errors.append(
-                    "adb no encontrado en PATH. "
-                    "Instala con: brew install android-platform-tools (macOS) "
-                    "o apt install android-tools-adb (Linux)"
-                )
+                errors.append(t("cli_dep_adb_missing"))
             
             if not get_frida_version():
-                errors.append(
-                    "frida no está instalado. "
-                    "Instala con: pip install frida frida-tools"
-                )
+                errors.append(t("cli_dep_frida_missing"))
         
         # Herramientas opcionales para runtime
         if "frida_server" in runtime_methods or "gadget" in runtime_methods:
             if not _shutil.which("frida-dexdump"):
-                warnings.append(
-                    "frida-dexdump no encontrado. "
-                    "La extracción de DEX será menos confiable. "
-                    "Intenta: pip install frida"
-                )
+                warnings.append(t("cli_dep_dexdump_warn"))
         
         # Si gadget está habilitado, necesita apktool + apksigner
         if "gadget" in runtime_methods:
             if not _shutil.which("apktool"):
-                errors.append(
-                    "apktool no encontrado. "
-                    "Instala con: brew install apktool (macOS) "
-                    "o descarga desde https://ibotpeaches.github.io/Apktool/install/"
-                )
+                errors.append(t("cli_dep_apktool_missing"))
             # apksigner está en Android SDK build-tools
             sdk_tools = find_sdk_tools()
             apksigner = sdk_tools.get("apksigner")
             if not apksigner:
-                warnings.append(
-                    "apksigner no encontrado en Android SDK. "
-                    "Gadget injection podría fallar. "
-                    "Verifica Android SDK build-tools."
-                )
+                warnings.append(t("cli_dep_apksigner_warn"))
     
     # ── Escaneo de vulnerabilidades ───────────────────────────────────────────
     scanner_engine = cfg_get(_CFG, "strategies", "scanner_engine", default="auto") or "auto"
     if str(scanner_engine).lower() == "semgrep":
         if not _shutil.which("semgrep"):
-            warnings.append(
-                "semgrep no encontrado. "
-                "Instala con: pip install semgrep "
-                "o pipx install semgrep"
-            )
+            warnings.append(t("cli_dep_semgrep_warn"))
     
     # ── Mostrar errores y advertencias ────────────────────────────────────────
     if errors:
-        console.print("\n[red][bold]✘ Validación de dependencias - Errores críticos:[/bold][/red]")
+        console.print(f"\n[red][bold]{t('cli_dep_errors_header')}[/bold][/red]")
         for err in errors:
             console.print(f"  [red]✘[/red] {err}")
-        console.print("\n  [dim]Requisitos del sistema: https://github.com/drneox/nutcracker#requisitos[/dim]\n")
+        console.print(f"\n  [dim]{t('cli_requirements_url')}[/dim]\n")
         return False
     
     if warnings:
-        console.print("[yellow][bold]⚠ Advertencias de dependencias:[/bold][/yellow]")
+        console.print(f"[yellow][bold]{t('cli_dep_warnings_header')}[/bold][/yellow]")
         for warn in warnings:
             console.print(f"  [yellow]⚠[/yellow]  {warn}")
         console.print()
@@ -422,7 +392,7 @@ def _print_banner() -> None:
 @click.version_option("0.1.0", prog_name="nutcracker")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """nutcracker: detecta protecciones anti-root en aplicaciones Android (APK)."""
+    """nutcracker: detects anti-root protections in Android applications (APK)."""
     _print_banner()
     if ctx.invoked_subcommand is None:
         click.echo("usage: python nutcracker.py scan 'https://play.google.com/store/apps/details?id=...'")
@@ -439,40 +409,40 @@ def cli(ctx: click.Context) -> None:
     default="config.yaml",
     show_default=True,
     metavar="ARCHIVO",
-    help="Ruta al archivo de configuración YAML.",
+    help="Path to YAML config file.",
 )
 @click.option(
     "--source", "-s",
     default=None,
     type=click.Choice(["apk-pure", "google-play"], case_sensitive=False),
-    help="Fuente de descarga. Por defecto: google-play si hay credenciales en config, si no apk-pure.",
+    help="Download source. Default: google-play if credentials in config, else apk-pure.",
 )
 @click.option(
     "--output-dir", "-o",
     default=None,
-    help="Directorio donde guardar las APKs descargadas.",
+    help="Directory to save downloaded APKs.",
 )
 @click.option(
     "--keep-apk",
     is_flag=True,
     default=False,
-    help="No eliminar la APK después del análisis.",
+    help="Keep the APK after analysis.",
 )
 @click.option(
     "--report", "-r",
     default=None,
     metavar="ARCHIVO",
-    help="Ruta donde guardar el informe en formato JSON.",
+    help="Path to save the JSON report.",
 )
 def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
          keep_apk: bool, report: str | None) -> None:
     """
-    Descarga una APK y la analiza en busca de protecciones anti-root.
+    Download an APK and analyze it for anti-root protections.
 
-    URL puede ser:
-      - URL de Google Play (https://play.google.com/store/apps/details?id=...)
-      - Package ID directamente (com.example.app)
-      - URL directa a un archivo .apk (https://example.com/app.apk)
+    URL can be:
+      - Google Play URL (https://play.google.com/store/apps/details?id=...)
+      - Package ID directly (com.example.app)
+      - Direct URL to an .apk file (https://example.com/app.apk)
     """
     global _CFG
     config = load_config(config_path)
@@ -496,7 +466,7 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
                 console=console,
                 transient=True,
             ) as progress:
-                task = progress.add_task("Descargando APK...", total=None)
+                task = progress.add_task(t("cli_downloading_apk"), total=None)
 
                 def _on_chunk(downloaded: int, total: int | None) -> None:
                     progress.update(task, completed=downloaded, total=total)
@@ -505,11 +475,11 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
                 _from_cache = keep_apk and _dl.dest_path(url).exists()
                 apk_path = _dl.download(url, progress_callback=_on_chunk, use_cache=keep_apk)
             if _from_cache:
-                console.print(f"[green]✔[/green] APK en caché: [bold]{apk_path}[/bold]")
+                console.print(f"[green]✔[/green] {t('cli_apk_cached')} [bold]{apk_path}[/bold]")
             else:
-                console.print(f"[green]✔[/green] APK descargada: [bold]{apk_path}[/bold]")
+                console.print(f"[green]✔[/green] {t('cli_apk_downloaded')} [bold]{apk_path}[/bold]")
         except APKDownloadError as exc:
-            console.print(f"[red]Error en la descarga:[/red] {exc}")
+            console.print(f"[red]{t('cli_error_download')}[/red] {exc}")
             sys.exit(1)
         _run_analysis(apk_path, report, keep_apk, gen_pdf=cfg_get(config, "reports", "save_pdf", default=True))
         return
@@ -541,17 +511,16 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
     try:
         if source == "google-play":
             if not email:
-                console.print("[red]Error:[/red] Google Play requiere [bold]email[/bold] en config.yaml.")
+                console.print(f"[red]Error:[/red] {t('cli_gplay_requires_email')}")
                 sys.exit(1)
 
             if not aas_token:
                 console.print(
-                    "[yellow]Aviso:[/yellow] google_play.aas_token está vacío. "
-                    "Iniciando asistente de extracción..."
+                    f"[yellow]Warning:[/yellow] {t('cli_gplay_token_empty')}"
                 )
                 script = Path(__file__).parent / "tools" / "extract_token.py"
                 if not script.exists():
-                    console.print("[red]Error:[/red] No se encontró tools/extract_token.py")
+                    console.print(f"[red]Error:[/red] {t('cli_extract_token_not_found')}")
                     sys.exit(1)
 
                 cmd = [sys.executable, str(script), "--config", config_path]
@@ -564,8 +533,7 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
                 token_proc = subprocess.run(cmd)
                 if token_proc.returncode != 0:
                     console.print(
-                        "[red]Error:[/red] No se pudo generar aas_token automáticamente. "
-                        "Vuelve a intentar con [bold]python nutcracker.py setup-token[/bold]."
+                        f"[red]Error:[/red] {t('cli_token_gen_failed')}"
                     )
                     sys.exit(token_proc.returncode)
 
@@ -576,7 +544,7 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
 
                 if not aas_token:
                     console.print(
-                        "[red]Error:[/red] El asistente terminó pero aas_token sigue vacío en config.yaml."
+                        f"[red]Error:[/red] {t('cli_token_still_empty')}"
                     )
                     sys.exit(1)
 
@@ -587,8 +555,7 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
                     GooglePlayDownloader(email, aas_token, output_dir)
             else:
                 console.print(
-                    "[red]Error:[/red] Ejecuta [bold]python nutcracker.py setup-token[/bold] para configurar "
-                    "el acceso a Google Play."
+                    f"[red]Error:[/red] {t('cli_gplay_run_setup_token')}"
                 )
                 sys.exit(1)
         else:
@@ -597,12 +564,12 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
 
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                       console=console, transient=True) as progress:
-            progress.add_task(f"Descargando desde {label}...", total=None)
+            progress.add_task(t("cli_downloading_from", label=label), total=None)
             apk_path = downloader.download(url)
 
-        console.print(f"[green]✔[/green] APK descargada: [bold]{apk_path}[/bold]")
+        console.print(f"[green]✔[/green] {t('cli_apk_downloaded')} [bold]{apk_path}[/bold]")
     except APKDownloadError as exc:
-        console.print(f"[red]Error en la descarga:[/red] {exc}")
+        console.print(f"[red]{t('cli_error_download')}[/red] {exc}")
         sys.exit(1)
 
     _run_analysis(apk_path, report, keep_apk, gen_pdf=cfg_get(config, "reports", "save_pdf", default=True))
@@ -623,22 +590,22 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
     "--report", "-r",
     default=None,
     metavar="ARCHIVO",
-    help="Ruta donde guardar el informe en formato JSON.",
+    help="Path to save the JSON report.",
 )
 @click.option(
     "--launch", "-L",
     is_flag=True,
     default=False,
-    help="Tras el análisis, lanza la app en el dispositivo con el bypass script generado.",
+    help="After analysis, launch the app on device with the generated bypass script.",
 )
 @click.option(
     "--serial", "-s",
     default=None,
     metavar="SERIAL",
-    help="ADB serial del dispositivo para --launch (por defecto, primero disponible).",
+    help="ADB device serial for --launch (default: first available).",
 )
 def analyze(apk_path: str, config_path: str, report: str | None, launch: bool, serial: str | None) -> None:
-    """Analiza una APK local en busca de protecciones anti-root."""
+    """Analyze a local APK for anti-root protections."""
     global _CFG, _LAUNCH_APP, _LAUNCH_SERIAL
     _LAUNCH_APP = launch
     _LAUNCH_SERIAL = serial
@@ -667,26 +634,26 @@ def analyze(apk_path: str, config_path: str, report: str | None, launch: bool, s
     "--script", "-l",
     default=None,
     metavar="SCRIPT",
-    help="Script de bypass JS a usar. Si se omite, usa el último generado para el paquete.",
+    help="Bypass JS script to use. If omitted, uses the latest generated for the package.",
 )
 @click.option(
     "--serial", "-s",
     default=None,
     metavar="SERIAL",
-    help="ADB serial del dispositivo (por defecto, primero disponible via -U).",
+    help="ADB device serial (default: first available via -U).",
 )
 @click.option(
     "--scripts-dir",
     default="frida_scripts",
     show_default=True,
     metavar="DIR",
-    help="Directorio donde buscar scripts de bypass.",
+    help="Directory to search for bypass scripts.",
 )
 def launch(package: str, script: str | None, serial: str | None, scripts_dir: str) -> None:
-    """Lanza la app en el dispositivo con el último bypass script generado.
+    """Launch the app on device with the latest generated bypass script.
 
     \b
-    Ejemplos:
+    Examples:
       python nutcracker.py launch com.appexample
       python nutcracker.py launch downloads/com.appexample/com.appexample.apk
       python nutcracker.py launch com.appexample --script frida_scripts/bypass_....js
@@ -699,20 +666,18 @@ def launch(package: str, script: str | None, serial: str | None, scripts_dir: st
     p = Path(package)
     if p.suffix.lower() == ".apk" or "/" in package:
         pkg = p.stem  # e.g. "com.appexample.apk" → "com.appexample"
-        console.print(f"[dim]  APK detectado — usando package: [bold]{pkg}[/bold][/dim]")
+        console.print(f"[dim]  {t('cli_apk_detected_pkg', pkg=pkg)}[/dim]")
 
     if script:
         script_path = Path(script)
         if not script_path.exists():
-            console.print(f"[red]Error:[/red] Script no encontrado: {script}")
+            console.print(f"[red]Error:[/red] {t('cli_script_not_found', script=script)}")
             raise SystemExit(1)
     else:
         script_path = _find_latest_bypass_script(pkg, scripts_path)
         if not script_path:
             console.print(
-                f"[yellow]⚠[/yellow]  No se encontró ningún bypass script para [bold]{pkg}[/bold] "
-                f"en [bold]{scripts_dir}/[/bold].\n"
-                f"  Genera uno primero con: [cyan]python nutcracker.py analyze <apk>[/cyan]"
+                f"[yellow]⚠[/yellow]  {t('cli_no_bypass_found', pkg=pkg, scripts_dir=scripts_dir)}"
             )
             raise SystemExit(1)
 
@@ -726,22 +691,22 @@ def launch(package: str, script: str | None, serial: str | None, scripts_dir: st
     default="config.yaml",
     show_default=True,
     metavar="ARCHIVO",
-    help="Ruta al archivo de configuración YAML.",
+    help="Path to YAML config file.",
 )
-@click.option("--serial", default=None, help="ADB serial del dispositivo objetivo.")
+@click.option("--serial", default=None, help="ADB serial of the target device.")
 @click.option(
     "--method",
     default="auto",
     type=click.Choice(["auto", "root", "dumpsys", "gsf"], case_sensitive=False),
     show_default=True,
-    help="Método de extracción del token intermedio.",
+    help="Token extraction method.",
 )
-@click.option("--no-interactive", is_flag=True, default=False, help="No pedir confirmaciones.")
+@click.option("--no-interactive", is_flag=True, default=False, help="Skip confirmation prompts.")
 def setup_token(config_path: str, serial: str | None, method: str, no_interactive: bool) -> None:
-    """Asistente interactivo para obtener y guardar google_play.aas_token."""
+    """Interactive wizard to obtain and save google_play.aas_token."""
     script = Path(__file__).parent / "tools" / "extract_token.py"
     if not script.exists():
-        console.print("[red]Error:[/red] No se encontró tools/extract_token.py")
+        console.print(f"[red]Error:[/red] {t('cli_extract_token_not_found')}")
         raise SystemExit(1)
 
     cfg = load_config(config_path)
@@ -774,7 +739,7 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
             anti_root_engine = "native"
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                       console=console, transient=True) as progress:
-            task = progress.add_task("Analizando APK...", total=None)
+            task = progress.add_task(t("cli_analyzing_apk"), total=None)
 
             def on_progress(msg: str) -> None:
                 progress.update(task, description=msg)
@@ -786,7 +751,7 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
         console.print(f"[red]Error:[/red] {exc}")
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Error inesperado:[/red] {exc}")
+        console.print(f"[red]{t('cli_error_unexpected')}[/red] {exc}")
         sys.exit(1)
 
     if result:
@@ -817,9 +782,9 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
 
     if not keep_apk and apk_path and apk_path.exists():
         apk_path.unlink()
-        console.print(f"[dim]APK eliminada: {apk_path}[/dim]")
+        console.print(f"[dim]{t('cli_apk_deleted', path=apk_path)}[/dim]")
 
-    _print_elapsed("Tiempo total de análisis", elapsed_seconds)
+    _print_elapsed(t("cli_elapsed"), elapsed_seconds)
 
 
 def _print_bypass_banner(dex_count: int) -> None:
@@ -905,7 +870,7 @@ def _post_analysis_flow(result, apk_path: Path):
 
     _label = "[green]ℹ[/green]" if result.protected else "[yellow]ℹ[/yellow]"
     _estado = t("cli_app_has_protection") if result.protected else t("cli_app_no_protection")
-    console.print(f"{_label}  La app [bold]{_estado} {t('cli_anti_root_label')}[/bold].")
+    console.print(f"{_label}  {t('cli_app_protection_line', status=_estado, protection=t('cli_anti_root_label'))}")
 
     # ── Selección automática del mejor método ─────────────────────────────────
     decomp_mode = _pipeline_decompilation_mode(result.protected)
@@ -920,36 +885,34 @@ def _post_analysis_flow(result, apk_path: Path):
         if dexguard_result:
             if runtime_target == "device":
                 console.print(
-                    "[yellow]⚠[/yellow]  [bold]DexGuard/Arxan detectado[/bold] "
-                    "— en dispositivo físico se usará flujo FART/manual."
+                    f"[yellow]⚠[/yellow]  {t('cli_dexguard_device_warn')}"
                 )
             else:
                 console.print(
-                    "[yellow]⚠[/yellow]  [bold]DexGuard/Arxan detectado[/bold] "
-                    "— frida-dexdump produce código más legible que jadx directo."
+                    f"[yellow]⚠[/yellow]  {t('cli_dexguard_emulator_warn')}"
                 )
         else:
             console.print(
-                "[cyan]ℹ[/cyan]  Pipeline configurado: decompilación runtime para app sin protección detectada."
+                f"[cyan]ℹ[/cyan]  {t('cli_runtime_pipeline_info')}"
             )
         # Con protección anti-root: ofrecer combinar bypass en el mismo script
         if result.protected:
-            if _LAUNCH_APP or _ask_or_auto("  ¿Incluir bypass anti-root en el script Frida?", "bypass_script", default=True):
+            if _LAUNCH_APP or _ask_or_auto(t("cli_include_bypass_prompt"), "bypass_script", default=True):
                 scripts_dir = Path("./frida_scripts")
                 try:
                     bp_path = generate_bypass_script(result, scripts_dir)
                     console.print(
-                        f"[green]✔[/green] Script bypass generado: [bold]{bp_path}[/bold]"
+                        f"[green]✔[/green] {t('cli_bypass_script_generated')} [bold]{bp_path}[/bold]"
                     )
                     if _LAUNCH_APP:
                         _launch_frida_bypass(result.package, bp_path, _LAUNCH_SERIAL)
                 except Exception as exc:  # noqa: BLE001
-                    console.print(f"[red]Error generando bypass:[/red] {exc}")
+                    console.print(f"[red]{t('cli_error_bypass')}[/red] {exc}")
 
         runtime_prompt = (
-            "  ¿Usar extracción runtime FART en dispositivo físico?"
+            t("cli_fart_prompt_device")
             if runtime_target == "device"
-            else "  ¿Usar frida-dexdump para extraer DEX de memoria?"
+            else t("cli_fart_prompt_emulator")
         )
         if _ask_or_auto(runtime_prompt, "fart", default=True):
             return _do_dexguard_deobf(result, apk_path)
@@ -957,22 +920,22 @@ def _post_analysis_flow(result, apk_path: Path):
     # Sin DexGuard (o usuario rechazó frida) → jadx directo
     # Si hay protección anti-root sin DexGuard, ofrecer script de bypass por separado
     if result.protected and not dexguard_result:
-        if _LAUNCH_APP or _ask_or_auto("  ¿Generar script de bypass Frida?", "bypass_script", default=False):
+        if _LAUNCH_APP or _ask_or_auto(t("cli_gen_bypass_prompt"), "bypass_script", default=False):
             scripts_dir = Path("./frida_scripts")
             try:
                 script_path = generate_bypass_script(result, scripts_dir)
-                console.print(f"[green]✔[/green] Script Frida generado: [bold]{script_path}[/bold]")
+                console.print(f"[green]✔[/green] {t('cli_frida_script_generated')} [bold]{script_path}[/bold]")
                 if _LAUNCH_APP:
                     _launch_frida_bypass(result.package, script_path, _LAUNCH_SERIAL)
                 else:
                     console.print(frida_run_instructions(result.package, script_path))
             except Exception as exc:  # noqa: BLE001
-                console.print(f"[red]Error generando bypass:[/red] {exc}")
+                console.print(f"[red]{t('cli_error_bypass')}[/red] {exc}")
 
     if not _should_fallback_jadx(result.protected):
         return None
 
-    if not _ask_or_auto("  ¿Decompilar el APK con jadx?", "decompile", default=True):
+    if not _ask_or_auto(t("cli_decompile_jadx_prompt"), "decompile", default=True):
         return None
     return _do_decompile(apk_path, result.package)
 
@@ -986,8 +949,7 @@ def _should_fallback_jadx(protected: bool) -> bool:
         fallback = cfg_get(_CFG, "pipelines", "protected", "fallback_jadx", default=True)
         if not fallback:
             console.print(
-                "[dim]  pipelines.protected.fallback_jadx=false "
-                "— no se decompila si no se pudo romper la protección.[/dim]"
+                f"[dim]{t('cli_fallback_jadx_disabled')}[/dim]"
             )
             return False
     return True
@@ -998,21 +960,20 @@ def _do_dexguard_deobf(result, apk_path: Path) -> "ScanResult | None":
     Flujo completo de desofuscación para apps DexGuard/Arxan.
 
     Estrategia primaria: frida-dexdump (sin script en disco).
-    Fallback: FART — el script se genera en temp solo si es necesario.
+    Fallback: FART - el script se genera en temp solo si es necesario.
 
     Ofrece dos modos:
-      A) Emulador automático — arranca AVD, instala APK, extrae DEX, descarga DEX
-      B) Dispositivo físico  — genera el script FART y el usuario lo ejecuta manualmente
+      A) Emulador automático - arranca AVD, instala APK, extrae DEX, descarga DEX
+      B) Dispositivo físico  - genera el script FART y el usuario lo ejecuta manualmente
     """
     # ── Validar todas las dependencias (jadx, frida, adb, apktool, etc) ──────
     if not _validate_all_dependencies(protected=result.protected):
         console.print(
-            "[yellow]⚠[/yellow]  Saltando desofuscación runtime. "
-            "Se usará jadx para decompilación estática."
+            f"[yellow]⚠[/yellow]  {t('cli_skip_runtime_fallback_jadx')}"
         )
         if not _should_fallback_jadx(result.protected):
             return None
-        if not _ask_or_auto("  ¿Decompilar el APK con jadx?", "decompile", default=True):
+        if not _ask_or_auto(t("cli_decompile_jadx_prompt"), "decompile", default=True):
             return None
         return _do_decompile(apk_path, result.package)
     
@@ -1034,8 +995,7 @@ def _do_dexguard_deobf(result, apk_path: Path) -> "ScanResult | None":
             console.print("[dim]  strategies.runtime_target=emulator[/dim]")
         else:
             console.print(
-                "[yellow]⚠[/yellow]  strategies.runtime_target=emulator, pero no hay AVD disponible. "
-                "Usando dispositivo físico."
+                f"[yellow]⚠[/yellow]  {t('cli_no_avd_using_device')}"
             )
             use_emulator = False
     elif runtime_target == "device":
@@ -1045,26 +1005,17 @@ def _do_dexguard_deobf(result, apk_path: Path) -> "ScanResult | None":
         physical = [d for d in connected if not is_emulator_serial(d)]
         if not physical:
             console.print(
-                "[yellow]⚠[/yellow]  runtime_target=device, pero no hay dispositivo físico conectado. "
-                "Conecta un equipo por ADB o cambia runtime_target."
+                f"[yellow]⚠[/yellow]  {t('cli_no_physical_device')}"
             )
     elif has_emulator:
         # runtime_target=auto conserva comportamiento histórico
         if _unattended():
             use_emulator = True
-            console.print(
-                "\n[bold]Modo de ejecución FART:[/bold]  "
-                "[cyan]Emulador Android automático[/cyan] [dim](auto.unattended)[/dim]\n"
-            )
+            console.print(t("cli_fart_mode_unattended"))
         else:
-            console.print(
-                f"\n[bold]Modo de ejecución FART:[/bold]\n"
-                f"  [cyan][A][/cyan] Emulador Android automático "
-                f"({len(avds)} AVD disponible{'s' if len(avds) > 1 else ''})\n"
-                f"  [cyan][B][/cyan] Dispositivo físico (manual)\n"
-            )
+            console.print(t("cli_fart_mode_choice", avd_count=len(avds)))
             choice = click.prompt(
-                "  Elige [A/B]",
+                t("cli_fart_choose_prompt"),
                 default="A",
                 type=click.Choice(["A", "a", "B", "b"], case_sensitive=False),
                 show_choices=False,
@@ -1072,8 +1023,7 @@ def _do_dexguard_deobf(result, apk_path: Path) -> "ScanResult | None":
             use_emulator = choice == "A"
     else:
         console.print(
-            "[yellow]⚠[/yellow]  No hay emulador disponible (SDK/AVD no encontrado). "
-            "Se usará dispositivo físico."
+            f"[yellow]⚠[/yellow]  {t('cli_no_emulator_using_device')}"
         )
 
     method_order = deobf_method_order(_CFG, protected=True)
@@ -1086,18 +1036,17 @@ def _do_dexguard_deobf(result, apk_path: Path) -> "ScanResult | None":
         try:
             script_path = generate_fart_script(result.package, scripts_dir)
         except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]Error generando script FART:[/red] {exc}")
+            console.print(f"[red]{t('cli_fart_script_error')}[/red] {exc}")
             return None
         ext = do_fart_manual(_CFG, result.package, script_path, apk_path, method_order)
 
     if ext is None:
         console.print(
-            "[yellow]⚠[/yellow]  Extracción runtime fallida. "
-            "Fallback a decompilación estática con jadx."
+            f"[yellow]⚠[/yellow]  {t('cli_runtime_extraction_failed')}"
         )
         if not _should_fallback_jadx(result.protected):
             return None
-        if not _ask_or_auto("  ¿Decompilar el APK con jadx?", "decompile", default=True):
+        if not _ask_or_auto(t("cli_decompile_jadx_prompt"), "decompile", default=True):
             return None
         return _do_decompile(apk_path, result.package)
     result.decompilation_info = {
@@ -1155,14 +1104,14 @@ def _decompile_and_scan(
             console=console,
             transient=True,
         ) as progress:
-            task = progress.add_task("Decompilando DEX volcados con jadx...", total=None)
+            task = progress.add_task(t("cli_decompiling_dex_jadx"), total=None)
             decompile_dumps(
                 dex_files,
                 clean_dir,
                 progress_callback=lambda m: progress.update(task, description=m),
             )
     except RuntimeError as exc:
-        console.print(f"[red]✘ Error decompilando:[/red] {exc}")
+        console.print(f"[red]{t('cli_error_decompiling_dex')}[/red] {exc}")
         return None
 
     java_count = len(list(clean_dir.rglob("*.java")))
@@ -1178,11 +1127,11 @@ def _decompile_and_scan(
         replaced = apply_decrypt_map(clean_dir, decrypt_map)
         if replaced > 0:
             console.print(
-                f"[green]✔[/green] {replaced} strings reemplazadas con decrypt_map.txt"
+                f"[green]✔[/green] {t('cli_strings_replaced', count=replaced)}"
             )
     else:
         console.print(
-            "[dim]  decrypt_map.txt no encontrado — strings pueden seguir ofuscadas.[/dim]"
+            f"[dim]  {t('cli_decrypt_map_not_found')}[/dim]"
         )
 
     # Análisis de misconfigs del manifest
@@ -1199,7 +1148,7 @@ def _decompile_and_scan(
     if not vuln_enabled and not leak_enabled:
         console.print(f"[dim]{t('cli_skipping_vuln_scan')}[/dim]")
     elif _ask_or_auto(
-        "\n  ¿Escanear el código desofuscado en busca de vulnerabilidades?",
+        t("cli_vuln_scan_deobf_prompt"),
         "vuln_scan",
         default=True,
     ):
@@ -1228,7 +1177,7 @@ def _do_manifest_scan(decompiled_dir: Path) -> "ManifestAnalysisResult | None":
         console=console,
         transient=True,
     ) as progress:
-        task = progress.add_task("Analizando AndroidManifest.xml...", total=None)
+        task = progress.add_task(t("cli_analyzing_manifest"), total=None)
         analysis = analyze_decompiled_dir(
             decompiled_dir,
             progress_callback=lambda m: progress.update(task, description=m),
@@ -1292,7 +1241,7 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
                 progress_callback=lambda m: progress.update(task, description=m),
             )
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[yellow]⚠[/yellow] Error en OSINT: {exc}")
+        console.print(f"[yellow]⚠[/yellow] {t('cli_error_osint')} {exc}")
         return None
 
     _OSINT_RESULT = osint_result
@@ -1321,7 +1270,7 @@ def _print_osint_report(osint: OsintResult) -> None:
             table.add_row(s.name, val, s.service or "-", s.file)
         console.print(table)
         if len(osint.secrets) > 20:
-            console.print(f"  [dim]... y {len(osint.secrets) - 20} más[/dim]")
+            console.print(f"  [dim]{t('cli_osint_more', count=len(osint.secrets) - 20)}[/dim]")
 
     # ── Dominios ──────────────────────────────────────────────────────────
     if osint.domains_scanned:
@@ -1343,7 +1292,7 @@ def _print_osint_report(osint: OsintResult) -> None:
             if s not in dev_subs:
                 console.print(f"    {s.name}")
         if len(osint.subdomains) > 15:
-            console.print(f"  [dim]... y {len(osint.subdomains) - 15} más[/dim]")
+            console.print(f"  [dim]{t('cli_osint_more', count=len(osint.subdomains) - 15)}[/dim]")
 
     # ── Leaks públicos ────────────────────────────────────────────────────
     if osint.public_leaks:
@@ -1445,7 +1394,7 @@ def _do_decompile(apk_path: Path, package: str) -> Path | None:
             console=console,
             transient=True,
         ) as progress:
-            progress.add_task(f"Decompilando {package}...", total=None)
+            progress.add_task(t("cli_decompiling_pkg", package=package), total=None)
             dest = decompile(apk_path, output_dir)
 
         console.print(f"[green]✔[/green] {t('cli_source_code_at')} [bold]{dest}[/bold]")
@@ -1469,7 +1418,7 @@ def _do_decompile(apk_path: Path, package: str) -> Path | None:
         leak_enabled = _feature_enabled("leak_scan", default=True)
         if not vuln_enabled and not leak_enabled:
             console.print(f"[dim]{t('cli_skipping_vuln_scan')}[/dim]")
-        elif _ask_or_auto("\n  ¿Escanear el código en busca de vulnerabilidades?", "vuln_scan", default=True):
+        elif _ask_or_auto(t("cli_vuln_scan_code_prompt"), "vuln_scan", default=True):
             scan_result = _do_vuln_scan(
                 dest,
                 apk_path=apk_path,
@@ -1485,7 +1434,7 @@ def _do_decompile(apk_path: Path, package: str) -> Path | None:
         return scan_result
 
     except DecompilerError as exc:
-        console.print(f"[red]✘ Error en decompilación:[/red] {exc}")
+        console.print(f"[red]{t('cli_error_decompilation')}[/red] {exc}")
         return None
 
 
@@ -1602,7 +1551,7 @@ def _do_vuln_scan(
                     try:
                         leaks.extend(scan_with_apkleaks(apk_for_leaks))
                     except Exception as exc:  # noqa: BLE001
-                        console.print(f"[yellow]⚠[/yellow] apkleaks falló: {exc}")
+                        console.print(f"[yellow]⚠[/yellow] {t('cli_apkleaks_failed')} {exc}")
 
                 # 3) gitleaks sobre código decompilado
                 if use_gitleaks:
@@ -1664,7 +1613,7 @@ def _do_vuln_scan(
             console=console,
             transient=True,
         ) as progress:
-            task = progress.add_task("Escaneando vulnerabilidades...", total=None)
+            task = progress.add_task(t("cli_scanning_vulns"), total=None)
 
             def on_progress(msg: str) -> None:
                 progress.update(task, description=msg)
@@ -1682,7 +1631,7 @@ def _do_vuln_scan(
 
     except RuntimeError as exc:
         console.print(f"[yellow]⚠[/yellow]  {exc}")
-        console.print("[dim]  Reintentando con el motor regex interno...[/dim]")
+        console.print(f"[dim]  {t('cli_retry_regex')}[/dim]")
         try:
             with Progress(
                 SpinnerColumn(),
@@ -1690,7 +1639,7 @@ def _do_vuln_scan(
                 console=console,
                 transient=True,
             ) as progress:
-                task = progress.add_task("Escaneando vulnerabilidades (regex)...", total=None)
+                task = progress.add_task(t("cli_scanning_vulns_regex"), total=None)
                 # Usar auto_scan con engine=regex para respetar la lógica sources/ + XML
                 from nutcracker_core.vuln_scanner import auto_scan as _auto_scan
                 scan_result = _auto_scan(
@@ -1703,10 +1652,10 @@ def _do_vuln_scan(
                     include_xml_leak_rules=include_leak_scan and use_native,
                 )
         except Exception as exc2:  # noqa: BLE001
-            console.print(f"[red]Error en el scan de vulnerabilidades:[/red] {exc2}")
+            console.print(f"[red]{t('cli_error_vuln_scan')}[/red] {exc2}")
             return None
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Error en el scan de vulnerabilidades:[/red] {exc}")
+        console.print(f"[red]{t('cli_error_vuln_scan')}[/red] {exc}")
         return None
 
     if scan_result:
@@ -1729,14 +1678,12 @@ def _do_vuln_scan(
                     if new_gl:
                         scan_result.findings.extend(new_gl)
                     console.print(
-                        f"  [dim]gitleaks: {len(gl_findings)} detectado(s), "
-                        f"{len(gl_findings) - len(new_gl)} duplicados descartados, "
-                        f"{len(new_gl)} añadido(s)[/dim]"
+                        f"  [dim]{t('cli_gitleaks_stats', detected=len(gl_findings), discarded=len(gl_findings) - len(new_gl), added=len(new_gl))}[/dim]"
                     )
                     if "gitleaks" not in scan_result.leak_engine:
                         scan_result.leak_engine += ("+gitleaks" if scan_result.leak_engine else "gitleaks")
             except Exception as exc:  # noqa: BLE001
-                console.print(f"[yellow]⚠[/yellow] gitleaks falló: {exc}")
+                console.print(f"[yellow]⚠[/yellow] {t('cli_gitleaks_failed')} {exc}")
 
         engine_used = scan_result.scanner_engine
         console.print(
@@ -1836,7 +1783,7 @@ def _generate_pdf(result, vuln_scan=None) -> None:
             generate_pdf_report(result, pdf_path, scan=vuln_scan, manifest=_MANIFEST_ANALYSIS, osint=_OSINT_RESULT)
         console.print(f"[green]✔[/green] {t('cli_pdf_saved')} [bold]{pdf_path}[/bold]")
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Error generando PDF:[/red] {exc}")
+        console.print(f"[red]{t('cli_error_pdf')}[/red] {exc}")
 
 
 def _save_vuln_json(scan_result, output_path: Path) -> None:
@@ -1876,24 +1823,24 @@ def _save_vuln_json(scan_result, output_path: Path) -> None:
     default="config.yaml",
     show_default=True,
     metavar="ARCHIVO",
-    help="Ruta al archivo de configuración YAML.",
+    help="Path to YAML config file.",
 )
 @click.option(
     "--output-dir", "-o",
     default=None,
-    help="Directorio donde guardar los informes PDF/JSON.",
+    help="Directory to save PDF/JSON reports.",
 )
 @click.option(
     "--keep-apk",
     is_flag=True,
     default=False,
-    help="No eliminar las APKs descargadas tras cada análisis.",
+    help="Keep downloaded APKs after each analysis.",
 )
 @click.option(
     "--stop-on-error",
     is_flag=True,
     default=False,
-    help="Detener el proceso al primer error (por defecto continúa).",
+    help="Stop on first error (default: continue).",
 )
 def batch(
     list_file: str | None,
@@ -1903,15 +1850,15 @@ def batch(
     stop_on_error: bool,
 ) -> None:
     """
-    Escanea una lista de APKs o URLs en modo masivo.
+    Scan a list of APKs or URLs in batch mode.
 
-    LIST_FILE es un archivo de texto con una entrada por línea:
-      - URLs de Google Play  (https://play.google.com/...)
-      - Package IDs          (com.example.app)
-      - URLs directas a APK  (https://cdn.example.com/app.apk)
-      - Rutas locales a APK  (/ruta/a/app.apk)
+    LIST_FILE is a text file with one entry per line:
+      - Google Play URLs   (https://play.google.com/...)
+      - Package IDs        (com.example.app)
+      - Direct APK URLs    (https://cdn.example.com/app.apk)
+      - Local APK paths    (/path/to/app.apk)
 
-    Las líneas que empiecen por '#' o estén vacías se ignoran.
+    Lines starting with '#' or empty lines are ignored.
     """
     global _CFG
     started_at = time.perf_counter()
@@ -1929,11 +1876,11 @@ def batch(
     # Resolver list_file: CLI > config batch.list_file
     resolved_list_file = list_file or batch_cfg.get("list_file")
     if not resolved_list_file:
-        console.print("[red]✘[/red] Debes indicar LIST_FILE como argumento o definir batch.list_file en config.yaml")
+        console.print(f"[red]✘[/red] {t('cli_batch_list_missing')}")
         raise SystemExit(1)
     resolved_list_file = Path(resolved_list_file)
     if not resolved_list_file.exists():
-        console.print(f"[red]✘[/red] No se encuentra el archivo: {resolved_list_file}")
+        console.print(f"[red]✘[/red] {t('cli_batch_file_not_found', path=resolved_list_file)}")
         raise SystemExit(1)
 
     # Leer lista de targets
@@ -1941,7 +1888,7 @@ def batch(
     targets = [l.strip() for l in raw_lines if l.strip() and not l.strip().startswith("#")]
 
     if not targets:
-        console.print("[yellow]La lista está vacía. No hay nada que escanear.[/yellow]")
+        console.print(f"[yellow]{t('cli_batch_empty_list')}[/yellow]")
         return
 
     console.print(f"[bold cyan]Batch scan:[/bold cyan] {t('cli_batch_scan_header', count=len(targets), file=list_file)}")
@@ -1968,7 +1915,7 @@ def batch(
                         console=console,
                         transient=True,
                     ) as progress:
-                        task = progress.add_task("Descargando...", total=None)
+                        task = progress.add_task(t("cli_batch_downloading"), total=None)
                         def _on_chunk(dl: int, tot: int | None) -> None:
                             progress.update(task, completed=dl, total=tot)
                         apk_path = DirectURLDownloader(dl_dir).download(target, progress_callback=_on_chunk, use_cache=_keep_apk)
@@ -1982,11 +1929,11 @@ def batch(
                         dl = APKPureDownloader(dl_dir)
                     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                                   console=console, transient=True) as progress:
-                        progress.add_task("Descargando...", total=None)
+                        progress.add_task(t("cli_batch_downloading"), total=None)
                         apk_path = dl.download(target)
-                console.print(f"  [green]✔[/green] Descargada: {apk_path.name}")
+                console.print(f"  [green]✔[/green] {t('cli_batch_downloaded', name=apk_path.name)}")
             except APKDownloadError as exc:
-                console.print(f"  [red]✘ Error descarga:[/red] {exc}")
+                console.print(f"  [red]{t('cli_batch_download_error')}[/red] {exc}")
                 results_summary.append({"target": target, "status": "error_download", "error": str(exc)})
                 if _stop_on_err:
                     break
@@ -1998,7 +1945,7 @@ def batch(
         try:
             with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                           console=console, transient=True) as progress:
-                task = progress.add_task("Analizando...", total=None)
+                task = progress.add_task(t("cli_batch_analyzing"), total=None)
                 def on_prog(msg: str) -> None:
                     progress.update(task, description=msg)
                 analyzer = APKAnalyzer(progress_callback=on_prog)
@@ -2065,7 +2012,7 @@ def batch(
                 "categories": cat_max_sev,
             })
         except Exception as exc:  # noqa: BLE001
-            console.print(f"  [red]✘ Error análisis:[/red] {exc}")
+            console.print(f"  [red]{t('cli_batch_analysis_error')}[/red] {exc}")
             results_summary.append({"target": target, "status": "error_analysis", "error": str(exc)})
             if _stop_on_err:
                 break
@@ -2076,16 +2023,16 @@ def batch(
 
     # ── Resumen final ─────────────────────────────────────────────────────────
     console.rule()
-    console.print(f"\n[bold]Resumen batch ({len(results_summary)} procesados)[/bold]\n")
+    console.print(f"\n[bold]{t('cli_batch_summary_header', count=len(results_summary))}[/bold]\n")
     ok      = [r for r in results_summary if "error" not in r["status"]]
     errors  = [r for r in results_summary if "error" in r["status"]]
     broken  = [r for r in ok if r["status"] == "protected_broken"]
-    console.print(f"  [green]✔ OK:[/green]              {len(ok)}")
-    console.print(f"  [red]✘ Errores:[/red]         {len(errors)}")
-    console.print(f"  [yellow]⚠ Protección rota:[/yellow]  {len(broken)}")
+    console.print(f"  [green]{t('cli_batch_ok_label')}[/green]              {len(ok)}")
+    console.print(f"  [red]{t('cli_batch_errors_label')}[/red]         {len(errors)}")
+    console.print(f"  [yellow]{t('cli_batch_broken_label')}[/yellow]  {len(broken)}")
 
     if errors:
-        console.print("\n[dim]Targets con error:[/dim]")
+        console.print(f"\n[dim]{t('cli_batch_error_targets')}[/dim]")
         for r in errors:
             console.print(f"  - {r['target']}  ({r['error'][:80]})")
 
@@ -2094,9 +2041,9 @@ def batch(
         from nutcracker_core.pdf_reporter import generate_batch_report
         batch_pdf = Path(reports_dir) / "batch_report.pdf"
         generate_batch_report(results_summary, batch_pdf)
-        console.print(f"\n[bold green]✔[/bold green] Reporte consolidado: [bold]{batch_pdf}[/bold]")
+        console.print(f"\n[bold green]✔[/bold green] {t('cli_batch_consolidated_report')} [bold]{batch_pdf}[/bold]")
 
-    _print_elapsed("Tiempo total de ejecución batch", time.perf_counter() - started_at)
+    _print_elapsed(t("cli_elapsed_batch"), time.perf_counter() - started_at)
 
 
 # ── Comando: regen-pdf ────────────────────────────────────────────────────────
@@ -2104,20 +2051,20 @@ def batch(
 @cli.command("regen-pdf")
 @click.argument("package")
 def regen_pdf(package: str) -> None:
-    """Regenera el PDF de un paquete a partir de su JSON guardado en reports/.
+    """Regenerate the PDF for a package from its saved JSON in reports/.
 
-    PACKAGE es el nombre del paquete, ej: com.example.myapp
+    PACKAGE is the package name, e.g.: com.example.myapp
     """
     result = _load_analysis_json(package)
     if result is None:
-        console.print(f"[red]No se encontró reports/{package}.json[/red]")
+        console.print(f"[red]{t('cli_regen_pdf_not_found', package=package)}[/red]")
         raise SystemExit(1)
-    console.print(f"[dim]Cargado análisis: {result.package} ({result.analyzed_at})[/dim]")
+    console.print(f"[dim]{t('cli_regen_pdf_loaded', package=result.package, analyzed_at=result.analyzed_at)}[/dim]")
 
     # Cargar vuln scan si existe
     vuln_scan = _load_vuln_json(package)
     if vuln_scan is not None:
-        console.print(f"[dim]Cargados {len(vuln_scan.findings)} hallazgos de vulnerabilidades[/dim]")
+        console.print(f"[dim]{t('cli_regen_pdf_findings', count=len(vuln_scan.findings))}[/dim]")
 
     # Cargar manifest si existe
     manifest = None
@@ -2134,7 +2081,7 @@ def regen_pdf(package: str) -> None:
             if manifest_path.exists():
                 ma = ManifestAnalyzer()
                 manifest = ma.analyze(manifest_path)
-                console.print(f"[dim]Manifest cargado: {manifest_path}[/dim]")
+                console.print(f"[dim]{t('cli_manifest_loaded', path=manifest_path)}[/dim]")
                 break
     except Exception:  # noqa: BLE001
         pass

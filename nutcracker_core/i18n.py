@@ -371,6 +371,128 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli_clean_source": "Clean source code: {path} ({count} .java files)",
         "cli_batch_scan_header": "Batch scan: {count} target(s) found in {file}",
 
+        # ── CLI download / analyze / launch flow ───────────────────────────────
+        "cli_apk_cached": "APK cached:",
+        "cli_apk_downloaded": "APK downloaded:",
+        "cli_apk_deleted": "APK deleted: {path}",
+        "cli_error_download": "Download error:",
+        "cli_error_unexpected": "Unexpected error:",
+        "cli_gplay_requires_email": "Google Play requires [bold]email[/bold] in config.yaml.",
+        "cli_gplay_token_empty": "google_play.aas_token is empty. Starting extraction wizard...",
+        "cli_extract_token_not_found": "tools/extract_token.py not found.",
+        "cli_token_gen_failed": "Could not auto-generate aas_token. Try: [bold]python nutcracker.py setup-token[/bold]",
+        "cli_token_still_empty": "Wizard finished but aas_token is still empty in config.yaml.",
+        "cli_gplay_run_setup_token": "Run [bold]python nutcracker.py setup-token[/bold] to configure Google Play access.",
+        "cli_downloading_apk": "Downloading APK...",
+        "cli_downloading_from": "Downloading from {label}...",
+        "cli_apk_detected_pkg": "APK detected \u2014 using package: [bold]{pkg}[/bold]",
+        "cli_script_not_found": "Script not found: {script}",
+        "cli_no_bypass_found": (
+            "No bypass script found for [bold]{pkg}[/bold] in [bold]{scripts_dir}/[/bold].\n"
+            "  Generate one first with: [cyan]python nutcracker.py analyze <apk>[/cyan]"
+        ),
+        "cli_analyzing_apk": "Analyzing APK...",
+        "cli_error_analysis": "Analysis error:",
+        "cli_elapsed": "Total analysis time",
+        "cli_elapsed_batch": "Total batch execution time",
+
+        # ── Post-analysis flow ─────────────────────────────────────────────────
+        "cli_app_protection_line": "The app [bold]{status} {protection}[/bold].",
+        "cli_dexguard_device_warn": "[bold]DexGuard/Arxan detected[/bold] \u2014 on physical device, FART/manual flow will be used.",
+        "cli_dexguard_emulator_warn": "[bold]DexGuard/Arxan detected[/bold] \u2014 frida-dexdump produces more readable code than direct jadx.",
+        "cli_runtime_pipeline_info": "Pipeline configured: runtime decompilation for app with no detected protection.",
+        "cli_include_bypass_prompt": "  Include anti-root bypass in the Frida script?",
+        "cli_bypass_script_generated": "Bypass script generated:",
+        "cli_error_bypass": "Error generating bypass:",
+        "cli_fart_prompt_device": "  Use runtime FART extraction on physical device?",
+        "cli_fart_prompt_emulator": "  Use frida-dexdump to extract DEX from memory?",
+        "cli_gen_bypass_prompt": "  Generate Frida bypass script?",
+        "cli_frida_script_generated": "Frida script generated:",
+        "cli_decompile_jadx_prompt": "  Decompile APK with jadx?",
+        "cli_fallback_jadx_disabled": "  pipelines.protected.fallback_jadx=false \u2014 skipping decompilation if protection was not broken.",
+        "cli_skip_runtime_fallback_jadx": "Skipping runtime deobfuscation. Falling back to static jadx decompilation.",
+        "cli_no_avd_using_device": "strategies.runtime_target=emulator, but no AVD available. Using physical device.",
+        "cli_no_physical_device": "runtime_target=device, but no physical device connected. Connect a device via ADB or change runtime_target.",
+        "cli_fart_mode_unattended": "\n[bold]FART execution mode:[/bold]  [cyan]Android emulator (automatic)[/cyan] [dim](auto.unattended)[/dim]\n",
+        "cli_fart_mode_choice": (
+            "\n[bold]FART execution mode:[/bold]\n"
+            "  [cyan][A][/cyan] Android emulator (automatic) ({avd_count} AVD available)\n"
+            "  [cyan][B][/cyan] Physical device (manual)\n"
+        ),
+        "cli_fart_choose_prompt": "  Choose [A/B]",
+        "cli_no_emulator_using_device": "No emulator available (SDK/AVD not found). Using physical device.",
+        "cli_fart_script_error": "Error generating FART script:",
+        "cli_runtime_extraction_failed": "Runtime extraction failed. Falling back to static jadx decompilation.",
+
+        # ── Decompile-and-scan ─────────────────────────────────────────────────
+        "cli_decompiling_dex_jadx": "Decompiling dumped DEX with jadx...",
+        "cli_error_decompiling_dex": "\u2718 Error decompiling:",
+        "cli_strings_replaced": "{count} strings replaced with decrypt_map.txt",
+        "cli_decrypt_map_not_found": "decrypt_map.txt not found \u2014 strings may still be obfuscated.",
+        "cli_analyzing_manifest": "Analyzing AndroidManifest.xml...",
+        "cli_vuln_scan_deobf_prompt": "\n  Scan deobfuscated code for vulnerabilities?",
+        "cli_vuln_scan_code_prompt": "\n  Scan code for vulnerabilities?",
+        "cli_scanning_vulns": "Scanning for vulnerabilities...",
+        "cli_scanning_vulns_regex": "Scanning for vulnerabilities (regex)...",
+        "cli_retry_regex": "Retrying with internal regex engine...",
+        "cli_gitleaks_stats": "gitleaks: {detected} detected, {discarded} duplicates discarded, {added} added",
+        "cli_error_vuln_scan": "Vulnerability scan error:",
+        "cli_error_leak_scan": "Leak scan error:",
+        "cli_decompiling_pkg": "Decompiling {package}...",
+        "cli_error_decompilation": "\u2718 Decompilation error:",
+
+        # ── Dependency validation ──────────────────────────────────────────────
+        "cli_dep_errors_header": "\u2718 Dependency validation \u2014 Critical errors:",
+        "cli_dep_warnings_header": "\u26a0 Dependency warnings:",
+        "cli_requirements_url": "System requirements: https://github.com/drneox/nutcracker#requirements",
+        "cli_dep_jadx_missing": (
+            "jadx not found. Install with: brew install jadx (macOS) "
+            "or download from https://github.com/skylot/jadx/releases"
+        ),
+        "cli_dep_frida_missing": "frida not installed. Install with: pip install frida frida-tools",
+        "cli_dep_adb_missing": (
+            "adb not found in PATH. Install with: brew install android-platform-tools (macOS) "
+            "or apt install android-tools-adb (Linux)"
+        ),
+        "cli_dep_no_avd": "No AVD available (Android SDK/emulator not found)",
+        "cli_dep_dexdump_warn": "frida-dexdump not found. DEX extraction will be less reliable. Try: pip install frida",
+        "cli_dep_apktool_missing": (
+            "apktool not found. Install with: brew install apktool (macOS) "
+            "or download from https://ibotpeaches.github.io/Apktool/install/"
+        ),
+        "cli_dep_apksigner_warn": "apksigner not found in Android SDK. Gadget injection may fail. Check Android SDK build-tools.",
+        "cli_dep_semgrep_warn": "semgrep not found. Install with: pip install semgrep or pipx install semgrep",
+
+        # ── Batch command ──────────────────────────────────────────────────────
+        "cli_batch_list_missing": "Specify LIST_FILE as argument or set batch.list_file in config.yaml",
+        "cli_batch_file_not_found": "File not found: {path}",
+        "cli_batch_empty_list": "The list is empty. Nothing to scan.",
+        "cli_batch_downloading": "Downloading...",
+        "cli_batch_downloaded": "Downloaded: {name}",
+        "cli_batch_download_error": "\u2718 Download error:",
+        "cli_batch_analyzing": "Analyzing...",
+        "cli_batch_analysis_error": "\u2718 Analysis error:",
+        "cli_batch_summary_header": "Batch summary ({count} processed)",
+        "cli_batch_ok_label": "\u2714 OK:",
+        "cli_batch_errors_label": "\u2718 Errors:",
+        "cli_batch_broken_label": "\u26a0 Protection broken:",
+        "cli_batch_error_targets": "Targets with errors:",
+        "cli_batch_consolidated_report": "Consolidated report:",
+
+        # ── Regen-pdf command ──────────────────────────────────────────────────
+        "cli_regen_pdf_not_found": "reports/{package}.json not found",
+        "cli_regen_pdf_loaded": "Loaded analysis: {package} ({analyzed_at})",
+        "cli_regen_pdf_findings": "Loaded {count} vulnerability findings",
+        "cli_manifest_loaded": "Manifest loaded: {path}",
+        "cli_error_pdf": "Error generating PDF:",
+        "cli_restarting_frida": "Restarting frida-server on device...",
+
+        # ── OSINT report extras ────────────────────────────────────────────────
+        "cli_osint_more": "... and {count} more",
+        "cli_error_osint": "OSINT error:",
+        "cli_apkleaks_failed": "apkleaks failed:",
+        "cli_gitleaks_failed": "gitleaks failed:",
+
         "batch_critical_plus_high": "Critical + High",
         "batch_status_bypass": "Bypass OK",
         "batch_common_findings_title": "Common Findings",
@@ -927,6 +1049,128 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli_smali_files": "   {count} archivos .smali generados",
         "cli_clean_source": "C\u00f3digo fuente limpio: {path} ({count} archivos .java)",
         "cli_batch_scan_header": "Batch scan: {count} objetivo(s) encontrado(s) en {file}",
+
+        # ── CLI download / analyze / launch flow ───────────────────────────────
+        "cli_apk_cached": "APK en cach\u00e9:",
+        "cli_apk_downloaded": "APK descargada:",
+        "cli_apk_deleted": "APK eliminada: {path}",
+        "cli_error_download": "Error en la descarga:",
+        "cli_error_unexpected": "Error inesperado:",
+        "cli_gplay_requires_email": "Google Play requiere [bold]email[/bold] en config.yaml.",
+        "cli_gplay_token_empty": "google_play.aas_token est\u00e1 vac\u00edo. Iniciando asistente de extracci\u00f3n...",
+        "cli_extract_token_not_found": "No se encontr\u00f3 tools/extract_token.py",
+        "cli_token_gen_failed": "No se pudo generar aas_token autom\u00e1ticamente. Vuelve a intentar con [bold]python nutcracker.py setup-token[/bold]",
+        "cli_token_still_empty": "El asistente termin\u00f3 pero aas_token sigue vac\u00edo en config.yaml.",
+        "cli_gplay_run_setup_token": "Ejecuta [bold]python nutcracker.py setup-token[/bold] para configurar el acceso a Google Play.",
+        "cli_downloading_apk": "Descargando APK...",
+        "cli_downloading_from": "Descargando desde {label}...",
+        "cli_apk_detected_pkg": "APK detectado \u2014 usando package: [bold]{pkg}[/bold]",
+        "cli_script_not_found": "Script no encontrado: {script}",
+        "cli_no_bypass_found": (
+            "No se encontr\u00f3 ning\u00fan bypass script para [bold]{pkg}[/bold] en [bold]{scripts_dir}/[/bold].\n"
+            "  Genera uno primero con: [cyan]python nutcracker.py analyze <apk>[/cyan]"
+        ),
+        "cli_analyzing_apk": "Analizando APK...",
+        "cli_error_analysis": "Error en el an\u00e1lisis:",
+        "cli_elapsed": "Tiempo total de an\u00e1lisis",
+        "cli_elapsed_batch": "Tiempo total de ejecuci\u00f3n batch",
+
+        # ── Post-analysis flow ─────────────────────────────────────────────────
+        "cli_app_protection_line": "La app [bold]{status} {protection}[/bold].",
+        "cli_dexguard_device_warn": "[bold]DexGuard/Arxan detectado[/bold] \u2014 en dispositivo f\u00edsico se usar\u00e1 flujo FART/manual.",
+        "cli_dexguard_emulator_warn": "[bold]DexGuard/Arxan detectado[/bold] \u2014 frida-dexdump produce c\u00f3digo m\u00e1s legible que jadx directo.",
+        "cli_runtime_pipeline_info": "Pipeline configurado: decompilaci\u00f3n runtime para app sin protecci\u00f3n detectada.",
+        "cli_include_bypass_prompt": "  \u00bfIncluir bypass anti-root en el script Frida?",
+        "cli_bypass_script_generated": "Script bypass generado:",
+        "cli_error_bypass": "Error generando bypass:",
+        "cli_fart_prompt_device": "  \u00bfUsar extracci\u00f3n runtime FART en dispositivo f\u00edsico?",
+        "cli_fart_prompt_emulator": "  \u00bfUsar frida-dexdump para extraer DEX de memoria?",
+        "cli_gen_bypass_prompt": "  \u00bfGenerar script de bypass Frida?",
+        "cli_frida_script_generated": "Script Frida generado:",
+        "cli_decompile_jadx_prompt": "  \u00bfDecompilar el APK con jadx?",
+        "cli_fallback_jadx_disabled": "  pipelines.protected.fallback_jadx=false \u2014 no se decompila si no se pudo romper la protecci\u00f3n.",
+        "cli_skip_runtime_fallback_jadx": "Saltando desofuscaci\u00f3n runtime. Se usar\u00e1 jadx para decompilaci\u00f3n est\u00e1tica.",
+        "cli_no_avd_using_device": "strategies.runtime_target=emulator, pero no hay AVD disponible. Usando dispositivo f\u00edsico.",
+        "cli_no_physical_device": "runtime_target=device, pero no hay dispositivo f\u00edsico conectado. Conecta un equipo por ADB o cambia runtime_target.",
+        "cli_fart_mode_unattended": "\n[bold]Modo de ejecuci\u00f3n FART:[/bold]  [cyan]Emulador Android autom\u00e1tico[/cyan] [dim](auto.unattended)[/dim]\n",
+        "cli_fart_mode_choice": (
+            "\n[bold]Modo de ejecuci\u00f3n FART:[/bold]\n"
+            "  [cyan][A][/cyan] Emulador Android autom\u00e1tico ({avd_count} AVD disponible)\n"
+            "  [cyan][B][/cyan] Dispositivo f\u00edsico (manual)\n"
+        ),
+        "cli_fart_choose_prompt": "  Elige [A/B]",
+        "cli_no_emulator_using_device": "No hay emulador disponible (SDK/AVD no encontrado). Se usar\u00e1 dispositivo f\u00edsico.",
+        "cli_fart_script_error": "Error generando script FART:",
+        "cli_runtime_extraction_failed": "Extracci\u00f3n runtime fallida. Fallback a decompilaci\u00f3n est\u00e1tica con jadx.",
+
+        # ── Decompile-and-scan ─────────────────────────────────────────────────
+        "cli_decompiling_dex_jadx": "Decompilando DEX volcados con jadx...",
+        "cli_error_decompiling_dex": "\u2718 Error decompilando:",
+        "cli_strings_replaced": "{count} strings reemplazadas con decrypt_map.txt",
+        "cli_decrypt_map_not_found": "decrypt_map.txt no encontrado \u2014 strings pueden seguir ofuscadas.",
+        "cli_analyzing_manifest": "Analizando AndroidManifest.xml...",
+        "cli_vuln_scan_deobf_prompt": "\n  \u00bfEscanear el c\u00f3digo desofuscado en busca de vulnerabilidades?",
+        "cli_vuln_scan_code_prompt": "\n  \u00bfEscanear el c\u00f3digo en busca de vulnerabilidades?",
+        "cli_scanning_vulns": "Escaneando vulnerabilidades...",
+        "cli_scanning_vulns_regex": "Escaneando vulnerabilidades (regex)...",
+        "cli_retry_regex": "Reintentando con el motor regex interno...",
+        "cli_gitleaks_stats": "gitleaks: {detected} detectado(s), {discarded} duplicados descartados, {added} a\u00f1adido(s)",
+        "cli_error_vuln_scan": "Error en el scan de vulnerabilidades:",
+        "cli_error_leak_scan": "Error en leak scan:",
+        "cli_decompiling_pkg": "Decompilando {package}...",
+        "cli_error_decompilation": "\u2718 Error en decompilaci\u00f3n:",
+
+        # ── Dependency validation ──────────────────────────────────────────────
+        "cli_dep_errors_header": "\u2718 Validaci\u00f3n de dependencias \u2014 Errores cr\u00edticos:",
+        "cli_dep_warnings_header": "\u26a0 Advertencias de dependencias:",
+        "cli_requirements_url": "Requisitos del sistema: https://github.com/drneox/nutcracker#requisitos",
+        "cli_dep_jadx_missing": (
+            "jadx no encontrado. Instala con: brew install jadx (macOS) "
+            "o descarga desde https://github.com/skylot/jadx/releases"
+        ),
+        "cli_dep_frida_missing": "frida no est\u00e1 instalado. Instala con: pip install frida frida-tools",
+        "cli_dep_adb_missing": (
+            "adb no encontrado en PATH. Instala con: brew install android-platform-tools (macOS) "
+            "o apt install android-tools-adb (Linux)"
+        ),
+        "cli_dep_no_avd": "No hay AVD disponible (Android SDK/emulator no encontrado)",
+        "cli_dep_dexdump_warn": "frida-dexdump no encontrado. La extracci\u00f3n de DEX ser\u00e1 menos confiable. Intenta: pip install frida",
+        "cli_dep_apktool_missing": (
+            "apktool no encontrado. Instala con: brew install apktool (macOS) "
+            "o descarga desde https://ibotpeaches.github.io/Apktool/install/"
+        ),
+        "cli_dep_apksigner_warn": "apksigner no encontrado en Android SDK. Gadget injection podr\u00eda fallar. Verifica Android SDK build-tools.",
+        "cli_dep_semgrep_warn": "semgrep no encontrado. Instala con: pip install semgrep o pipx install semgrep",
+
+        # ── Batch command ──────────────────────────────────────────────────────
+        "cli_batch_list_missing": "Indica LIST_FILE como argumento o define batch.list_file en config.yaml",
+        "cli_batch_file_not_found": "No se encuentra el archivo: {path}",
+        "cli_batch_empty_list": "La lista est\u00e1 vac\u00eda. No hay nada que escanear.",
+        "cli_batch_downloading": "Descargando...",
+        "cli_batch_downloaded": "Descargada: {name}",
+        "cli_batch_download_error": "\u2718 Error descarga:",
+        "cli_batch_analyzing": "Analizando...",
+        "cli_batch_analysis_error": "\u2718 Error an\u00e1lisis:",
+        "cli_batch_summary_header": "Resumen batch ({count} procesados)",
+        "cli_batch_ok_label": "\u2714 OK:",
+        "cli_batch_errors_label": "\u2718 Errores:",
+        "cli_batch_broken_label": "\u26a0 Protecci\u00f3n rota:",
+        "cli_batch_error_targets": "Targets con error:",
+        "cli_batch_consolidated_report": "Reporte consolidado:",
+
+        # ── Regen-pdf command ──────────────────────────────────────────────────
+        "cli_regen_pdf_not_found": "No se encontr\u00f3 reports/{package}.json",
+        "cli_regen_pdf_loaded": "Cargado an\u00e1lisis: {package} ({analyzed_at})",
+        "cli_regen_pdf_findings": "Cargados {count} hallazgos de vulnerabilidades",
+        "cli_manifest_loaded": "Manifest cargado: {path}",
+        "cli_error_pdf": "Error generando PDF:",
+        "cli_restarting_frida": "Reiniciando frida-server en el dispositivo...",
+
+        # ── OSINT report extras ────────────────────────────────────────────────
+        "cli_osint_more": "... y {count} m\u00e1s",
+        "cli_error_osint": "Error en OSINT:",
+        "cli_apkleaks_failed": "apkleaks fall\u00f3:",
+        "cli_gitleaks_failed": "gitleaks fall\u00f3:",
 
         "batch_critical_plus_high": "Criticos + Altos",
         "batch_status_bypass": "Bypass OK",
