@@ -369,7 +369,7 @@ def _print_banner() -> None:
     ver = Text()
     ver.append("v0.1", style="dim green")
     ver.append(" · ", style="dim")
-    ver.append("github.com/drneox/nutcracker", style="dim red")
+    ver.append("nutcracker.sh", style="dim red link https://nutcracker.sh")
     right[min(5, n - 1)] = ver
 
     combined = Text()
