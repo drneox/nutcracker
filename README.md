@@ -36,7 +36,10 @@ domains, endpoints and extracted secrets (subdomains via crt.sh, public leaks on
 All findings are consolidated into a technical PDF report ready for reporting.
 
 ---
+## ⚠️ Legal Disclaimer 
 
+> Nutcracker is intended for security research, penetration testing, and educational purposes only. Use this tool exclusively on applications you own or have explicit written authorization to test. Unauthorized analysis of third-party applications may violate local laws, international regulations, and app store terms of service. The authors assume no liability for misuse or any damage caused by this tool. Use responsibly.
+---
 ## Key Features
 
 - Downloads APKs from Google Play (via apkeep + AAS token), APKPure or direct URL
@@ -47,7 +50,7 @@ All findings are consolidated into a technical PDF report ready for reporting.
 - Optional Frida Gadget instrumentation as an embedded fallback path
 - Vulnerability scanner: semgrep (OWASP MASTG) + 38 internal regex rules
 - Configurable leak/secret search: internal HC rules + apkleaks + gitleaks on decompiled code and original APK
-- Optional OSINT module: subdomains via crt.sh, public leaks on GitHub/Postman/FOFA/Wayback, false-positive filter and optional web searches via DuckDuckGo
+- Optional OSINT module: subdomains via crt.sh, public leaks on GitHub/Postman/FOFA/Shodan/Wayback, false-positive filter and optional web searches via DuckDuckGo
 - AndroidManifest.xml analysis: dangerous permissions, exported components, `network security config` and insecure configurations
 - Complete PDF report: cover page, executive summary, anti-root, RASP bypass, insecure configurations, leaks, OSINT and vulnerabilities
 - Batch mode to scan multiple apps in sequence
