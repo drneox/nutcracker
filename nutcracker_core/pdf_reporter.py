@@ -816,7 +816,7 @@ def _render_leak_table(pdf: APKReportPDF, items: "list") -> None:
     pdf.set_text_color(255, 255, 255)
     pdf.cell(w_plat, row_h, _safe(t("osint_platform")), fill=True,
              new_x=XPos.RIGHT, new_y=YPos.TOP)
-    pdf.cell(w_title, row_h, _safe(t("osint_title_col")), fill=True,
+    pdf.cell(w_title, row_h, _safe(t("osint_asset_col")), fill=True,
              new_x=XPos.RIGHT, new_y=YPos.TOP)
     pdf.cell(w_link, row_h, _safe(t("osint_link")), fill=True,
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -957,9 +957,13 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
         if pdf.will_page_break(20):
             pdf.add_page()
 
+        total_cves = sum(len(l.vulns) for l in exposed)
+        title = t("osint_exposed_assets_title", count=len(exposed))
+        if total_cves:
+            title += t("osint_exposed_assets_cves", count=total_cves)
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*C["warning"])
-        pdf.cell(0, 7, _safe(t("osint_exposed_assets_title", count=len(exposed))),
+        pdf.cell(0, 7, _safe(title),
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
         pdf.ln(1)
