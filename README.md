@@ -36,7 +36,10 @@ domains, endpoints and extracted secrets (subdomains via crt.sh, public leaks on
 All findings are consolidated into a technical PDF report ready for reporting.
 
 ---
+## ⚠️ Legal Disclaimer 
 
+> Nutcracker is intended for security research, penetration testing, and educational purposes only. Use this tool exclusively on applications you own or have explicit written authorization to test. Unauthorized analysis of third-party applications may violate local laws, international regulations, and app store terms of service. The authors assume no liability for misuse or any damage caused by this tool. Use responsibly.
+---
 ## Key Features
 
 - Downloads APKs from Google Play (via apkeep + AAS token), APKPure or direct URL
