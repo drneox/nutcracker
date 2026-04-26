@@ -1200,6 +1200,8 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
     github_token = cfg_get(_CFG, "osint", "github_token", default="") or None
     fofa_search = bool(cfg_get(_CFG, "osint", "fofa_search", default=False))
     fofa_key = cfg_get(_CFG, "osint", "fofa_key", default="") or None
+    shodan_search = bool(cfg_get(_CFG, "osint", "shodan_search", default=False))
+    shodan_key = cfg_get(_CFG, "osint", "shodan_key", default="") or None
     postman_search = bool(cfg_get(_CFG, "osint", "postman_search", default=True))
     execute_dorks_flag = bool(cfg_get(_CFG, "osint", "execute_dorks", default=False))
     dork_engines_cfg = cfg_get(_CFG, "osint", "dork_engines", default=["duckduckgo"])
@@ -1229,6 +1231,8 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
                 github_token=github_token,
                 fofa_search=fofa_search,
                 fofa_key=fofa_key,
+                shodan_search=shodan_search,
+                shodan_key=shodan_key,
                 postman_search=postman_search,
                 execute_dorks_flag=execute_dorks_flag,
                 dork_engines=dork_engines,

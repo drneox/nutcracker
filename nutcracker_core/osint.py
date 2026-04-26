@@ -524,6 +524,7 @@ def search_postman(
 _GITHUB_API_URL = "https://api.github.com/search/code"
 _GITHUB_SEARCH_URL = "https://github.com/search"
 _FOFA_API_URL = "https://fofa.info/api/v1/search/all"
+_SHODAN_SEARCH_URL = "https://api.shodan.io/shodan/host/search"
 
 
 def search_github_code(
@@ -767,7 +768,125 @@ def search_fofa(
     return results
 
 
-# ── 4. Generación de dorks ────────────────────────────────────────────────────
+def search_shodan(
+    queries: list[str],
+    *,
+    shodan_key: str,
+    progress_callback=None,
+) -> list[PublicLeak]:
+    """
+    Busca activos expuestos en Shodan a partir de dominios propios.
+
+    Usa la API REST `shodan/host/search` con los campos hostname, ip, port,
+    product, version, os, transport y vulns (CVEs con CVSS).
+    Requiere API key de pago para acceder al campo `vulns`.
+    """
+    if not shodan_key:
+        return []
+
+    results: list[PublicLeak] = []
+
+    for query in queries:
+        if progress_callback:
+            progress_callback(t("osint_shodan_searching", query=query))
+
+        shodan_query = f'hostname:"{query}"'
+
+        try:
+            resp = requests.get(
+                _SHODAN_SEARCH_URL,
+                params={
+                    "key": shodan_key,
+                    "query": shodan_query,
+                    "minify": "false",
+                },
+                headers={"User-Agent": _USER_AGENT},
+                timeout=_REQUESTS_TIMEOUT,
+            )
+            if resp.status_code == 401:
+                import sys
+                print("[Shodan] API key invalida o sin permisos.", file=sys.stderr)
+                if progress_callback:
+                    progress_callback(t("osint_shodan_error", err="invalid API key"))
+                break
+            if resp.status_code != 200:
+                continue
+
+            data = resp.json()
+
+            if "error" in data:
+                errmsg = data["error"]
+                import sys
+                print(f"[Shodan] Error API: {errmsg}", file=sys.stderr)
+                if progress_callback:
+                    progress_callback(t("osint_shodan_error", err=errmsg))
+                continue
+
+            for match in data.get("matches", []):
+                ip_addr = match.get("ip_str", "")
+                port = str(match.get("port", ""))
+                transport = match.get("transport", "")
+                product = match.get("product", "") or ""
+                version = match.get("version", "") or ""
+                os_name = match.get("os", "") or ""
+                hostnames = match.get("hostnames", []) or []
+
+                # vulns: dict {CVE-XXXX-XXXX: {cvss: float, summary: str, ...}}
+                raw_vulns = match.get("vulns", {}) or {}
+                cve_list = sorted(raw_vulns.keys()) if isinstance(raw_vulns, dict) else []
+
+                host = hostnames[0] if hostnames else ""
+                url = host or (f"{ip_addr}:{port}" if ip_addr else "")
+                if not url:
+                    continue
+                if not _result_mentions_query(query, host, ip_addr, *hostnames):
+                    continue
+
+                # Construir snippet enriquecido
+                parts = [f"ip={ip_addr}", f"port={port}"]
+                if transport:
+                    parts.append(f"proto={transport}")
+                if product:
+                    prod_str = f"product={product}"
+                    if version:
+                        prod_str += f" {version}"
+                    parts.append(prod_str)
+                if os_name:
+                    parts.append(f"os={os_name}")
+                if cve_list:
+                    # Mostrar los 3 CVEs con mayor CVSS primero
+                    sorted_cves = sorted(
+                        cve_list,
+                        key=lambda c: float(raw_vulns[c].get("cvss", 0) or 0),
+                        reverse=True,
+                    )
+                    parts.append("CVEs: " + ", ".join(sorted_cves[:5]))
+                    if len(sorted_cves) > 5:
+                        parts.append(f"(+{len(sorted_cves) - 5} more)")
+                snippet = " | ".join(p for p in parts if p.strip(" ="))
+
+                results.append(PublicLeak(
+                    source="shodan",
+                    query=query,
+                    url=url,
+                    title=host or f"{ip_addr}:{port}",
+                    snippet=snippet,
+                    vulns=cve_list,
+                ))
+
+        except (requests.RequestException, json.JSONDecodeError, ValueError):
+            continue
+
+        time.sleep(1)  # respetar rate limit
+
+    vuln_count = sum(len(r.vulns) for r in results)
+    if progress_callback:
+        msg = t("osint_shodan_results", count=len(results))
+        if vuln_count:
+            msg += t("osint_shodan_cves_detected", count=vuln_count)
+        progress_callback(msg)
+
+    return results
 
 # DuckDuckGo HTML endpoint (no requiere auth).
 _DUCKDUCKGO_URL = "https://html.duckduckgo.com/html/"
@@ -1361,6 +1480,8 @@ def run_osint(
     github_token: str | None = None,
     fofa_search: bool = False,
     fofa_key: str | None = None,
+    shodan_search: bool = False,
+    shodan_key: str | None = None,
     postman_search: bool = True,
     execute_dorks_flag: bool = False,
     dork_engines: list[str] | None = None,
@@ -1452,6 +1573,15 @@ def run_osint(
             search_fofa(
                 domains,
                 fofa_key=fofa_key,
+                progress_callback=progress_callback,
+            )
+        )
+
+    if shodan_search and shodan_key:
+        result.public_leaks.extend(
+            search_shodan(
+                domains,
+                shodan_key=shodan_key,
                 progress_callback=progress_callback,
             )
         )
