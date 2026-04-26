@@ -78,11 +78,12 @@ class Subdomain:
 @dataclass
 class PublicLeak:
     """Un leak encontrado en fuentes públicas."""
-    source: str        # "github" | "postman"
+    source: str        # "github" | "postman" | "fofa"
     query: str
     url: str
     title: str
     snippet: str = ""
+    vulns: list[str] = field(default_factory=list)  # CVEs de FOFA
 
 
 @dataclass
@@ -110,7 +111,8 @@ class OsintResult:
             ],
             "public_leaks": [
                 {"source": l.source, "query": l.query, "url": l.url,
-                 "title": l.title, "snippet": l.snippet}
+                 "title": l.title, "snippet": l.snippet,
+                 "vulns": l.vulns}
                 for l in self.public_leaks
             ],
             "domains_scanned": self.domains_scanned,
@@ -649,13 +651,15 @@ def search_fofa(
     Busca activos expuestos en FOFA a partir de dominios propios.
 
     Usa la API `search/all` con `key` y `qbase64`. Devuelve hasta 10
-    resultados por query con los campos `host,ip,port,title`.
+    resultados por query con los campos `host,ip,port,title,cve_id`.
+    El campo `cve_id` contiene CVEs asociadas al activo (requiere plan
+    Enterprise de FOFA; se omite silenciosamente si no está disponible).
     """
     if not fofa_key:
         return []
 
     results: list[PublicLeak] = []
-    fields = "host,ip,port,title"
+    fields = "host,ip,port,title,cve_id"
 
     for query in queries:
         if progress_callback:
@@ -692,32 +696,49 @@ def search_fofa(
                 if not isinstance(item, list) or len(item) < 4:
                     continue
 
-                host, ip_addr, port, title = item[0], item[1], item[2], item[3]
-                title = title or ""
-                host = host or ""
-                ip_addr = ip_addr or ""
-                port = str(port or "")
-                url = host or (f"{ip_addr}:{port}" if ip_addr else "")
+                host = item[0] or ""
+                ip_addr = item[1] or ""
+                port = str(item[2] or "")
+                title = item[3] or ""
 
+                # cve_id puede ser string CSV o lista; normalizar a lista
+                raw_cve = item[4] if len(item) > 4 else ""
+                if isinstance(raw_cve, list):
+                    cve_list = [c.strip() for c in raw_cve if c and c.strip()]
+                elif isinstance(raw_cve, str) and raw_cve.strip():
+                    cve_list = [c.strip() for c in raw_cve.split(",") if c.strip()]
+                else:
+                    cve_list = []
+
+                url = host or (f"{ip_addr}:{port}" if ip_addr else "")
                 if not url:
                     continue
                 if not _result_mentions_query(query, host, ip_addr, title, url):
                     continue
+
+                snippet = f"ip={ip_addr} port={port}".strip()
+                if cve_list:
+                    snippet += " | CVEs: " + ", ".join(cve_list)
 
                 results.append(PublicLeak(
                     source="fofa",
                     query=query,
                     url=url,
                     title=title or f"{host or ip_addr}:{port}".strip(":"),
-                    snippet=f"ip={ip_addr} port={port}".strip(),
+                    snippet=snippet,
+                    vulns=cve_list,
                 ))
         except (requests.RequestException, json.JSONDecodeError, ValueError):
             continue
 
         time.sleep(1)
 
+    vuln_count = sum(len(r.vulns) for r in results)
     if progress_callback:
-        progress_callback(t("osint_fofa_results", count=len(results)))
+        msg = t("osint_fofa_results", count=len(results))
+        if vuln_count:
+            msg += t("osint_fofa_cves_detected", count=vuln_count)
+        progress_callback(msg)
 
     return results
 
