@@ -182,6 +182,7 @@ def _cover_page(
     result: "AnalysisResult",
     scan: "ScanResult | None" = None,
     manifest: "ManifestAnalysisResult | None" = None,
+    osint: "OsintResult | None" = None,
 ) -> None:
     # Fondo oscuro superior
     pdf.set_fill_color(*C["bg"])
@@ -296,6 +297,13 @@ def _cover_page(
     total_modules = len(result.results)
     misconfig_count = len(manifest.misconfigurations) if manifest else 0
 
+    # Exposed assets (FOFA / Shodan)
+    _exposed_assets: list = []
+    _exposed_cves = 0
+    if osint is not None:
+        _exposed_assets = [l for l in (osint.public_leaks or []) if l.source in ("fofa", "shodan")]
+        _exposed_cves = sum(len(l.vulns) for l in _exposed_assets)
+
     pdf.set_y(pdf.get_y() + 2)
 
     # Sub-etiqueta de estado para la tarjeta de Protecciones
@@ -306,6 +314,10 @@ def _cover_page(
     else:
         _prot_sub = None
 
+    _exposed_sub: tuple | None = (
+        t("exposed_assets_card_cves", count=_exposed_cves), C["danger"]
+    ) if _exposed_cves else None
+
     counts = [
         (t("protections_card"), f"{detected_count} / {total_modules}",
          (150, 150, 150), _prot_sub),
@@ -315,9 +327,11 @@ def _cover_page(
          C["danger"] if leaks else C["success"], None),
         (t("vulns_card"), str(len(vulns)),
          C["danger"] if vulns else C["success"], None),
+        (t("exposed_assets_card"), str(len(_exposed_assets)),
+         C["warning"] if _exposed_assets else C["success"], _exposed_sub),
     ]
 
-    card_w = 38
+    card_w = 34
     card_h = 18
     card_gap = 4
     total_w = card_w * len(counts) + card_gap * (len(counts) - 1)
@@ -1273,7 +1287,7 @@ def generate_pdf_report(
 
     # 1. Portada + Resumen
     pdf.add_page()
-    _cover_page(pdf, result, scan=scan, manifest=manifest)
+    _cover_page(pdf, result, scan=scan, manifest=manifest, osint=osint)
 
     # 2. Protecciones descubiertas
     _protections_section(pdf, result)
