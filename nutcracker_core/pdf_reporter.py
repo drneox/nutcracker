@@ -154,8 +154,8 @@ class APKReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  https://github.com/drneox/nutcracker",
-                  align="L")
+        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  nutcracker.sh",
+                  align="L", link="https://nutcracker.sh")
         self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
     def section_title(self, text: str) -> None:
@@ -182,6 +182,7 @@ def _cover_page(
     result: "AnalysisResult",
     scan: "ScanResult | None" = None,
     manifest: "ManifestAnalysisResult | None" = None,
+    osint: "OsintResult | None" = None,
 ) -> None:
     # Fondo oscuro superior
     pdf.set_fill_color(*C["bg"])
@@ -195,7 +196,8 @@ def _cover_page(
 
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*C["muted"])
-    pdf.cell(0, 5, "https://github.com/drneox/nutcracker", align="C",
+    pdf.cell(0, 5, "nutcracker.sh", align="C",
+             link="https://nutcracker.sh",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_font("Helvetica", "", 11)
@@ -295,6 +297,13 @@ def _cover_page(
     total_modules = len(result.results)
     misconfig_count = len(manifest.misconfigurations) if manifest else 0
 
+    # Exposed assets (FOFA / Shodan)
+    _exposed_assets: list = []
+    _exposed_cves = 0
+    if osint is not None:
+        _exposed_assets = [l for l in (osint.public_leaks or []) if l.source in ("fofa", "shodan")]
+        _exposed_cves = sum(len(l.vulns) for l in _exposed_assets)
+
     pdf.set_y(pdf.get_y() + 2)
 
     # Sub-etiqueta de estado para la tarjeta de Protecciones
@@ -305,6 +314,10 @@ def _cover_page(
     else:
         _prot_sub = None
 
+    _exposed_sub: tuple | None = (
+        t("exposed_assets_card_cves", count=_exposed_cves), C["danger"]
+    ) if _exposed_cves else None
+
     counts = [
         (t("protections_card"), f"{detected_count} / {total_modules}",
          (150, 150, 150), _prot_sub),
@@ -314,9 +327,11 @@ def _cover_page(
          C["danger"] if leaks else C["success"], None),
         (t("vulns_card"), str(len(vulns)),
          C["danger"] if vulns else C["success"], None),
+        (t("exposed_assets_card"), str(len(_exposed_assets)),
+         C["warning"] if _exposed_assets else C["success"], _exposed_sub),
     ]
 
-    card_w = 38
+    card_w = 34
     card_h = 18
     card_gap = 4
     total_w = card_w * len(counts) + card_gap * (len(counts) - 1)
@@ -803,6 +818,71 @@ def _findings_section(
         pdf.ln(3)
 
 
+def _render_leak_table(pdf: APKReportPDF, items: "list") -> None:
+    """Renderiza una tabla de PublicLeak (activos o leaks). Reutilizable."""
+    w_plat = 22
+    w_title = pdf.epw - w_plat - 70
+    w_link = 70
+    row_h = 5
+
+    pdf.set_font("Helvetica", "B", 7)
+    pdf.set_fill_color(*C["accent"])
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(w_plat, row_h, _safe(t("osint_platform")), fill=True,
+             new_x=XPos.RIGHT, new_y=YPos.TOP)
+    pdf.cell(w_title, row_h, _safe(t("osint_asset_col")), fill=True,
+             new_x=XPos.RIGHT, new_y=YPos.TOP)
+    pdf.cell(w_link, row_h, _safe(t("osint_link")), fill=True,
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(*C["text"])
+
+    for idx, leak in enumerate(items):
+        has_snippet = bool(leak.snippet)
+        row_needed = row_h + (4 if has_snippet else 0)
+        if pdf.will_page_break(row_needed + 2):
+            pdf.add_page()
+        bg = C["row_alt"] if idx % 2 else C["row_normal"]
+        has_vulns = bool(getattr(leak, "vulns", None))
+        if has_vulns:
+            bg = (255, 243, 230)  # warm orange tint
+        pdf.set_fill_color(*bg)
+
+        pdf.set_font("Helvetica", "B", 6.5)
+        pdf.cell(w_plat, row_h, _safe(leak.source), fill=True,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP)
+
+        pdf.set_font("Helvetica", "", 6.5)
+        pdf.cell(w_title, row_h, _safe(leak.title[:60]), fill=True,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP)
+
+        if leak.url and not leak.url.startswith("{{"):
+            pdf.set_font("Helvetica", "U", 6)
+            pdf.set_text_color(*C["info"])
+            pdf.cell(w_link, row_h, _safe(leak.url[:55]),
+                     fill=True, link=leak.url,
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_text_color(*C["text"])
+        else:
+            pdf.set_font("Helvetica", "I", 6)
+            pdf.set_text_color(*C["muted"])
+            pdf.cell(w_link, row_h, "N/A", fill=True,
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_text_color(*C["text"])
+
+        if has_snippet:
+            pdf.set_fill_color(*bg)
+            pdf.set_font("Helvetica", "I", 5.5)
+            snippet_color = C["danger"] if has_vulns else C["muted"]
+            pdf.set_text_color(*snippet_color)
+            pdf.cell(w_plat, 4, "", fill=True,
+                     new_x=XPos.RIGHT, new_y=YPos.TOP)
+            pdf.cell(w_title + w_link, 4,
+                     _safe(leak.snippet[:110]),
+                     fill=True,
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_text_color(*C["text"])
+
+
 def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
     """Sección OSINT: dominios, subdominios y leaks públicos."""
     pdf.add_page()
@@ -811,8 +891,12 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
     parts: list[str] = []
     if osint.subdomains:
         parts.append(t("osint_subdomains_count", count=len(osint.subdomains)))
-    if osint.public_leaks:
-        parts.append(t("osint_public_leaks_count", count=len(osint.public_leaks)))
+    exposed = [l for l in osint.public_leaks if l.source in ("fofa", "shodan")]
+    leaks   = [l for l in osint.public_leaks if l.source not in ("fofa", "shodan")]
+    if exposed:
+        parts.append(t("osint_exposed_assets_count", count=len(exposed)))
+    if leaks:
+        parts.append(t("osint_public_leaks_count", count=len(leaks)))
     summary = " \u00b7 ".join(parts) if parts else t("osint_no_findings")
     pdf.section_title(f"OSINT  ({summary})")
 
@@ -882,63 +966,42 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
             pdf.set_text_color(*C["text"])
         pdf.ln(4)
 
-    # ── Leaks públicos ────────────────────────────────────────────────────
-    if osint.public_leaks:
+    # ── Activos expuestos (FOFA / Shodan) ─────────────────────────────────
+    if exposed:
+        if pdf.will_page_break(20):
+            pdf.add_page()
+
+        total_cves = sum(len(l.vulns) for l in exposed)
+        base_title = t("osint_exposed_assets_title", count=len(exposed))
+        cve_suffix = t("osint_exposed_assets_cves", count=total_cves) if total_cves else ""
+        pdf.set_font("Helvetica", "B", 9)
+        if cve_suffix:
+            pdf.set_text_color(*C["warning"])
+            pdf.cell(pdf.get_string_width(_safe(base_title)), 7, _safe(base_title), new_x=XPos.RIGHT, new_y=YPos.LAST)
+            pdf.set_text_color(*C["danger"])
+            pdf.cell(0, 7, _safe(cve_suffix), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        else:
+            pdf.set_text_color(*C["warning"])
+            pdf.cell(0, 7, _safe(base_title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_text_color(*C["text"])
+        pdf.ln(1)
+
+        _render_leak_table(pdf, exposed)
+        pdf.ln(4)
+
+    # ── Leaks públicos (GitHub / Postman / Wayback / …) ───────────────────
+    if leaks:
         if pdf.will_page_break(20):
             pdf.add_page()
 
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*C["danger"])
-        pdf.cell(0, 7, _safe(t("osint_public_leaks_title", count=len(osint.public_leaks))),
+        pdf.cell(0, 7, _safe(t("osint_public_leaks_title", count=len(leaks))),
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
         pdf.ln(1)
 
-        # Table header
-        w_plat = 22
-        w_title = pdf.epw - w_plat - 70
-        w_link = 70
-        row_h = 5
-
-        pdf.set_font("Helvetica", "B", 7)
-        pdf.set_fill_color(*C["accent"])
-        pdf.set_text_color(255, 255, 255)
-        pdf.cell(w_plat, row_h, _safe(t("osint_platform")), fill=True,
-                 new_x=XPos.RIGHT, new_y=YPos.TOP)
-        pdf.cell(w_title, row_h, _safe(t("osint_title_col")), fill=True,
-                 new_x=XPos.RIGHT, new_y=YPos.TOP)
-        pdf.cell(w_link, row_h, _safe(t("osint_link")), fill=True,
-                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.set_text_color(*C["text"])
-
-        for idx, leak in enumerate(osint.public_leaks):
-            if pdf.will_page_break(6):
-                pdf.add_page()
-            bg = C["row_alt"] if idx % 2 else C["row_normal"]
-            pdf.set_fill_color(*bg)
-
-            pdf.set_font("Helvetica", "B", 6.5)
-            pdf.cell(w_plat, row_h, _safe(leak.source), fill=True,
-                     new_x=XPos.RIGHT, new_y=YPos.TOP)
-
-            pdf.set_font("Helvetica", "", 6.5)
-            pdf.cell(w_title, row_h, _safe(leak.title[:60]), fill=True,
-                     new_x=XPos.RIGHT, new_y=YPos.TOP)
-
-            if leak.url and not leak.url.startswith("{{"):
-                pdf.set_font("Helvetica", "U", 6)
-                pdf.set_text_color(*C["info"])
-                pdf.cell(w_link, row_h, _safe(leak.url[:55]),
-                         fill=True, link=leak.url,
-                         new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.set_text_color(*C["text"])
-            else:
-                pdf.set_font("Helvetica", "I", 6)
-                pdf.set_text_color(*C["muted"])
-                pdf.cell(w_link, row_h, "N/A", fill=True,
-                         new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.set_text_color(*C["text"])
-
+        _render_leak_table(pdf, leaks)
         pdf.ln(3)
 
     # ── Auth flows ────────────────────────────────────────────────────────
@@ -1224,7 +1287,7 @@ def generate_pdf_report(
 
     # 1. Portada + Resumen
     pdf.add_page()
-    _cover_page(pdf, result, scan=scan, manifest=manifest)
+    _cover_page(pdf, result, scan=scan, manifest=manifest, osint=osint)
 
     # 2. Protecciones descubiertas
     _protections_section(pdf, result)
@@ -1283,8 +1346,8 @@ class BatchReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  \u00b7  https://github.com/drneox/nutcracker",
-                  align="L")
+        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  \u00b7  nutcracker.sh",
+                  align="L", link="https://nutcracker.sh")
         self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
     def section_title(self, text: str) -> None:

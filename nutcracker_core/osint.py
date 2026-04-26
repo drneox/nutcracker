@@ -25,6 +25,8 @@ from urllib.parse import quote_plus
 import requests
 from rich.console import Console
 
+from .i18n import t
+
 console = Console()
 
 # ── Constantes ────────────────────────────────────────────────────────────────
@@ -76,11 +78,12 @@ class Subdomain:
 @dataclass
 class PublicLeak:
     """Un leak encontrado en fuentes públicas."""
-    source: str        # "github" | "postman"
+    source: str        # "github" | "postman" | "fofa"
     query: str
     url: str
     title: str
     snippet: str = ""
+    vulns: list[str] = field(default_factory=list)  # CVEs de FOFA
 
 
 @dataclass
@@ -108,7 +111,8 @@ class OsintResult:
             ],
             "public_leaks": [
                 {"source": l.source, "query": l.query, "url": l.url,
-                 "title": l.title, "snippet": l.snippet}
+                 "title": l.title, "snippet": l.snippet,
+                 "vulns": l.vulns}
                 for l in self.public_leaks
             ],
             "domains_scanned": self.domains_scanned,
@@ -179,7 +183,7 @@ def extract_buildconfig_secrets(
     buildconfig_files: list[Path] = []
 
     if progress_callback:
-        progress_callback("Buscando archivos BuildConfig...")
+        progress_callback(t("osint_searching_buildconfig"))
 
     # BuildConfig normales
     for f in source_dir.rglob("BuildConfig.java"):
@@ -208,7 +212,7 @@ def extract_buildconfig_secrets(
                 buildconfig_files.append(f)
 
     if progress_callback:
-        progress_callback(f"Analizando {len(buildconfig_files)} archivos BuildConfig...")
+        progress_callback(t("osint_analyzing_buildconfig", count=len(buildconfig_files)))
 
     for fpath in buildconfig_files:
         try:
@@ -255,7 +259,7 @@ def extract_buildconfig_secrets(
                 })
 
     if progress_callback:
-        progress_callback(f"BuildConfig: {len(secrets)} secretos, {len(auth_flows)} auth flows")
+        progress_callback(t("osint_buildconfig_stats", secrets=len(secrets), auth_flows=len(auth_flows)))
 
     return secrets, auth_flows
 
@@ -327,14 +331,14 @@ def enumerate_subdomains(
                         )
         except (requests.RequestException, json.JSONDecodeError, ValueError):
             if progress_callback:
-                progress_callback(f"crt.sh: error consultando {domain}")
+                progress_callback(t("osint_crtsh_error", domain=domain))
             continue
 
         # Rate limiting cortés
         time.sleep(1)
 
     if progress_callback:
-        progress_callback(f"crt.sh: {len(subdomains)} subdominios encontrados")
+        progress_callback(t("osint_crtsh_found", count=len(subdomains)))
 
     return sorted(subdomains.values(), key=lambda s: s.name)
 
@@ -424,7 +428,7 @@ def search_postman(
 
     for query in queries:
         if progress_callback:
-            progress_callback(f"Postman: buscando '{query}'...")
+            progress_callback(t("osint_postman_searching", query=query))
 
         url = "https://www.postman.com/_api/ws/proxy"
         payload = {
@@ -512,7 +516,7 @@ def search_postman(
         time.sleep(1)
 
     if progress_callback:
-        progress_callback(f"Postman: {len(results)} resultados")
+        progress_callback(t("osint_postman_results", count=len(results)))
 
     return results
 
@@ -520,6 +524,7 @@ def search_postman(
 _GITHUB_API_URL = "https://api.github.com/search/code"
 _GITHUB_SEARCH_URL = "https://github.com/search"
 _FOFA_API_URL = "https://fofa.info/api/v1/search/all"
+_SHODAN_SEARCH_URL = "https://api.shodan.io/shodan/host/search"
 
 
 def search_github_code(
@@ -550,7 +555,7 @@ def search_github_code(
     for query in queries:
         if progress_callback:
             mode = "API" if use_api else "web"
-            progress_callback(f"GitHub ({mode}): buscando '{query}'...")
+            progress_callback(t("osint_github_searching", mode=mode, query=query))
 
         if use_api:
             try:
@@ -564,7 +569,7 @@ def search_github_code(
                     # Rate-limit o scope insuficiente — degradar a web.
                     if progress_callback:
                         progress_callback(
-                            "GitHub API: rate-limit o sin scope, usando modo web"
+                            t("osint_github_ratelimit")
                         )
                     use_api = False
                 elif resp.status_code == 422:
@@ -598,7 +603,7 @@ def search_github_code(
                         ))
                     if progress_callback and total > 10:
                         progress_callback(
-                            f"GitHub: {total} resultados totales para '{query}' (mostrando 10)"
+                            t("osint_github_results_total", total=total, query=query)
                         )
             except requests.RequestException:
                 pass
@@ -632,7 +637,7 @@ def search_github_code(
         time.sleep(2)  # GitHub rate limita agresivamente en ambos modos
 
     if progress_callback:
-        progress_callback(f"GitHub: {len(results)} hallazgos")
+        progress_callback(t("osint_github_results", count=len(results)))
 
     return results
 
@@ -647,80 +652,284 @@ def search_fofa(
     Busca activos expuestos en FOFA a partir de dominios propios.
 
     Usa la API `search/all` con `key` y `qbase64`. Devuelve hasta 10
-    resultados por query con los campos `host,ip,port,title`.
+    resultados por query con los campos:
+      host, ip, port, title, cve_id, product, version, os, protocol
+
+    Requiere plan de pago de FOFA. Los campos enriquecidos (cve_id,
+    product, version, os) se omiten silenciosamente si no están disponibles.
     """
     if not fofa_key:
         return []
 
     results: list[PublicLeak] = []
-    fields = "host,ip,port,title"
+    fields_full  = "host,ip,port,title,cve_id,product,version,os,protocol"
+    fields_basic = "host,ip,port,title,protocol"
+    # Índices según el orden de fields_full
+    _F_HOST, _F_IP, _F_PORT, _F_TITLE = 0, 1, 2, 3
+    _F_CVE, _F_PROD, _F_VER, _F_OS, _F_PROTO = 4, 5, 6, 7, 8
+    _F_PROTO_BASIC = 4  # índice de protocol en fields_basic
+
+    # Si en una query anterior FOFA devolvió 820001 (sin permiso para campos
+    # enriquecidos), pasamos al modo básico para el resto del escaneo.
+    _use_basic = False
 
     for query in queries:
         if progress_callback:
-            progress_callback(f"FOFA: buscando '{query}'...")
+            progress_callback(t("osint_fofa_searching", query=query))
 
         fofa_query = f'domain="{query}" || host="{query}"'
         qbase64 = base64.b64encode(fofa_query.encode("utf-8")).decode("ascii")
 
+        def _do_request(fields_str: str) -> dict | None:
+            try:
+                resp = requests.get(
+                    _FOFA_API_URL,
+                    params={
+                        "key": fofa_key,
+                        "qbase64": qbase64,
+                        "fields": fields_str,
+                        "size": 10,
+                    },
+                    headers={"User-Agent": _USER_AGENT},
+                    timeout=_REQUESTS_TIMEOUT,
+                )
+                if resp.status_code != 200:
+                    return None
+                return resp.json()
+            except (requests.RequestException, json.JSONDecodeError, ValueError):
+                return None
+
         try:
-            resp = requests.get(
-                _FOFA_API_URL,
-                params={
-                    "key": fofa_key,
-                    "qbase64": qbase64,
-                    "fields": fields,
-                    "size": 10,
-                },
-                headers={"User-Agent": _USER_AGENT},
-                timeout=_REQUESTS_TIMEOUT,
-            )
-            if resp.status_code != 200:
+            fields = fields_basic if _use_basic else fields_full
+            data = _do_request(fields)
+            if data is None:
                 continue
 
-            data = resp.json()
+            # Si falta permiso para campos enriquecidos, reintentar con básicos
             if data.get("error"):
                 errmsg = data.get("errmsg") or "error desconocido"
-                import sys
-                print(f"[FOFA] Error API: {errmsg}", file=sys.stderr)
-                if progress_callback:
-                    progress_callback(f"FOFA error: {errmsg}")
-                continue
+                if "820001" in str(errmsg) and not _use_basic:
+                    import sys
+                    print(f"[FOFA] {t('osint_fofa_basic_fields')}", file=sys.stderr)
+                    if progress_callback:
+                        progress_callback(t("osint_fofa_basic_fields"))
+                    _use_basic = True
+                    fields = fields_basic
+                    data = _do_request(fields)
+                    if data is None or data.get("error"):
+                        continue
+                else:
+                    import sys
+                    print(f"[FOFA] Error API: {errmsg}", file=sys.stderr)
+                    if progress_callback:
+                        progress_callback(t("osint_fofa_error", err=errmsg))
+                    continue
 
             for item in data.get("results", []):
                 if not isinstance(item, list) or len(item) < 4:
                     continue
 
-                host, ip_addr, port, title = item[0], item[1], item[2], item[3]
-                title = title or ""
-                host = host or ""
-                ip_addr = ip_addr or ""
-                port = str(port or "")
-                url = host or (f"{ip_addr}:{port}" if ip_addr else "")
+                def _get(idx: int) -> str:
+                    val = item[idx] if len(item) > idx else ""
+                    return str(val).strip() if val else ""
 
+                host = _get(_F_HOST)
+                ip_addr = _get(_F_IP)
+                port = _get(_F_PORT)
+                title = _get(_F_TITLE)
+
+                if _use_basic:
+                    product = version = os_name = ""
+                    protocol = _get(_F_PROTO_BASIC)
+                    cve_list: list[str] = []
+                else:
+                    product = _get(_F_PROD)
+                    version = _get(_F_VER)
+                    os_name = _get(_F_OS)
+                    protocol = _get(_F_PROTO)
+
+                    # cve_id puede ser string CSV o lista; normalizar a lista
+                    raw_cve = item[_F_CVE] if len(item) > _F_CVE else ""
+                    if isinstance(raw_cve, list):
+                        cve_list = [c.strip() for c in raw_cve if c and c.strip()]
+                    elif isinstance(raw_cve, str) and raw_cve.strip():
+                        cve_list = [c.strip() for c in raw_cve.split(",") if c.strip()]
+                    else:
+                        cve_list = []
+
+                url = host or (f"{ip_addr}:{port}" if ip_addr else "")
                 if not url:
                     continue
                 if not _result_mentions_query(query, host, ip_addr, title, url):
                     continue
+
+                # Construir snippet enriquecido
+                parts = [f"ip={ip_addr}", f"port={port}"]
+                if protocol:
+                    parts.append(f"proto={protocol}")
+                if product:
+                    prod_str = f"product={product}"
+                    if version:
+                        prod_str += f" {version}"
+                    parts.append(prod_str)
+                if os_name:
+                    parts.append(f"os={os_name}")
+                if cve_list:
+                    parts.append("CVEs: " + ", ".join(cve_list))
+                snippet = " | ".join(p for p in parts if p.strip(" ="))
 
                 results.append(PublicLeak(
                     source="fofa",
                     query=query,
                     url=url,
                     title=title or f"{host or ip_addr}:{port}".strip(":"),
-                    snippet=f"ip={ip_addr} port={port}".strip(),
+                    snippet=snippet,
+                    vulns=cve_list,
                 ))
-        except (requests.RequestException, json.JSONDecodeError, ValueError):
+        except Exception:
             continue
 
         time.sleep(1)
 
+    vuln_count = sum(len(r.vulns) for r in results)
     if progress_callback:
-        progress_callback(f"FOFA: {len(results)} resultados")
+        msg = t("osint_fofa_results", count=len(results))
+        if vuln_count:
+            msg += t("osint_fofa_cves_detected", count=vuln_count)
+        progress_callback(msg)
 
     return results
 
 
-# ── 4. Generación de dorks ────────────────────────────────────────────────────
+def search_shodan(
+    queries: list[str],
+    *,
+    shodan_key: str,
+    progress_callback=None,
+) -> list[PublicLeak]:
+    """
+    Busca activos expuestos en Shodan a partir de dominios propios.
+
+    Usa la API REST `shodan/host/search` con los campos hostname, ip, port,
+    product, version, os, transport y vulns (CVEs con CVSS).
+    Requiere API key de pago para acceder al campo `vulns`.
+    """
+    if not shodan_key:
+        return []
+
+    results: list[PublicLeak] = []
+
+    for query in queries:
+        if progress_callback:
+            progress_callback(t("osint_shodan_searching", query=query))
+
+        shodan_query = f'hostname:"{query}"'
+
+        try:
+            resp = requests.get(
+                _SHODAN_SEARCH_URL,
+                params={
+                    "key": shodan_key,
+                    "query": shodan_query,
+                    "minify": "false",
+                },
+                headers={"User-Agent": _USER_AGENT},
+                timeout=_REQUESTS_TIMEOUT,
+            )
+            if resp.status_code in (401, 403):
+                import sys
+                # Intentar leer el mensaje de error del cuerpo
+                try:
+                    err_body = resp.json().get("error", "")
+                except Exception:
+                    err_body = ""
+                errmsg = err_body or ("invalid API key" if resp.status_code == 401 else "requires paid membership")
+                print(f"[Shodan] {errmsg}", file=sys.stderr)
+                if progress_callback:
+                    progress_callback(t("osint_shodan_error", err=errmsg))
+                break
+            if resp.status_code != 200:
+                import sys
+                print(f"[Shodan] HTTP {resp.status_code}", file=sys.stderr)
+                if progress_callback:
+                    progress_callback(t("osint_shodan_error", err=f"HTTP {resp.status_code}"))
+                break
+
+            data = resp.json()
+
+            if "error" in data:
+                errmsg = data["error"]
+                import sys
+                print(f"[Shodan] Error API: {errmsg}", file=sys.stderr)
+                if progress_callback:
+                    progress_callback(t("osint_shodan_error", err=errmsg))
+                continue
+
+            for match in data.get("matches", []):
+                ip_addr = match.get("ip_str", "")
+                port = str(match.get("port", ""))
+                transport = match.get("transport", "")
+                product = match.get("product", "") or ""
+                version = match.get("version", "") or ""
+                os_name = match.get("os", "") or ""
+                hostnames = match.get("hostnames", []) or []
+
+                # vulns: dict {CVE-XXXX-XXXX: {cvss: float, summary: str, ...}}
+                raw_vulns = match.get("vulns", {}) or {}
+                cve_list = sorted(raw_vulns.keys()) if isinstance(raw_vulns, dict) else []
+
+                host = hostnames[0] if hostnames else ""
+                url = host or (f"{ip_addr}:{port}" if ip_addr else "")
+                if not url:
+                    continue
+                if not _result_mentions_query(query, host, ip_addr, *hostnames):
+                    continue
+
+                # Construir snippet enriquecido
+                parts = [f"ip={ip_addr}", f"port={port}"]
+                if transport:
+                    parts.append(f"proto={transport}")
+                if product:
+                    prod_str = f"product={product}"
+                    if version:
+                        prod_str += f" {version}"
+                    parts.append(prod_str)
+                if os_name:
+                    parts.append(f"os={os_name}")
+                if cve_list:
+                    # Mostrar los 3 CVEs con mayor CVSS primero
+                    sorted_cves = sorted(
+                        cve_list,
+                        key=lambda c: float(raw_vulns[c].get("cvss", 0) or 0),
+                        reverse=True,
+                    )
+                    parts.append("CVEs: " + ", ".join(sorted_cves[:5]))
+                    if len(sorted_cves) > 5:
+                        parts.append(f"(+{len(sorted_cves) - 5} more)")
+                snippet = " | ".join(p for p in parts if p.strip(" ="))
+
+                results.append(PublicLeak(
+                    source="shodan",
+                    query=query,
+                    url=url,
+                    title=host or f"{ip_addr}:{port}",
+                    snippet=snippet,
+                    vulns=cve_list,
+                ))
+
+        except (requests.RequestException, json.JSONDecodeError, ValueError):
+            continue
+
+        time.sleep(1)  # respetar rate limit
+
+    vuln_count = sum(len(r.vulns) for r in results)
+    if progress_callback:
+        msg = t("osint_shodan_results", count=len(results))
+        if vuln_count:
+            msg += t("osint_shodan_cves_detected", count=vuln_count)
+        progress_callback(msg)
+
+    return results
 
 # DuckDuckGo HTML endpoint (no requiere auth).
 _DUCKDUCKGO_URL = "https://html.duckduckgo.com/html/"
@@ -862,7 +1071,7 @@ def execute_dorks(
         for idx, query in enumerate(queries, 1):
             if progress_callback:
                 progress_callback(
-                    f"DuckDuckGo ({idx}/{len(queries)}): {query[:60]}"
+                    t("osint_ddg_query", idx=idx, total=len(queries), query=query[:60])
                 )
             results.extend(
                 search_duckduckgo(query, max_results=max_results_per_dork)
@@ -870,7 +1079,7 @@ def execute_dorks(
             time.sleep(1)  # cortesía entre requests
 
     if progress_callback:
-        progress_callback(f"Búsquedas web: {len(results)} resultados")
+        progress_callback(t("osint_web_results", count=len(results)))
 
     return results
 
@@ -961,7 +1170,7 @@ def search_wayback_many(
     results: list[PublicLeak] = []
     for idx, domain in enumerate(domains, 1):
         if progress_callback:
-            progress_callback(f"Wayback ({idx}/{len(domains)}): {domain}")
+            progress_callback(t("osint_wayback_scanning", idx=idx, total=len(domains), domain=domain))
         results.extend(
             search_wayback(
                 domain,
@@ -971,7 +1180,7 @@ def search_wayback_many(
         )
         time.sleep(0.5)
     if progress_callback:
-        progress_callback(f"Wayback: {len(results)} URLs archivadas")
+        progress_callback(t("osint_wayback_results", count=len(results)))
     return results
 
 
@@ -1314,6 +1523,8 @@ def run_osint(
     github_token: str | None = None,
     fofa_search: bool = False,
     fofa_key: str | None = None,
+    shodan_search: bool = False,
+    shodan_key: str | None = None,
     postman_search: bool = True,
     execute_dorks_flag: bool = False,
     dork_engines: list[str] | None = None,
@@ -1368,7 +1579,7 @@ def run_osint(
 
     if not domains:
         if progress_callback:
-            progress_callback("OSINT: no se encontraron dominios propios para analizar")
+            progress_callback(t("osint_no_domains"))
         return result
 
     # 3. Enumeración de subdominios
@@ -1409,6 +1620,15 @@ def run_osint(
             )
         )
 
+    if shodan_search and shodan_key:
+        result.public_leaks.extend(
+            search_shodan(
+                domains,
+                shodan_key=shodan_key,
+                progress_callback=progress_callback,
+            )
+        )
+
     # 4.b Wayback Machine (archive.org) — URLs históricas por dominio propio.
     if wayback_search:
         result.public_leaks.extend(
@@ -1436,9 +1656,9 @@ def run_osint(
 
     if progress_callback:
         progress_callback(
-            f"OSINT completo: "
-            f"{len(result.subdomains)} subdominios, "
-            f"{len(result.public_leaks)} leaks públicos"
+            t("osint_complete",
+              subdomains=len(result.subdomains),
+              leaks=len(result.public_leaks))
         )
 
     return result
