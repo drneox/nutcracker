@@ -148,10 +148,10 @@ def print_vuln_report(scan_result: "VulnScanResult", base_dir: "Path") -> None:
             show_lines=True,
             highlight=True,
         )
-        table.add_column("ID", style="dim", no_wrap=True, width=8)
-        table.add_column("Vulnerabilidad", style="bold", no_wrap=True)
-        table.add_column("Archivo : línea", overflow="fold")
-        table.add_column("Código encontrado", overflow="fold")
+        table.add_column(t("cli_vuln_col_id"), style="dim", no_wrap=True, width=8)
+        table.add_column(t("cli_vuln_col_name"), style="bold", no_wrap=True)
+        table.add_column(t("cli_vuln_col_file"), overflow="fold")
+        table.add_column(t("cli_vuln_col_code"), overflow="fold")
 
         for f in items:
             rel = f.relative_path(base_dir)

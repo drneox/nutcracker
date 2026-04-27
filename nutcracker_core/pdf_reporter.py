@@ -1101,18 +1101,25 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
         pdf.ln(4)
 
     # ── Leaks públicos (GitHub / Postman / Wayback / …) ───────────────────
-    if leaks:
-        if pdf.will_page_break(20):
-            pdf.add_page()
+    if pdf.will_page_break(20):
+        pdf.add_page()
 
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(*C["danger"])
-        pdf.cell(0, 7, _safe(t("osint_public_leaks_title", count=len(leaks))),
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(*C["danger"] if leaks else C["muted"])
+    pdf.cell(0, 7, _safe(t("osint_public_leaks_title", count=len(leaks))),
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(*C["text"])
+    pdf.ln(1)
+
+    if leaks:
+        _render_leak_table(pdf, leaks)
+        pdf.ln(3)
+    else:
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.set_text_color(*C["muted"])
+        pdf.cell(0, 5, _safe(t("osint_no_public_leaks")),
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(*C["text"])
-        pdf.ln(1)
-
-        _render_leak_table(pdf, leaks)
         pdf.ln(3)
 
     # ── Auth flows ────────────────────────────────────────────────────────
