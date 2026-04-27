@@ -10,8 +10,6 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from nutcracker_core.device import find_sdk_root
-
 # Directorio caché para debug keystore
 _CACHE_DIR = Path.home() / ".cache" / "nutcracker"
 
@@ -22,6 +20,7 @@ _CACHE_DIR = Path.home() / ".cache" / "nutcracker"
 def find_apksigner(sdk: Path | None = None) -> str | None:
     """Localiza apksigner en las build-tools del Android SDK."""
     if sdk is None:
+        from nutcracker_core.device import find_sdk_root  # lazy import (evita circular)
         sdk = find_sdk_root()
     if sdk:
         bt_dir = sdk / "build-tools"
@@ -278,6 +277,7 @@ def patch_split_apk(
 
     cb = progress_callback or (lambda _: None)
 
+    from nutcracker_core.device import find_sdk_root  # lazy import (evita circular)
     sdk = find_sdk_root()
     apksigner = find_apksigner(sdk)
     if not apksigner:

@@ -13,6 +13,10 @@ reports:
 # Report language. Supported: en (English) | es (Spanish). Default: en
 language: en
 
+# Timezone for timestamps in PDF reports. Use IANA names, e.g.: America/Lima,
+# America/Bogota, America/Mexico_City, Europe/Madrid. Default: UTC
+timezone: UTC
+
 # ── Feature flags ─────────────────────────────────────────────────────────────
 # Enable or disable each pipeline module.
 features:
