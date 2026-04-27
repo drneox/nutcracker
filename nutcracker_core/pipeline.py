@@ -408,7 +408,7 @@ def do_fart_emulator(
 
                 if has_dexdump:
                     dex_files, dexdump_err = _with_spinner(
-                        f"Volcando DEX de memoria con frida-dexdump ({package})...",
+                        t('pipe_dexdump_memory_spinner', package=package),
                         lambda cb: launch_with_dexdump(
                             serial, package, local_dump_dir, sdk_tools,
                             progress_callback=cb,
@@ -791,7 +791,7 @@ def try_gadget_inject(
                 p for p in work_dir.glob(f"{patched_apk.stem}*.apk")
                 if not p.stem.endswith(("_aligned", "_unsigned"))
             )
-            console.print(f"  Instalando {len(patched_splits)} APKs (base+splits) con install-multiple...")
+            console.print(f"  {t('pipe_installing_splits_gadget', count=len(patched_splits))}")
             # Desinstalar primero (firma cambió)
             subprocess.run([sdk_tools["adb"], "-s", serial, "uninstall", package],
                            capture_output=True, text=True, timeout=30)
@@ -812,34 +812,26 @@ def try_gadget_inject(
                 progress_callback=_install_msgs.append,
             )
         if not ok:
-            detail = _install_msgs[-1] if _install_msgs else "sin detalles"
+            detail = _install_msgs[-1] if _install_msgs else t('pipe_no_details')
             console.print(
-                f"[yellow]⚠[/yellow]  No se pudo reinstalar el APK con gadget.\n"
-                f"  Causa: {detail}\n"
-                f"  Posibles soluciones:\n"
-                f"    · INSTALL_FAILED_UPDATE_INCOMPATIBLE → "
-                f"desinstala la app original del emulador manualmente\n"
-                f"    · INSTALL_FAILED_DEXOPT → apktool no soporta el formato "
-                f"del APK (DexGuard modifica resources.arsc)\n"
-                f"    · INSTALL_FAILED_MISSING_SPLIT → la app es un bundle; "
-                f"el gadget solo se inyectó en base.apk"
+                f"[yellow]⚠[/yellow]  {t('pipe_gadget_reinstall_failed', detail=detail)}"
             )
             return None
 
-        console.print("  Intentando volcar DEX vía gadget...")
+        console.print(f"  {t('pipe_gadget_dumping_dex')}")
         dex_files, err = with_spinner(
-            f"Volcando DEX con gadget ({package})...",
+            t('pipe_gadget_dex_spinner', package=package),
             lambda cb: launch_with_dexdump(serial, package, dump_dir, sdk_tools, progress_callback=cb, frida_host=(cfg_get(cfg, "strategies", "frida_host") or None) if cfg else None),
         )
         if dex_files:
-            console.print(f"[green]✔[/green] {len(dex_files)} DEX extraídos con Frida Gadget")
+            console.print(f"[green]✔[/green] {t('pipe_gadget_dex_ok', count=len(dex_files))}")
             return dex_files
 
-        console.print(f"[yellow]⚠[/yellow]  Gadget: dexdump aún falló: {err}")
+        console.print(f"[yellow]⚠[/yellow]  {t('pipe_gadget_dexdump_failed', err=err)}")
         return None
 
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[yellow]⚠[/yellow]  Error en inyección de gadget: {exc}")
+        console.print(f"[yellow]⚠[/yellow]  {t('pipe_gadget_inject_error', exc=exc)}")
         return None
     finally:
         _shutil.rmtree(work_dir, ignore_errors=True)
@@ -863,9 +855,7 @@ def do_fart_manual(
     if not adb_ok:
         console.print(f"[yellow]⚠[/yellow]  {adb_msg}")
         console.print(
-            f"  Conecta el dispositivo y ejecuta el script Frida manualmente:\n"
-            f"  [cyan]frida -U -f {package} -l {script_path}[/cyan]\n"
-            f"  Luego: [cyan]adb pull /data/user/0/{package}/files/frida_dump/ ./dumps/[/cyan]"
+            f"  {t('pipe_adb_manual_hint', package=package, script_path=script_path)}"
         )
         return None
     console.print(f"[green]✔[/green] {adb_msg}")
@@ -877,15 +867,14 @@ def do_fart_manual(
         selected_device = preferred_device
     elif preferred_device and preferred_device not in devices:
         console.print(
-            f"[yellow]⚠[/yellow]  default_device_id='{preferred_device}' no está conectado. "
-            "Usando el primer dispositivo físico encontrado."
+            f"[yellow]⚠[/yellow]  {t('pipe_device_id_not_connected', device=preferred_device)}"
         )
     if not selected_device and devices:
         selected_device = devices[0]
 
     if not selected_device:
         console.print(
-            "[red]✘[/red] No hay dispositivos físicos conectados para runtime_target=device."
+            f"[red]✘[/red] {t('pipe_no_physical_device')}"
         )
         return None
 
@@ -904,19 +893,18 @@ def do_fart_manual(
 
     # ── Instalar APK en el device ─────────────────────────────────────────────
     if selected_device and apk_path and apk_path.exists():
-        console.print(f"[dim]  Instalando APK en device {selected_device}...[/dim]")
+        console.print(f"[dim]  {t('pipe_device_installing_dim', serial=selected_device)}[/dim]")
         apk_installed = _with_spinner(
-            f"Instalando {package} en device...",
+            t('pipe_device_install_spinner', package=package),
             lambda cb: emulator_install_apk(
                 selected_device, sdk_tools, apk_path, package, progress_callback=cb
             ),
         )
         if apk_installed:
-            console.print(f"[green]✔[/green] APK instalada en device")
+            console.print(f"[green]✔[/green] {t('pipe_device_apk_ok')}")
         else:
             console.print(
-                f"[yellow]⚠[/yellow]  No se pudo instalar la APK en el device. "
-                "Asegúrate de que el device tiene instalación desde fuentes desconocidas habilitada."
+                f"[yellow]⚠[/yellow]  {t('pipe_device_install_failed')}"
             )
 
     dex_files: list[Path] = []
@@ -927,10 +915,10 @@ def do_fart_manual(
             if dex_files:
                 break
             attempted_methods.append(method)
-            console.print(f"[dim]  Intentando método runtime (device): {method}[/dim]")
+            console.print(f"[dim]  {t('pipe_device_trying_method', method=method)}[/dim]")
 
             if method == "gadget":
-                console.print("[yellow]⚠[/yellow]  Método gadget no soportado en modo device. Saltando...")
+                console.print(f"[yellow]⚠[/yellow]  {t('pipe_gadget_device_unsupported')}")
                 continue
 
             if method == "frida_server":
@@ -938,7 +926,7 @@ def do_fart_manual(
                     console.print("[yellow]⚠[/yellow]  Sin serial de dispositivo para frida-dexdump.")
                     continue
                 if not has_dexdump:
-                    console.print("[yellow]⚠[/yellow]  frida-dexdump no instalado. Saltando frida_server.")
+                    console.print(f"[yellow]⚠[/yellow]  {t('pipe_dexdump_not_installed')}")
                     continue
 
                 # ── Auto-instalar frida-server en el device ────────────────
@@ -1026,8 +1014,7 @@ def do_fart_manual(
                 ):
                     if not selected_device:
                         console.print(
-                            "[yellow]⚠[/yellow]  No se detectó serial del dispositivo para auto-lanzar Frida. "
-                            "Usando flujo manual."
+                            f"[yellow]⚠[/yellow]  {t('pipe_fart_no_serial')}"
                         )
                     else:
                         _frida_host = cfg_get(cfg, "strategies", "frida_host") or None
@@ -1039,10 +1026,10 @@ def do_fart_manual(
                             frida_host=_frida_host,
                         )
                         if frida_proc:
-                            console.print("[green]✔[/green] Frida/FART lanzado automáticamente en dispositivo físico")
+                            console.print(f"[green]✔[/green] {t('pipe_fart_launched_device')}")
                         else:
-                            console.print(f"[yellow]⚠[/yellow]  No se pudo auto-lanzar Frida: {frida_err}")
-                            console.print("[dim]  Continúa con el flujo manual mostrado arriba.[/dim]")
+                            console.print(f"[yellow]⚠[/yellow]  {t('pipe_fart_auto_launch_failed', err=frida_err)}")
+                            console.print(f"[dim]  {t('pipe_fart_manual_hint')}[/dim]")
 
                 import threading as _threading
                 _ui_stop = _threading.Event()
@@ -1065,7 +1052,7 @@ def do_fart_manual(
                     console=console,
                     transient=True,
                 ) as progress:
-                    task = progress.add_task("Esperando volcados DEX...", total=None)
+                    task = progress.add_task(t('pipe_waiting_dex_dumps'), total=None)
                     found = wait_for_dumps(
                         selected_device, sdk_tools, package,
                         timeout=300,
@@ -1076,7 +1063,7 @@ def do_fart_manual(
                 _ui_thread.join(timeout=5)
 
                 if not found:
-                    console.print("[yellow]⚠[/yellow]  FART timeout en device. Probando siguiente método...")
+                    console.print(f"[yellow]⚠[/yellow]  {t('pipe_fart_timeout_device')}")
                     continue
 
                 with Progress(
@@ -1085,7 +1072,7 @@ def do_fart_manual(
                     console=console,
                     transient=True,
                 ) as progress:
-                    task = progress.add_task("Descargando DEX volcados...", total=None)
+                    task = progress.add_task(t('pipe_downloading_dex_dumps'), total=None)
                     dex_files = pull_dumps(
                         selected_device, sdk_tools, package,
                         local_dump_dir,

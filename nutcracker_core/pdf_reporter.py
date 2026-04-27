@@ -22,6 +22,18 @@ from fpdf import FPDF, XPos, YPos
 
 from .i18n import t
 
+
+def _now_tz() -> datetime.datetime:
+    """Retorna la hora actual en la zona horaria configurada (config.yaml → timezone)."""
+    try:
+        from .config import load_config
+        import zoneinfo
+        tz_name = load_config().get("timezone", "UTC") or "UTC"
+        tz = zoneinfo.ZoneInfo(tz_name)
+        return datetime.datetime.now(tz=tz)
+    except Exception:  # noqa: BLE001
+        return datetime.datetime.now()
+
 if TYPE_CHECKING:
     from .analyzer import AnalysisResult
     from .manifest_analyzer import ManifestAnalysisResult, Misconfiguration
@@ -154,7 +166,7 @@ class APKReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  ·  nutcracker.sh",
+        self.cell(0, 5, f"{t('generated_on')} {_now_tz().strftime('%d/%m/%Y %H:%M')}  ·  nutcracker.sh",
                   align="L", link="https://nutcracker.sh")
         self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
@@ -818,12 +830,13 @@ def _findings_section(
         pdf.ln(3)
 
 
-def _render_leak_table(pdf: APKReportPDF, items: "list") -> None:
+def _render_leak_table(pdf: APKReportPDF, items: "list", show_cve_col: bool = False) -> None:
     """Renderiza una tabla de PublicLeak (activos o leaks). Reutilizable."""
-    w_plat = 22
-    w_title = pdf.epw - w_plat - 70
-    w_link = 70
-    row_h = 5
+    w_plat  = 22
+    w_cves  = 16 if show_cve_col else 0
+    w_link  = 70
+    w_title = pdf.epw - w_plat - w_cves - w_link
+    row_h   = 5
 
     pdf.set_font("Helvetica", "B", 7)
     pdf.set_fill_color(*C["accent"])
@@ -832,6 +845,9 @@ def _render_leak_table(pdf: APKReportPDF, items: "list") -> None:
              new_x=XPos.RIGHT, new_y=YPos.TOP)
     pdf.cell(w_title, row_h, _safe(t("osint_asset_col")), fill=True,
              new_x=XPos.RIGHT, new_y=YPos.TOP)
+    if show_cve_col:
+        pdf.cell(w_cves, row_h, _safe(t("osint_cves_col")), fill=True,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP)
     pdf.cell(w_link, row_h, _safe(t("osint_link")), fill=True,
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_text_color(*C["text"])
@@ -855,6 +871,20 @@ def _render_leak_table(pdf: APKReportPDF, items: "list") -> None:
         pdf.cell(w_title, row_h, _safe(leak.title[:60]), fill=True,
                  new_x=XPos.RIGHT, new_y=YPos.TOP)
 
+        if show_cve_col:
+            cve_count = len(getattr(leak, "vulns", None) or [])
+            pdf.set_font("Helvetica", "B", 6.5)
+            if cve_count:
+                pdf.set_text_color(*C["danger"])
+                pdf.cell(w_cves, row_h, str(cve_count), fill=True,
+                         new_x=XPos.RIGHT, new_y=YPos.TOP)
+                pdf.set_text_color(*C["text"])
+            else:
+                pdf.set_text_color(*C["muted"])
+                pdf.cell(w_cves, row_h, "-", fill=True,
+                         new_x=XPos.RIGHT, new_y=YPos.TOP)
+                pdf.set_text_color(*C["text"])
+
         if leak.url and not leak.url.startswith("{{"):
             pdf.set_font("Helvetica", "U", 6)
             pdf.set_text_color(*C["info"])
@@ -876,11 +906,89 @@ def _render_leak_table(pdf: APKReportPDF, items: "list") -> None:
             pdf.set_text_color(*snippet_color)
             pdf.cell(w_plat, 4, "", fill=True,
                      new_x=XPos.RIGHT, new_y=YPos.TOP)
-            pdf.cell(w_title + w_link, 4,
-                     _safe(leak.snippet[:110]),
+            # snippet sin la parte "CVEs: ..." (ahora va en la sección de detalle)
+            raw_snippet = leak.snippet or ""
+            if show_cve_col and "CVEs:" in raw_snippet:
+                raw_snippet = raw_snippet[:raw_snippet.index("CVEs:")].rstrip(" |")
+            pdf.cell(w_title + w_cves + w_link, 4,
+                     _safe(raw_snippet[:120]),
                      fill=True,
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_text_color(*C["text"])
+
+
+def _render_cve_detail(pdf: APKReportPDF, exposed: "list") -> None:
+    """Subsección con el listado completo de CVEs por activo expuesto."""
+    assets_with_cves = [l for l in exposed if getattr(l, "vulns", None)]
+    if not assets_with_cves:
+        return
+
+    if pdf.will_page_break(20):
+        pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*C["danger"])
+    pdf.cell(0, 6, _safe(t("osint_cve_detail_title")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(*C["text"])
+    pdf.ln(1)
+
+    # Parse snippet para extraer ip/port/product del asset
+    import re as _re
+    _SNIPPET_IP   = _re.compile(r"ip=([^\s|]+)")
+    _SNIPPET_PORT = _re.compile(r"port=([^\s|]+)")
+    _SNIPPET_PROD = _re.compile(r"product=([^|]+?)(?:\s*\|)")
+
+    fw = pdf.epw
+    cves_per_row = 5
+    cve_w = fw / cves_per_row
+
+    for asset in assets_with_cves:
+        if pdf.will_page_break(12):
+            pdf.add_page()
+
+        # ── Cabecera del asset ─────────────────────────────────────────────
+        snip = asset.snippet or ""
+        ip_m   = _SNIPPET_IP.search(snip)
+        port_m = _SNIPPET_PORT.search(snip)
+        prod_m = _SNIPPET_PROD.search(snip)
+        ip_str   = ip_m.group(1)   if ip_m   else ""
+        port_str = port_m.group(1) if port_m else ""
+        prod_str = prod_m.group(1).strip() if prod_m else ""
+
+        if prod_str:
+            header = t("osint_cve_detail_host",
+                       host=asset.title, ip=ip_str, port=port_str, product=prod_str)
+        else:
+            header = t("osint_cve_detail_host_no_product",
+                       host=asset.title, ip=ip_str, port=port_str)
+
+        pdf.set_font("Helvetica", "B", 6.5)
+        pdf.set_fill_color(*C["row_alt"])
+        pdf.set_text_color(*C["warning"])
+        pdf.cell(fw, 5, _safe(f"{header}  ({len(asset.vulns)} CVEs)"),
+                 fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_text_color(*C["text"])
+
+        # ── Grilla de CVEs ─────────────────────────────────────────────────
+        cves = sorted(asset.vulns)
+        for chunk_start in range(0, len(cves), cves_per_row):
+            row_cves = cves[chunk_start:chunk_start + cves_per_row]
+            if pdf.will_page_break(4):
+                pdf.add_page()
+            pdf.set_font("Helvetica", "", 5.5)
+            pdf.set_fill_color(255, 255, 255)
+            for cve in row_cves:
+                pdf.set_text_color(*C["danger"])
+                pdf.cell(cve_w, 4, _safe(cve), fill=True,
+                         new_x=XPos.RIGHT, new_y=YPos.TOP)
+            # Completar fila con celdas vacías si es la última fila incompleta
+            for _ in range(cves_per_row - len(row_cves)):
+                pdf.cell(cve_w, 4, "", fill=True,
+                         new_x=XPos.RIGHT, new_y=YPos.TOP)
+            pdf.set_text_color(*C["text"])
+            pdf.ln(4)
+
+        pdf.ln(2)
 
 
 def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
@@ -986,7 +1094,10 @@ def _osint_section(pdf: APKReportPDF, osint: "OsintResult") -> None:
         pdf.set_text_color(*C["text"])
         pdf.ln(1)
 
-        _render_leak_table(pdf, exposed)
+        _render_leak_table(pdf, exposed, show_cve_col=True)
+        pdf.ln(2)
+
+        _render_cve_detail(pdf, exposed)
         pdf.ln(4)
 
     # ── Leaks públicos (GitHub / Postman / Wayback / …) ───────────────────
@@ -1338,7 +1449,7 @@ class BatchReportPDF(FPDF):
         self.set_y(2)
         self.cell(0, 6, _safe(t("batch_report_header")), align="L")
         self.set_y(2)
-        self.cell(0, 6, datetime.datetime.now().strftime("%d/%m/%Y"), align="R")
+        self.cell(0, 6, _now_tz().strftime("%d/%m/%Y"), align="R")
         self.set_text_color(*C["text"])
         self.ln(10)
 
@@ -1346,7 +1457,7 @@ class BatchReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"{t('generated_on')} {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}  \u00b7  nutcracker.sh",
+        self.cell(0, 5, f"{t('generated_on')} {_now_tz().strftime('%d/%m/%Y %H:%M')}  \u00b7  nutcracker.sh",
                   align="L", link="https://nutcracker.sh")
         self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
@@ -1387,7 +1498,7 @@ def _batch_cover(pdf: BatchReportPDF, apps: list[dict]) -> None:
     # Fecha
     pdf.set_font("Helvetica", "", 11)
     pdf.set_text_color(180, 190, 210)
-    pdf.cell(0, 6, datetime.datetime.now().strftime("%d de %B de %Y"), align="C",
+    pdf.cell(0, 6, _now_tz().strftime("%d de %B de %Y"), align="C",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # Stats
