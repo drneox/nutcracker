@@ -775,7 +775,9 @@ def search_fofa(
                 if os_name:
                     parts.append(f"os={os_name}")
                 if cve_list:
-                    parts.append("CVEs: " + ", ".join(cve_list))
+                    parts.append("CVEs: " + ", ".join(cve_list[:5]))
+                    if len(cve_list) > 5:
+                        parts.append(f"(+{len(cve_list) - 5} más)")
                 snippet = " | ".join(p for p in parts if p.strip(" ="))
 
                 results.append(PublicLeak(

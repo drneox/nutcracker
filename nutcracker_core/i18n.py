@@ -184,6 +184,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "osint_asset_col": "Asset",
         "osint_title_col": "Title",
         "osint_link": "Link",
+        "osint_cves_col": "# CVEs",
+        "osint_cve_detail_title": "CVE detail by asset",
+        "osint_cve_detail_host": "{host}  ·  {ip}:{port}  ·  {product}",
+        "osint_cve_detail_host_no_product": "{host}  ·  {ip}:{port}",
         "osint_auth_flows": "Hardcoded auth ({count})",
         "osint_searching_buildconfig": "Searching BuildConfig files...",
         "osint_analyzing_buildconfig": "Analyzing {count} BuildConfig files...",
@@ -354,6 +358,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli_osint_public_leaks_header": "OSINT \u2014 Public leaks: {count} found",
         "cli_osint_auth_header": "OSINT \u2014 Hardcoded auth: {count} detected",
         "cli_osint_saved": "OSINT saved at:",
+        "cli_osint_loaded": "OSINT loaded from {path}",
 
         # ── Vuln scan terminal ─────────────────────────────────────────────────
         "cli_vuln_scan_enabled": "enabled",
@@ -677,6 +682,51 @@ STRINGS: dict[str, dict[str, str]] = {
         "pipe_dexdump_no_dex": "frida-dexdump produced no DEX: {err}",
         "pipe_frida_server_install_spinner": "Installing frida-server {ver} on device...",
         "pipe_dexdump_spinner": "Extracting DEX with frida-dexdump (device)...",
+        "pipe_dexdump_memory_spinner": "Dumping DEX from memory with frida-dexdump ({package})...",
+        "pipe_installing_splits_gadget": "Installing {count} APKs (base+splits) with install-multiple...",
+        "pipe_gadget_reinstall_failed": (
+            "Could not reinstall APK with gadget.\n"
+            "  Cause: {detail}\n"
+            "  Possible solutions:\n"
+            "    \u00b7 INSTALL_FAILED_UPDATE_INCOMPATIBLE \u2192 "
+            "uninstall the original app from the emulator manually\n"
+            "    \u00b7 INSTALL_FAILED_DEXOPT \u2192 apktool does not support this APK format "
+            "(DexGuard modifies resources.arsc)\n"
+            "    \u00b7 INSTALL_FAILED_MISSING_SPLIT \u2192 the app is a bundle; "
+            "gadget was only injected in base.apk"
+        ),
+        "pipe_gadget_dumping_dex": "Attempting to dump DEX via gadget...",
+        "pipe_gadget_dex_spinner": "Dumping DEX with gadget ({package})...",
+        "pipe_gadget_dex_ok": "{count} DEX extracted with Frida Gadget",
+        "pipe_gadget_dexdump_failed": "Gadget: dexdump still failed: {err}",
+        "pipe_gadget_inject_error": "Error in gadget injection: {exc}",
+        "pipe_adb_manual_hint": (
+            "Connect the device and run the Frida script manually:\n"
+            "  [cyan]frida -U -f {package} -l {script_path}[/cyan]\n"
+            "  Then: [cyan]adb pull /data/user/0/{package}/files/frida_dump/ ./dumps/[/cyan]"
+        ),
+        "pipe_device_id_not_connected": (
+            "default_device_id='{device}' is not connected. "
+            "Using the first physical device found."
+        ),
+        "pipe_no_physical_device": "No physical devices connected for runtime_target=device.",
+        "pipe_device_installing_dim": "Installing APK on device {serial}...",
+        "pipe_device_install_spinner": "Installing {package} on device...",
+        "pipe_device_apk_ok": "APK installed on device",
+        "pipe_device_install_failed": (
+            "Could not install APK on device. "
+            "Ensure the device has Unknown Sources installation enabled."
+        ),
+        "pipe_device_trying_method": "Trying runtime method (device): {method}",
+        "pipe_gadget_device_unsupported": "Gadget method not supported in device mode. Skipping...",
+        "pipe_dexdump_not_installed": "frida-dexdump not installed. Skipping frida_server.",
+        "pipe_fart_no_serial": "No device serial detected to auto-launch Frida. Using manual flow.",
+        "pipe_fart_launched_device": "Frida/FART launched automatically on physical device",
+        "pipe_fart_auto_launch_failed": "Could not auto-launch Frida: {err}",
+        "pipe_fart_manual_hint": "Continue with the manual flow shown above.",
+        "pipe_waiting_dex_dumps": "Waiting for DEX dumps...",
+        "pipe_fart_timeout_device": "FART timeout on device. Trying next method...",
+        "pipe_downloading_dex_dumps": "Downloading DEX dumps...",
 
         # ── Runtime messages ──────────────────────────────────────────────────
         "rt_frida_cli_not_found": "frida CLI not found \u2014 install with: pip install frida-tools",
@@ -881,6 +931,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "osint_asset_col": "Activo",
         "osint_title_col": "Título",
         "osint_link": "Link",
+        "osint_cves_col": "# CVEs",
+        "osint_cve_detail_title": "Detalle CVEs por activo",
+        "osint_cve_detail_host": "{host}  ·  {ip}:{port}  ·  {product}",
+        "osint_cve_detail_host_no_product": "{host}  ·  {ip}:{port}",
         "osint_auth_flows": "Auth hardcodeados ({count})",
         "osint_searching_buildconfig": "Buscando archivos BuildConfig...",
         "osint_analyzing_buildconfig": "Analizando {count} archivos BuildConfig...",
@@ -1051,6 +1105,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli_osint_public_leaks_header": "OSINT \u2014 Leaks p\u00fablicos: {count} encontrados",
         "cli_osint_auth_header": "OSINT \u2014 Auth hardcodeados: {count} detectados",
         "cli_osint_saved": "OSINT guardado en:",
+        "cli_osint_loaded": "OSINT cargado desde {path}",
 
         # ── Vuln scan terminal ─────────────────────────────────────────────────
         "cli_vuln_scan_enabled": "habilitado",
@@ -1374,6 +1429,51 @@ STRINGS: dict[str, dict[str, str]] = {
         "pipe_dexdump_no_dex": "frida-dexdump no produjo DEX: {err}",
         "pipe_frida_server_install_spinner": "Instalando frida-server {ver} en el device...",
         "pipe_dexdump_spinner": "Extrayendo DEX con frida-dexdump (device)...",
+        "pipe_dexdump_memory_spinner": "Volcando DEX de memoria con frida-dexdump ({package})...",
+        "pipe_installing_splits_gadget": "Instalando {count} APKs (base+splits) con install-multiple...",
+        "pipe_gadget_reinstall_failed": (
+            "No se pudo reinstalar el APK con gadget.\n"
+            "  Causa: {detail}\n"
+            "  Posibles soluciones:\n"
+            "    \u00b7 INSTALL_FAILED_UPDATE_INCOMPATIBLE \u2192 "
+            "desinstala la app original del emulador manualmente\n"
+            "    \u00b7 INSTALL_FAILED_DEXOPT \u2192 apktool no soporta el formato "
+            "del APK (DexGuard modifica resources.arsc)\n"
+            "    \u00b7 INSTALL_FAILED_MISSING_SPLIT \u2192 la app es un bundle; "
+            "el gadget solo se inyect\u00f3 en base.apk"
+        ),
+        "pipe_gadget_dumping_dex": "Intentando volcar DEX v\u00eda gadget...",
+        "pipe_gadget_dex_spinner": "Volcando DEX con gadget ({package})...",
+        "pipe_gadget_dex_ok": "{count} DEX extra\u00eddos con Frida Gadget",
+        "pipe_gadget_dexdump_failed": "Gadget: dexdump a\u00fan fall\u00f3: {err}",
+        "pipe_gadget_inject_error": "Error en inyecci\u00f3n de gadget: {exc}",
+        "pipe_adb_manual_hint": (
+            "Conecta el dispositivo y ejecuta el script Frida manualmente:\n"
+            "  [cyan]frida -U -f {package} -l {script_path}[/cyan]\n"
+            "  Luego: [cyan]adb pull /data/user/0/{package}/files/frida_dump/ ./dumps/[/cyan]"
+        ),
+        "pipe_device_id_not_connected": (
+            "default_device_id='{device}' no est\u00e1 conectado. "
+            "Usando el primer dispositivo f\u00edsico encontrado."
+        ),
+        "pipe_no_physical_device": "No hay dispositivos f\u00edsicos conectados para runtime_target=device.",
+        "pipe_device_installing_dim": "Instalando APK en device {serial}...",
+        "pipe_device_install_spinner": "Instalando {package} en device...",
+        "pipe_device_apk_ok": "APK instalada en device",
+        "pipe_device_install_failed": (
+            "No se pudo instalar la APK en el device. "
+            "Aseg\u00farate de que el device tiene instalaci\u00f3n desde fuentes desconocidas habilitada."
+        ),
+        "pipe_device_trying_method": "Intentando m\u00e9todo runtime (device): {method}",
+        "pipe_gadget_device_unsupported": "M\u00e9todo gadget no soportado en modo device. Saltando...",
+        "pipe_dexdump_not_installed": "frida-dexdump no instalado. Saltando frida_server.",
+        "pipe_fart_no_serial": "No se detect\u00f3 serial del dispositivo para auto-lanzar Frida. Usando flujo manual.",
+        "pipe_fart_launched_device": "Frida/FART lanzado autom\u00e1ticamente en dispositivo f\u00edsico",
+        "pipe_fart_auto_launch_failed": "No se pudo auto-lanzar Frida: {err}",
+        "pipe_fart_manual_hint": "Contin\u00faa con el flujo manual mostrado arriba.",
+        "pipe_waiting_dex_dumps": "Esperando volcados DEX...",
+        "pipe_fart_timeout_device": "FART timeout en device. Probando siguiente m\u00e9todo...",
+        "pipe_downloading_dex_dumps": "Descargando DEX volcados...",
 
         # ── Runtime messages ──────────────────────────────────────────────────
         "rt_frida_cli_not_found": "frida CLI no encontrado \u2014 instala con: pip install frida-tools",
