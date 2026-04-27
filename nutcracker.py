@@ -1198,6 +1198,7 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
     crt_sh = bool(cfg_get(_CFG, "osint", "crt_sh", default=True))
     github_search = bool(cfg_get(_CFG, "osint", "github_search", default=True))
     github_token = cfg_get(_CFG, "osint", "github_token", default="") or None
+    grep_app_search = bool(cfg_get(_CFG, "osint", "grep_app_search", default=True))
     fofa_search = bool(cfg_get(_CFG, "osint", "fofa_search", default=False))
     fofa_key = cfg_get(_CFG, "osint", "fofa_key", default="") or None
     shodan_search = bool(cfg_get(_CFG, "osint", "shodan_search", default=False))
@@ -1229,6 +1230,7 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
                 crt_sh=crt_sh,
                 github_search=github_search,
                 github_token=github_token,
+                grep_app_search=grep_app_search,
                 fofa_search=fofa_search,
                 fofa_key=fofa_key,
                 shodan_search=shodan_search,
@@ -1314,11 +1316,11 @@ def _print_osint_report(osint: OsintResult) -> None:
 
 
 def _save_osint_json(osint: OsintResult, package: str) -> None:
-    """Guarda el resultado OSINT en JSON."""
+    """Guarda el resultado OSINT en JSON dentro de reports/<package>/osint.json."""
     import json
-    reports_dir = Path("./reports")
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    out = reports_dir / f"osint_{package}.json"
+    pkg_dir = Path("./reports") / package
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    out = pkg_dir / "osint.json"
     with out.open("w", encoding="utf-8") as fh:
         json.dump(osint.to_dict(), fh, ensure_ascii=False, indent=2)
     console.print(f"[dim]{t('cli_osint_saved')}[/dim] [bold]{out}[/bold]")
@@ -1779,7 +1781,7 @@ def _generate_pdf(result, vuln_scan=None) -> None:
 
     reports_dir = Path("./reports")
     reports_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = reports_dir / f"{result.package}.pdf"
+    pdf_path = reports_dir / f"nutcracker_{result.package}_report.pdf"
     try:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                       console=console, transient=True) as progress:
@@ -1960,7 +1962,7 @@ def batch(
             pdf_path: Path | None = None
             if save_pdf:
                 Path(reports_dir).mkdir(parents=True, exist_ok=True)
-                pdf_dest = Path(reports_dir) / f"{pkg}.pdf"
+                pdf_dest = Path(reports_dir) / f"nutcracker_{pkg}_report.pdf"
                 scan_result = _post_analysis_flow(result, apk_path)
                 # Guardar JSON una vez que todos los datos están completos
                 save_analysis_json(result, scan_result=scan_result)
@@ -2092,6 +2094,44 @@ def regen_pdf(package: str) -> None:
 
     global _MANIFEST_ANALYSIS
     _MANIFEST_ANALYSIS = manifest
+
+    # Cargar OSINT si existe
+    global _OSINT_RESULT
+    _OSINT_RESULT = None
+    # Nueva ubicación: reports/<package>/osint.json
+    # Fallback: reports/osint_<package>.json (formato legacy)
+    osint_path = Path("./reports") / package / "osint.json"
+    if not osint_path.exists():
+        osint_path = Path("./reports") / f"osint_{package}.json"
+    if osint_path.exists():
+        try:
+            import json as _json
+            from nutcracker_core.osint import OsintResult, PublicLeak, Secret, Subdomain
+            raw = _json.loads(osint_path.read_text(encoding="utf-8"))
+            _OSINT_RESULT = OsintResult(
+                package=raw.get("package", package),
+                secrets=[
+                    Secret(name=s["name"], value=s["value"], file=s.get("file", ""),
+                           line=s.get("line", 0), service=s.get("service", ""))
+                    for s in raw.get("secrets", [])
+                ],
+                subdomains=[
+                    Subdomain(name=s["name"], first_seen=s.get("first_seen", ""),
+                              is_wildcard=s.get("is_wildcard", False))
+                    for s in raw.get("subdomains", [])
+                ],
+                public_leaks=[
+                    PublicLeak(source=l["source"], query=l.get("query", ""),
+                               url=l.get("url", ""), title=l.get("title", ""),
+                               snippet=l.get("snippet", ""), vulns=l.get("vulns", []))
+                    for l in raw.get("public_leaks", [])
+                ],
+                domains_scanned=raw.get("domains_scanned", []),
+                auth_flows=raw.get("auth_flows", []),
+            )
+            console.print(f"[dim]{t('cli_osint_loaded', path=osint_path)}[/dim]")
+        except Exception:  # noqa: BLE001
+            pass
 
     _generate_pdf(result, vuln_scan)
 

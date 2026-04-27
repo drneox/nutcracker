@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import html
 import base64
 import unicodedata
 from collections import Counter
@@ -378,9 +379,12 @@ def _query_relevance_tokens(query: str) -> list[str]:
             brand = tld1.split(".", 1)[0]
             if len(brand) >= 4 and brand not in _GENERIC_LABEL_TOKENS:
                 tokens.append(brand)
-        last = d.rsplit(".", 1)[-1]
-        if len(last) >= 4 and last not in _GENERIC_LABEL_TOKENS:
-            tokens.append(last)
+        # Extraer TODOS los segmentos del dominio ≥4 chars que no sean genéricos.
+        # Esto cubre dominios con SLDs desconocidos (com.net, com.xx, org.net)
+        # donde el brand real, queda por encima del eTLD+1.
+        for seg in d.split("."):
+            if len(seg) >= 4 and seg not in _GENERIC_LABEL_TOKENS:
+                tokens.append(seg)
 
     # Caso 1: la query entera es un dominio.
     if "." in q and " " not in q and "/" not in q and ":" not in q:
@@ -481,25 +485,29 @@ def search_postman(
                 publisher_handle = doc.get("publisherHandle", "")
                 slug = doc.get("slug", "")
                 public_url = ""
-                if entity_type == "collection" and publisher_handle and slug:
+                if entity_type in ("collection", "workspace") and publisher_handle and slug:
                     public_url = f"https://www.postman.com/{publisher_handle}/{slug}"
-                elif entity_type == "workspace" and publisher_handle and slug:
-                    public_url = f"https://www.postman.com/{publisher_handle}/{slug}"
+                elif entity_type in ("collection", "workspace") and publisher_handle and doc_id:
+                    # Sin slug pero con id: URL canónica por id
+                    public_url = f"https://www.postman.com/{publisher_handle}/{doc_id}"
                 elif entity_type == "request" and doc_id:
                     public_url = doc.get("publisherUrl", "") or doc.get("url", "")
                 elif doc.get("publisherUrl"):
                     public_url = doc["publisherUrl"]
-                # Fallback: link de búsqueda
+                # Fallback: búsqueda general con la query original
                 if not public_url:
                     public_url = f"https://www.postman.com/search?q={requests.utils.quote(query)}&type={entity_type or 'all'}"
 
                 # Filtro anti-FP: Postman hace fuzzy match por tokens
                 # (p.ej. "api.example.io" puede devolver resultados no relacionados). Sólo
-                # conservamos resultados que mencionen un token distintivo
-                # de la query en nombre / summary / URL / handle.
+                # conservamos resultados que mencionen un token distintivo de la query en
+                # campos reales del API. No se usa public_url porque puede ser un fallback
+                # construido por nosotros que siempre contiene la query.
                 if not _result_mentions_query(
-                    query, name, summary, public_url,
-                    publisher_handle, slug,
+                    query, name, summary,
+                    doc.get("publisherUrl") or "",
+                    publisher_handle, slug or "",
+                    doc.get("url") or "",
                 ):
                     continue
 
@@ -523,6 +531,7 @@ def search_postman(
 
 _GITHUB_API_URL = "https://api.github.com/search/code"
 _GITHUB_SEARCH_URL = "https://github.com/search"
+_GREP_APP_API_URL = "https://grep.app/api/search"
 _FOFA_API_URL = "https://fofa.info/api/v1/search/all"
 _SHODAN_SEARCH_URL = "https://api.shodan.io/shodan/host/search"
 
@@ -638,6 +647,80 @@ def search_github_code(
 
     if progress_callback:
         progress_callback(t("osint_github_results", count=len(results)))
+
+    return results
+
+
+def search_grep_app(
+    queries: list[str],
+    *,
+    progress_callback=None,
+) -> list[PublicLeak]:
+    """
+    Busca código fuente público en GitHub via grep.app (sin autenticación).
+
+    grep.app indexa repositorios públicos de GitHub y expone una API JSON
+    no oficial que no requiere token. Devuelve hasta 10 resultados por query
+    con repo, path, branch y snippet HTML del match.
+
+    Límites observados: sin rate-limit explícito, pero con sleep cortés de 2s.
+    """
+    results: list[PublicLeak] = []
+
+    for query in queries:
+        if progress_callback:
+            progress_callback(t("osint_grep_app_searching", query=query))
+
+        try:
+            resp = requests.get(
+                _GREP_APP_API_URL,
+                params={"q": query, "per_page": 10},
+                timeout=_REQUESTS_TIMEOUT,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp.status_code != 200:
+                continue
+
+            data = resp.json()
+            hits = data.get("hits", {})
+            if not isinstance(hits, dict):
+                continue
+            items = hits.get("hits") or []
+
+            for h in items:
+                repo = h.get("repo", "")
+                path = h.get("path", "")
+                branch = h.get("branch", "master")
+
+                if not repo or not path:
+                    continue
+
+                github_url = f"https://github.com/{repo}/blob/{branch}/{path}"
+
+                # Limpiar el snippet HTML que devuelve grep.app
+                snippet_html = h.get("content", {}).get("snippet", "")
+                snippet = re.sub(r"<[^>]+>", "", snippet_html)
+                snippet = re.sub(r"\s+", " ", snippet).strip()[:200]
+                snippet = html.unescape(snippet)
+
+                if not _result_mentions_query(query, repo, path, snippet):
+                    continue
+
+                results.append(PublicLeak(
+                    source="grep_app",
+                    query=query,
+                    url=github_url,
+                    title=f"{repo}/{path}",
+                    snippet=snippet,
+                ))
+
+        except (requests.RequestException, json.JSONDecodeError, ValueError):
+            continue
+
+        time.sleep(2)
+
+    if progress_callback:
+        progress_callback(t("osint_grep_app_results", count=len(results)))
 
     return results
 
@@ -775,7 +858,9 @@ def search_fofa(
                 if os_name:
                     parts.append(f"os={os_name}")
                 if cve_list:
-                    parts.append("CVEs: " + ", ".join(cve_list))
+                    parts.append("CVEs: " + ", ".join(cve_list[:5]))
+                    if len(cve_list) > 5:
+                        parts.append(f"(+{len(cve_list) - 5} más)")
                 snippet = " | ".join(p for p in parts if p.strip(" ="))
 
                 results.append(PublicLeak(
@@ -1521,6 +1606,7 @@ def run_osint(
     crt_sh: bool = True,
     github_search: bool = True,
     github_token: str | None = None,
+    grep_app_search: bool = True,
     fofa_search: bool = False,
     fofa_key: str | None = None,
     shodan_search: bool = False,
@@ -1611,6 +1697,16 @@ def run_osint(
             )
         )
 
+    if grep_app_search:
+        grep_app_queries = [package]
+        grep_app_queries.extend(domains)
+        result.public_leaks.extend(
+            search_grep_app(
+                grep_app_queries,
+                progress_callback=progress_callback,
+            )
+        )
+
     if fofa_search and fofa_key:
         result.public_leaks.extend(
             search_fofa(
@@ -1635,7 +1731,7 @@ def run_osint(
             search_wayback_many(
                 domains,
                 limit_per_domain=wayback_limit_per_domain,
-                filter_interesting=wayback_filter_interesting,
+                 filter_interesting=wayback_filter_interesting,
                 progress_callback=progress_callback,
             )
         )

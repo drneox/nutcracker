@@ -13,6 +13,10 @@ reports:
 # Report language. Supported: en (English) | es (Spanish). Default: en
 language: en
 
+# Timezone for timestamps in PDF reports. Use IANA names, e.g.: America/Lima,
+# America/Bogota, America/Mexico_City, Europe/Madrid. Default: UTC
+timezone: UTC
+
 # ── Feature flags ─────────────────────────────────────────────────────────────
 # Enable or disable each pipeline module.
 features:
@@ -34,8 +38,9 @@ leak_scan:
 # ── OSINT ─────────────────────────────────────────────────────────────────────
 osint:
   crt_sh: true         # enumerate subdomains via crt.sh
-  github_search: true  # search for leaks in GitHub Code Search
-  github_token: ''     # optional GitHub PAT for Code Search API (better results / rate limits)
+  github_search: true      # search for leaks in GitHub Code Search (requires token for real results)
+  github_token: ''          # optional GitHub PAT for Code Search API (better results / rate limits)
+  grep_app_search: true     # search public GitHub repos via grep.app (no token required)
   fofa_search: false   # search exposed assets in FOFA
   fofa_key: ''         # FOFA API key for /api/v1/search/all
   shodan_search: false  # search exposed assets in Shodan
