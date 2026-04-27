@@ -1198,6 +1198,7 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
     crt_sh = bool(cfg_get(_CFG, "osint", "crt_sh", default=True))
     github_search = bool(cfg_get(_CFG, "osint", "github_search", default=True))
     github_token = cfg_get(_CFG, "osint", "github_token", default="") or None
+    grep_app_search = bool(cfg_get(_CFG, "osint", "grep_app_search", default=True))
     fofa_search = bool(cfg_get(_CFG, "osint", "fofa_search", default=False))
     fofa_key = cfg_get(_CFG, "osint", "fofa_key", default="") or None
     shodan_search = bool(cfg_get(_CFG, "osint", "shodan_search", default=False))
@@ -1229,6 +1230,7 @@ def _do_osint_scan(source_dir: Path, package: str, scan_findings: list | None = 
                 crt_sh=crt_sh,
                 github_search=github_search,
                 github_token=github_token,
+                grep_app_search=grep_app_search,
                 fofa_search=fofa_search,
                 fofa_key=fofa_key,
                 shodan_search=shodan_search,
