@@ -475,10 +475,11 @@ def setup_frida_server(
     # Magisk/Zygisk y algunos módulos LSPosed lo setean en el shell, y los procesos hijos
     # lo heredan — lo que provoca fallos al attacharse o spawnar la app.
     _launch_cmd = f"unset LD_PRELOAD; {_bin_cmd}"
+    _err_tmp = "/tmp/.frida_stderr"
     if root_ok:
         time.sleep(1.5)  # adbd necesita un momento para reiniciarse como root
         subprocess.Popen(
-            [adb, "-s", serial, "shell", f"{_launch_cmd} &"],
+            [adb, "-s", serial, "shell", f"{_launch_cmd} 2>{_err_tmp} &"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -486,7 +487,11 @@ def setup_frida_server(
         # Fallback: su (Magisk y otros managers de root)
         cb("adb root no disponible — intentando con su...")
         launched = False
-        for su_cmd in [f"su 0 sh -c '{_launch_cmd} &'", f"su -c '{_launch_cmd} &'"]:
+        for su_cmd in [
+            f"su 0 sh -c '{_launch_cmd} 2>{_err_tmp} &'",
+            f"su -c '{_launch_cmd} 2>{_err_tmp} &'",
+            f"echo '{_launch_cmd} 2>{_err_tmp} &' | su",
+        ]:
             r = subprocess.run(
                 [adb, "-s", serial, "shell", su_cmd],
                 capture_output=True, text=True, timeout=15,
@@ -503,6 +508,37 @@ def setup_frida_server(
                 f"Comando manual: adb -s {serial} shell \"su 0 sh -c 'unset LD_PRELOAD; {remote_path} &'\""
             )
             return False
+
+    # Detectar error CANNOT LINK EXECUTABLE por mismatch de arquitectura en LD_PRELOAD
+    time.sleep(2)
+    _init_err = _adb_shell(adb, serial, f"cat {_err_tmp} 2>/dev/null; rm -f {_err_tmp}", timeout=5)
+    if "CANNOT LINK EXECUTABLE" in _init_err and (
+        "64-bit instead of 32" in _init_err or "32-bit instead of 64" in _init_err
+    ):
+        cb("⚠  Error de arquitectura en LD_PRELOAD — matando frida-server y reintentando sin LD_PRELOAD...")
+        _adb_shell(adb, serial, "killall frida-server 2>/dev/null; true", timeout=5)
+        time.sleep(1)
+        _retry_cmd = f"env LD_PRELOAD= {_bin_cmd}"
+        if root_ok:
+            subprocess.Popen(
+                [adb, "-s", serial, "shell", f"{_retry_cmd} &"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            for su_cmd in [
+                f"su 0 sh -c '{_retry_cmd} &'",
+                f"su -c '{_retry_cmd} &'",
+                f"echo '{_retry_cmd} &' | su",
+            ]:
+                r = subprocess.run(
+                    [adb, "-s", serial, "shell", su_cmd],
+                    capture_output=True, text=True, timeout=15,
+                )
+                combined = (r.stdout + r.stderr).lower()
+                if "not found" in combined or "permission denied" in combined:
+                    continue
+                break
 
     # Esperar a que arranque
     deadline = time.monotonic() + FRIDA_TIMEOUT
