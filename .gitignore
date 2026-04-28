@@ -23,3 +23,14 @@ reports/
 .semgrep/
 frida_scripts/
 config.yaml
+# Added by code-review-graph
+.code-review-graph/
+.claude
+.kiro
+.cursorrules
+.mcp.json
+.opencode.json
+.windsurfrules
+CLAUDE.md
+AGENTS.md
+GEMINI.md
