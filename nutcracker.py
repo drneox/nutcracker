@@ -40,6 +40,7 @@ from nutcracker_core.frida_bypass import (
 )
 from nutcracker_core import i18n
 from nutcracker_core.i18n import t
+from nutcracker_core.plugins import load_plugins
 from nutcracker_core.manifest_analyzer import analyze_decompiled_dir, Misconfiguration
 from nutcracker_core.pdf_reporter import generate_pdf_report
 from nutcracker_core.reporter import print_report, save_json_report, save_analysis_json, print_vuln_report, print_masvs_summary
@@ -397,6 +398,9 @@ def cli(ctx: click.Context) -> None:
     if ctx.invoked_subcommand is None:
         click.echo("usage: python nutcracker.py scan 'https://play.google.com/store/apps/details?id=...'")
         ctx.exit(0)
+
+
+load_plugins(cli)
 
 
 # ── Comando: scan ─────────────────────────────────────────────────────────────
