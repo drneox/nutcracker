@@ -15,6 +15,25 @@ from pathlib import Path
 import requests
 import yaml
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from nutcracker_core.i18n import init as _i18n_init, t as t
+
+
+def _peek_language() -> str:
+    """Lee el idioma de config.yaml sin cargarlo completamente."""
+    for candidate in [Path("config.yaml"), Path(__file__).parent.parent / "config.yaml"]:
+        if candidate.exists():
+            try:
+                with candidate.open(encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+                return str(cfg.get("language", "en")).strip().lower()
+            except Exception:
+                pass
+    return "en"
+
+
+_i18n_init(_peek_language())
+
 
 def _adb(serial: str | None, *args: str, timeout: int = 20) -> tuple[str, int]:
     cmd = ["adb"]
@@ -42,64 +61,63 @@ def _select_device(preferred_serial: str | None, interactive: bool) -> str:
     authorized, unauthorized = _list_devices()
 
     if unauthorized:
-        print("ERROR: Hay dispositivo(s) no autorizados:")
+        print(t("et_err_unauthorized"))
         for serial in unauthorized:
             print(f"  - {serial}")
-        print("Desbloquea el teléfono y acepta 'Permitir depuración USB'.")
+        print(t("et_unlock_usb"))
         sys.exit(1)
 
     if not authorized:
-        print("ERROR: No hay dispositivos Android conectados.")
-        print("Pasos sugeridos:")
-        print("  1. Conecta el teléfono por USB")
-        print("  2. Activa Opciones de desarrollador > Depuración USB")
-        print("  3. Acepta el diálogo de depuración en el dispositivo")
+        print(t("et_err_no_devices"))
+        print(t("et_suggested_steps"))
+        print(t("et_step_connect_usb"))
+        print(t("et_step_dev_options"))
+        print(t("et_step_accept_dialog"))
         sys.exit(1)
 
     if preferred_serial:
         if preferred_serial in authorized:
             return preferred_serial
-        print(f"Aviso: --serial {preferred_serial} no está disponible. Usando selección automática.")
+        print(t("et_warn_serial", serial=preferred_serial))
 
     if len(authorized) == 1 or not interactive:
         return authorized[0]
 
-    print("Dispositivos detectados:")
+    print(t("et_devices_found"))
     for i, serial in enumerate(authorized, 1):
         model_out, _ = _adb(serial, "shell", "getprop", "ro.product.model")
-        model = model_out.strip() or "(modelo desconocido)"
+        model = model_out.strip() or t("et_unknown_model")
         print(f"  {i}) {serial}  [{model}]")
 
     while True:
         try:
-            idx = int(input(f"Elige dispositivo [1-{len(authorized)}]: ").strip())
+            idx = int(input(t("et_choose_device", count=len(authorized))).strip())
             if 1 <= idx <= len(authorized):
                 return authorized[idx - 1]
         except ValueError:
             pass
-        print("Entrada inválida.")
+        print(t("et_invalid_input"))
 
 
 def _device_instructions() -> None:
-    print("\nSigue estos pasos en el dispositivo:")
-    print("  1. Ve a Ajustes > Cuentas > Añadir cuenta > Google")
-    print("  2. Inicia sesión con la cuenta objetivo (si aún no está agregada)")
-    print("  3. Espera 30-60s para sincronización de Google Play Services")
-    print("  4. (Opcional) Abre Play Store una vez para forzar sincronización")
-    print("  5. Deja la pantalla desbloqueada durante la extracción")
+    print(t("et_device_steps_header"))
+    print(t("et_device_no_play_store"))
+    print(t("et_device_step1"))
+    print(t("et_device_step2"))
+    print(t("et_device_step3"))
 
 
 def _load_email(config_path: Path, email_arg: str | None) -> str:
     if email_arg:
         return email_arg
     if not config_path.exists():
-        print(f"ERROR: No existe {config_path}")
+        print(t("et_err_no_config", path=config_path))
         sys.exit(1)
     with config_path.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
     email = str(cfg.get("google_play", {}).get("email", "")).strip()
     if not email:
-        print("ERROR: Configura google_play.email en config.yaml o pasa --email")
+        print(t("et_err_no_email"))
         sys.exit(1)
     return email
 
@@ -212,7 +230,7 @@ def _try_root_database(serial: str) -> str | None:
 
     def _run_query(db_path: str, query: str, timeout: int = 12) -> str:
         if has_sqlite:
-            out, _ = root_runner(f"sqlite3 {db_path} \"{query}\"", timeout=timeout)
+            out, _ = root_runner(f'sqlite3 {db_path} "{query}"', timeout=timeout)
             return out
         return _query_local_copy(db_path, query)
 
@@ -305,7 +323,7 @@ def _get_aas_token(email: str, oauth_token: str) -> str | None:
         if "," in oauth_token:
             v1_candidates.append(oauth_token.split(",", 1)[0].strip())
         for idx, v1 in enumerate(v1_candidates, 1):
-            print(f"[diag] V1 detectado, intento de conversion {idx}/{len(v1_candidates)}")
+            print(t("et_diag_v1", idx=idx, total=len(v1_candidates)))
             aas = _master_token_to_aas(email, v1)
             if aas:
                 return aas
@@ -330,14 +348,14 @@ def _get_aas_token(email: str, oauth_token: str) -> str | None:
 
     output = result.stdout + result.stderr
     if result.returncode != 0:
-        print(f"[diag] apkeep fallo con codigo {result.returncode}")
+        print(t("et_diag_apkeep_fail", code=result.returncode))
         for line in output.splitlines():
             s = line.strip()
             if not s:
                 continue
             low = s.lower()
             if any(k in low for k in ("error", "bad", "auth", "forbidden", "needsbrowser", "captcha", "denied")):
-                print(f"[diag] apkeep: {s}")
+                print(t("et_diag_apkeep_line", line=s))
     for line in output.splitlines():
         line = line.strip()
         if line.startswith("aas_et/"):
@@ -376,7 +394,7 @@ def _master_token_to_aas(email: str, master_token: str) -> str | None:
     try:
         resp = requests.post(url, headers=headers, data=data, timeout=20)
     except requests.RequestException:
-        print("[diag] auth endpoint no alcanzable o timeout")
+        print(t("et_diag_auth_timeout"))
         return None
 
     token = None
@@ -395,9 +413,9 @@ def _master_token_to_aas(email: str, master_token: str) -> str | None:
     if not token:
         if diag_lines:
             for s in diag_lines:
-                print(f"[diag] auth: {s}")
+                print(t("et_diag_auth_line", line=s))
         else:
-            print(f"[diag] auth sin Token/Auth (http={resp.status_code})")
+            print(t("et_diag_auth_no_token", status=resp.status_code))
         return None
 
     if token.startswith("aas_et/"):
@@ -421,7 +439,7 @@ def _extract_oauth_token(
         methods = [method]
 
     for m in methods:
-        print(f"\nIntentando método: {m}")
+        print(t("et_trying_method", method=m))
         token = None
         if m == "root":
             token = _try_root_database(serial)
@@ -433,21 +451,21 @@ def _extract_oauth_token(
         if token:
             return token
 
-        print("  No se obtuvo token con este método.")
+        print(t("et_no_token_method"))
         if interactive and method == "auto":
-            _pause("  Pulsa ENTER para intentar el siguiente método...", interactive)
+            _pause(t("et_next_method"), interactive)
 
     return None
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Asistente interactivo de AAS token")
-    parser.add_argument("--config", default="config.yaml", help="Ruta a config.yaml")
-    parser.add_argument("--serial", default=None, help="ADB serial objetivo")
-    parser.add_argument("--email", default=None, help="Email Google Play (override)")
+    parser = argparse.ArgumentParser(description=t("et_argparse_desc"))
+    parser.add_argument("--config", default="config.yaml", help=t("et_arg_config"))
+    parser.add_argument("--serial", default=None, help=t("et_arg_serial"))
+    parser.add_argument("--email", default=None, help=t("et_arg_email"))
     parser.add_argument("--method", default="auto", choices=["auto", "root", "dumpsys", "gsf"],
-                        help="Método de extracción del token intermedio")
-    parser.add_argument("--no-interactive", action="store_true", help="No pedir confirmaciones")
+                        help=t("et_arg_method"))
+    parser.add_argument("--no-interactive", action="store_true", help=t("et_arg_no_interactive"))
     return parser.parse_args()
 
 
@@ -456,38 +474,38 @@ def main() -> None:
     interactive = not args.no_interactive
     config_path = Path(args.config)
 
-    print("=== nutcracker — Asistente de extracción AAS Token ===")
+    print(t("et_header"))
 
     email = _load_email(config_path, args.email)
     serial = _select_device(args.serial, interactive)
     model, _ = _adb(serial, "shell", "getprop", "ro.product.model")
-    print(f"\nDispositivo: {serial} [{model.strip() or 'modelo desconocido'}]")
+    print(t("et_device_info", serial=serial, model=model.strip() or t("et_unknown_model")))
     android_id = _get_android_id(serial)
-    print(f"Android ID: {android_id or 'N/A'}")
+    print(t("et_android_id", android_id=android_id or "N/A"))
 
     if interactive:
         _device_instructions()
-        _pause("\nPulsa ENTER cuando completes los pasos en el dispositivo...", interactive)
+        _pause(t("et_press_enter"), interactive)
 
     token = _extract_oauth_token(serial, email, args.method, interactive)
     if not token:
-        print("\nNo se pudo extraer token automáticamente.")
-        print("Sugerencias:")
-        print("  1. Abre Play Store y confirma que la cuenta esté logueada")
-        print("  2. Espera 30-60s a que sincronice Google Play Services")
-        print("  3. Reintenta con --method root si usas emulador/root")
+        print(t("et_no_auto_token"))
+        print(t("et_suggestions"))
+        print(t("et_sugg1"))
+        print(t("et_sugg2"))
+        print(t("et_sugg3"))
         sys.exit(1)
 
-    print(f"\nToken intermedio extraído: {token[:24]}...")
+    print(t("et_intermediate_token", token=token[:24]))
     aas_token = _get_aas_token(email, token)
     if not aas_token:
-        print("ERROR: apkeep no pudo convertir el token a aas_token.")
-        print("Verifica que apkeep esté instalado y que el dispositivo tenga sesión válida.")
+        print(t("et_err_apkeep_convert"))
+        print(t("et_verify_apkeep"))
         sys.exit(1)
 
     _save_aas_token(config_path, email, aas_token)
-    print(f"\nAAS token guardado en {config_path}")
-    print("Ya puedes usar Google Play en nutcracker.")
+    print(t("et_aas_saved", path=config_path))
+    print(t("et_ready"))
 
 
 if __name__ == "__main__":
