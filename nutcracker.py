@@ -553,15 +553,9 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
                     sys.exit(1)
 
             if aas_token:
-                # Método preferido: apkeep con AAS token
                 label = "Google Play (apkeep)"
                 downloader: APKPureDownloader | GooglePlayDownloader = \
                     GooglePlayDownloader(email, aas_token, output_dir)
-            else:
-                console.print(
-                    f"[red]Error:[/red] {t('cli_gplay_run_setup_token')}"
-                )
-                sys.exit(1)
         else:
             label = "APKPure"
             downloader = APKPureDownloader(output_dir)
@@ -2138,6 +2132,7 @@ def regen_pdf(package: str) -> None:
             pass
 
     _generate_pdf(result, vuln_scan)
+
 
 
 # ── Punto de entrada ──────────────────────────────────────────────────────────
