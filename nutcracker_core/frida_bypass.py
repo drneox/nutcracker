@@ -723,11 +723,10 @@ _HOOK_PAIRIP = """\
 """
 
 _HOOK_FRIDA_DETECTION = """\
-  // ── Bypass: Detección de Frida ────────────────────────────────────────────
-  // Algunas apps detectan Frida leyendo /proc/self/maps o buscando "frida" en el proceso.
+  // ── Bypass: Detección de Frida (Java layer) ──────────────────────────────
+  // Cubre apps que leen /proc/self/maps desde Java (BufferedReader).
   (function() {
     try {
-      // Interceptar lectura de /proc/maps para ocultar frida-agent
       var BufferedReader = Java.use('java.io.BufferedReader');
       var original_readLine = BufferedReader.readLine.overload();
       BufferedReader.readLine.overload().implementation = function() {
@@ -747,6 +746,104 @@ _HOOK_FRIDA_DETECTION = """\
   })();
 """
 
+_HOOK_NATIVE_FRIDA_HIDING = """\
+  // ── Bypass: Detección nativa de Frida (libc layer) ───────────────────────
+  // USAR SOLO cuando la app tiene detección a nivel NDK (fopen/fgets en C,
+  // sondeo de puerto 27042). Riesgo mayor que el hook Java: puede crashear
+  // si libc aún no está lista o si interfiere con conexiones legítimas.
+  // Se incluye automáticamente solo si el análisis detecta llamadas nativas
+  // a fopen("/proc/self/maps") o sockets hacia 27042/27043.
+  (function nativeFridaHide() {
+    try {
+      var libc = Process.getModuleByName('libc.so');
+      var _FRIDA_NOISE = ['frida', 'gum-js-loop', 'linjector', 'gmain'];
+      var _mapsHandles = {};
+
+      function _scrubBuf(bufPtr, len) {
+        try {
+          var raw = bufPtr.readByteArray(len);
+          if (!raw) return;
+          var arr = new Uint8Array(raw);
+          var str = '';
+          for (var i = 0; i < len; i++) str += String.fromCharCode(arr[i]);
+          var low = str.toLowerCase();
+          for (var n = 0; n < _FRIDA_NOISE.length; n++) {
+            var kw = _FRIDA_NOISE[n];
+            var idx = low.indexOf(kw);
+            while (idx !== -1) {
+              for (var k = 0; k < kw.length; k++) bufPtr.add(idx + k).writeU8(0x78);
+              idx = low.indexOf(kw, idx + kw.length);
+            }
+          }
+        } catch(e) {}
+      }
+
+      ['fopen', 'fopen64'].forEach(function(sym) {
+        var p = null;
+        try { p = libc.getExportByName(sym); } catch(e) {}
+        if (!p) return;
+        Interceptor.attach(p, {
+          onEnter: function(args) {
+            this._isMaps = false;
+            try {
+              if (args[0].isNull()) return;
+              var path = args[0].readUtf8String(256) || '';
+              this._isMaps = (path.indexOf('/proc/') !== -1 && path.indexOf('/maps') !== -1);
+            } catch(e) {}
+          },
+          onLeave: function(retval) {
+            if (this._isMaps && !retval.isNull()) _mapsHandles[retval.toString()] = true;
+          }
+        });
+      });
+
+      var fgetsPtr = null;
+      try { fgetsPtr = libc.getExportByName('fgets'); } catch(e) {}
+      if (fgetsPtr) {
+        Interceptor.attach(fgetsPtr, {
+          onEnter: function(args) { this._buf = args[0]; this._fp = args[2].toString(); },
+          onLeave: function(retval) {
+            if (retval.isNull() || !_mapsHandles[this._fp]) return;
+            try {
+              var s = this._buf.readCString() || '';
+              if (s.length > 0) _scrubBuf(this._buf, s.length);
+            } catch(e) {}
+          }
+        });
+      }
+
+      var fclosePtr = null;
+      try { fclosePtr = libc.getExportByName('fclose'); } catch(e) {}
+      if (fclosePtr) {
+        Interceptor.attach(fclosePtr, {
+          onEnter: function(args) {
+            if (!args[0].isNull()) { var key = args[0].toString(); if (_mapsHandles[key]) delete _mapsHandles[key]; }
+          }
+        });
+      }
+
+      var connectPtr = null;
+      try { connectPtr = libc.getExportByName('connect'); } catch(e) {}
+      if (connectPtr) {
+        Interceptor.attach(connectPtr, {
+          onEnter: function(args) {
+            try {
+              if (args[2].toInt32() < 4) return;
+              var family = args[1].readU16();
+              if (family !== 2) return;
+              var portBe = args[1].add(2).readU16();
+              var port = ((portBe & 0xFF) << 8) | ((portBe >> 8) & 0xFF);
+              if (port === 27042 || port === 27043) args[1].add(2).writeU16(0x0100);
+            } catch(e) {}
+          }
+        });
+      }
+
+      console.log('[Bypass] ✔ Native Frida hiding activo (libc hooks)');
+    } catch(e) { console.log('[Bypass] Native Frida hiding error: ' + e); }
+  })();
+"""
+
 
 # ── Mapa detector → bloques de hooks ─────────────────────────────────────────
 
@@ -757,6 +854,9 @@ _DETECTOR_HOOKS: dict[str, list[str]] = {
     "SafetyNetDetector": [_HOOK_SAFETYNET, _HOOK_EMULATOR_DETECTION],
     "ManualChecksDetector": [_HOOK_FILE_EXISTS, _HOOK_RUNTIME_EXEC, _HOOK_BUILD_PROPS],
     "MagiskDetector": [_HOOK_PACKAGE_MANAGER, _HOOK_FILE_EXISTS],
+    # Solo se activa cuando el análisis detecta detección nativa de Frida:
+    # librerías .so que leen /proc/self/maps con fgets o sondean puerto 27042.
+    "NativeFridaDetector": [_HOOK_NATIVE_FRIDA_HIDING],
 }
 
 # Hooks siempre incluidos (defensa en profundidad)
