@@ -925,7 +925,8 @@ def _post_analysis_flow(result, apk_path: Path):
                         f"[green]✔[/green] {t('cli_bypass_script_generated')} [bold]{bp_path}[/bold]"
                     )
                     if _LAUNCH_APP:
-                        _launch_frida_bypass(result.package, bp_path, _LAUNCH_SERIAL)
+                        _fh = str(cfg_get(_CFG, "strategies", "frida_host", default="")).strip() or None
+                        _launch_frida_bypass(result.package, bp_path, _LAUNCH_SERIAL, frida_host=_fh)
                 except Exception as exc:  # noqa: BLE001
                     console.print(f"[red]{t('cli_error_bypass')}[/red] {exc}")
 
@@ -946,7 +947,8 @@ def _post_analysis_flow(result, apk_path: Path):
                 script_path = generate_bypass_script(result, scripts_dir)
                 console.print(f"[green]✔[/green] {t('cli_frida_script_generated')} [bold]{script_path}[/bold]")
                 if _LAUNCH_APP:
-                    _launch_frida_bypass(result.package, script_path, _LAUNCH_SERIAL)
+                    _fh = str(cfg_get(_CFG, "strategies", "frida_host", default="")).strip() or None
+                    _launch_frida_bypass(result.package, script_path, _LAUNCH_SERIAL, frida_host=_fh)
                 else:
                     console.print(frida_run_instructions(result.package, script_path))
             except Exception as exc:  # noqa: BLE001
