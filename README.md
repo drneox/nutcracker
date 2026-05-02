@@ -501,9 +501,8 @@ See [ROADMAP.md](ROADMAP.md) for pending tasks: OSINT improvements, iOS/IPA supp
 
 ## Plugin System
 
-Nutcracker supports an auto-discovered plugin system. Any subdirectory inside
-`nutcracker_core/plugins/` that exposes a `register(cli)` function is loaded
-automatically at startup.
+Nutcracker auto-discovers plugins: any subdirectory inside `nutcracker_core/plugins/`
+that exposes a `register(cli)` function is loaded at startup.
 
 ### Installing an external plugin
 
@@ -519,85 +518,140 @@ git clone https://github.com/<user>/<plugin-repo> nutcracker_core/plugins/<name>
 | `aipwn` | `nutcracker aipwn <package>` | Autonomous LLM-powered Frida bypass agent |
 | `aireview` | `nutcracker ai-review <package>` | LLM-powered false positive filter |
 
-### Creating a plugin
+---
 
-**Minimum structure:**
+## Building a Plugin
+
+A plugin is a Python package (a folder with `__init__.py`) placed inside
+`nutcracker_core/plugins/`. The only required contract is a top-level
+`register(cli)` function — everything else is optional.
+
+### Step 1 — Create the folder structure
 
 ```
 nutcracker_core/plugins/myplugin/
-├── __init__.py        # required — must expose register(cli)
-└── requirements.txt   # optional — auto-installed on first use
+├── __init__.py        # required
+└── requirements.txt   # optional — auto-installed if import fails
 ```
 
-**Minimum `__init__.py`:**
+### Step 2 — Implement `register(cli)`
+
+`cli` is the root `click.Group` of `nutcracker.py`. Use it to attach one or
+more subcommands:
 
 ```python
+# nutcracker_core/plugins/myplugin/__init__.py
+from __future__ import annotations
 import click
 
 def register(cli: click.Group) -> None:
     @cli.command("my-command")
     @click.argument("package")
-    def my_command(package: str):
-        """One-line description shown in nutcracker --help."""
-        click.echo(f"Processing {package}")
+    @click.option("--verbose", "-v", is_flag=True)
+    def my_command(package: str, verbose: bool) -> None:
+        """Short description shown in nutcracker --help."""
+        click.echo(f"Running myplugin on {package}")
 ```
 
-That's the only requirement. The loader checks for `register` with
-`getattr(mod, "register", None)` — if it doesn't exist, the plugin is silently skipped.
+After adding the file, the command is available immediately:
 
-### Post-hooks
-
-Plugins can react to analysis events without modifying `nutcracker.py`:
-
-```python
-from nutcracker_core.plugins import register_post_hook
-
-def _on_after_analysis(package, result, vuln_scan, config):
-    # Called after every scan/analyze run that produces a result
-    ...
-
-def _on_after_batch(packages, config):
-    # Called once after a batch run finishes
-    ...
-
-def register(cli: click.Group) -> None:
-    register_post_hook("after_analysis", _on_after_analysis)
-    register_post_hook("after_batch", _on_after_batch)
-    # optionally also add CLI commands:
-    @cli.command("my-command")
-    ...
+```bash
+python nutcracker.py my-command com.example.app
+python nutcracker.py --help          # shows my-command in the list
 ```
 
-**Supported events:**
-
-| Event | When it fires | kwargs |
-|---|---|---|
-| `after_analysis` | After every `scan` / `analyze` run | `package`, `result`, `vuln_scan`, `config` |
-| `after_batch` | Once after a `batch` run finishes | `packages` (list), `config` |
-
-### Reading config.yaml from a plugin
+### Step 3 — Read `config.yaml` (optional)
 
 ```python
 from nutcracker_core.config import load_config, get as cfg_get
 
-def register(cli):
+def register(cli: click.Group) -> None:
     @cli.command("my-command")
     @click.argument("package")
-    def my_command(package):
+    def my_command(package: str) -> None:
         config = load_config()
-        api_key = cfg_get(config, "llm.api_key", default="")
+        api_key  = cfg_get(config, "llm.api_key",  default="")
+        timeout  = cfg_get(config, "llm.timeout",  default=60)
         ...
 ```
 
-### Plugin with dependencies
+You can also add your own block to `config.yaml`:
 
-Create a `requirements.txt` next to `__init__.py`. The loader will run
-`pip install -q -r requirements.txt` automatically if the initial import fails
-due to missing packages.
+```yaml
+# config.yaml
+myplugin:
+  output_dir: "./myplugin_output"
+  max_items: 10
+```
+
+```python
+output_dir = cfg_get(config, "myplugin.output_dir", default="./myplugin_output")
+```
+
+### Step 4 — React to analysis events with post-hooks (optional)
+
+Post-hooks let you run code automatically after `scan` / `analyze` / `batch`
+without modifying `nutcracker.py`:
+
+```python
+from nutcracker_core.plugins import register_post_hook
+
+def _after_analysis(package, result, vuln_scan, config):
+    # Runs after every scan/analyze that produces a result
+    print(f"[myplugin] {package} — {len(vuln_scan.findings)} findings")
+
+def _after_batch(packages, config):
+    # Runs once after a full batch completes
+    print(f"[myplugin] batch done — {len(packages)} apps")
+
+def register(cli: click.Group) -> None:
+    register_post_hook("after_analysis", _after_analysis)
+    register_post_hook("after_batch",    _after_batch)
+```
+
+**Available events:**
+
+| Event | When | kwargs |
+|---|---|---|
+| `after_analysis` | After every `scan` / `analyze` run | `package`, `result`, `vuln_scan`, `config` |
+| `after_batch` | Once after `batch` finishes | `packages` (list[str]), `config` |
+
+### Step 5 — Declare Python dependencies (optional)
+
+Create `requirements.txt` next to `__init__.py`. If the plugin fails to import
+due to missing packages, the loader automatically runs `pip install -q -r requirements.txt`
+and retries the import.
 
 ```
 # nutcracker_core/plugins/myplugin/requirements.txt
 httpx>=0.27
+rich>=13
+```
+
+### Complete minimal example
+
+```python
+# nutcracker_core/plugins/myplugin/__init__.py
+from __future__ import annotations
+from pathlib import Path
+import click
+from nutcracker_core.plugins import register_post_hook
+
+
+def _after_analysis(package, result, vuln_scan, config):
+    out = Path("./myplugin_output") / f"{package}.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(f"{len(vuln_scan.findings)} findings\n")
+
+
+def register(cli: click.Group) -> None:
+    register_post_hook("after_analysis", _after_analysis)
+
+    @cli.command("my-command")
+    @click.argument("package")
+    def my_command(package: str) -> None:
+        """Run myplugin manually on PACKAGE."""
+        click.echo(f"myplugin: {package}")
 ```
 
 ---
@@ -641,9 +695,7 @@ nutcracker/
     ├── vuln_scanner.py             # Semgrep + regex + apkleaks + gitleaks
     ├── plugins/
     │   ├── __init__.py             # Plugin loader + post-hook registry
-    │   ├── aipwn/                  # aipwn plugin: autonomous LLM-powered Frida bypass agent
     │   ├── aireview/               # ai-review plugin: LLM-powered false positive filter
-    │   └── awareness/              # awareness plugin (stub)
     └── detectors/
         ├── __init__.py             # Detectors subpackage export
         ├── appdome.py              # Appdome detector
