@@ -499,6 +499,109 @@ See [ROADMAP.md](ROADMAP.md) for pending tasks: OSINT improvements, iOS/IPA supp
 
 ---
 
+## Plugin System
+
+Nutcracker supports an auto-discovered plugin system. Any subdirectory inside
+`nutcracker_core/plugins/` that exposes a `register(cli)` function is loaded
+automatically at startup.
+
+### Installing an external plugin
+
+```bash
+git clone https://github.com/<user>/<plugin-repo> nutcracker_core/plugins/<name>
+# requirements.txt is installed automatically on first use
+```
+
+### Built-in plugins
+
+| Plugin | Command | Description |
+|---|---|---|
+| `aipwn` | `nutcracker aipwn <package>` | Autonomous LLM-powered Frida bypass agent |
+| `aireview` | `nutcracker ai-review <package>` | LLM-powered false positive filter |
+
+### Creating a plugin
+
+**Minimum structure:**
+
+```
+nutcracker_core/plugins/myplugin/
+├── __init__.py        # required — must expose register(cli)
+└── requirements.txt   # optional — auto-installed on first use
+```
+
+**Minimum `__init__.py`:**
+
+```python
+import click
+
+def register(cli: click.Group) -> None:
+    @cli.command("my-command")
+    @click.argument("package")
+    def my_command(package: str):
+        """One-line description shown in nutcracker --help."""
+        click.echo(f"Processing {package}")
+```
+
+That's the only requirement. The loader checks for `register` with
+`getattr(mod, "register", None)` — if it doesn't exist, the plugin is silently skipped.
+
+### Post-hooks
+
+Plugins can react to analysis events without modifying `nutcracker.py`:
+
+```python
+from nutcracker_core.plugins import register_post_hook
+
+def _on_after_analysis(package, result, vuln_scan, config):
+    # Called after every scan/analyze run that produces a result
+    ...
+
+def _on_after_batch(packages, config):
+    # Called once after a batch run finishes
+    ...
+
+def register(cli: click.Group) -> None:
+    register_post_hook("after_analysis", _on_after_analysis)
+    register_post_hook("after_batch", _on_after_batch)
+    # optionally also add CLI commands:
+    @cli.command("my-command")
+    ...
+```
+
+**Supported events:**
+
+| Event | When it fires | kwargs |
+|---|---|---|
+| `after_analysis` | After every `scan` / `analyze` run | `package`, `result`, `vuln_scan`, `config` |
+| `after_batch` | Once after a `batch` run finishes | `packages` (list), `config` |
+
+### Reading config.yaml from a plugin
+
+```python
+from nutcracker_core.config import load_config, get as cfg_get
+
+def register(cli):
+    @cli.command("my-command")
+    @click.argument("package")
+    def my_command(package):
+        config = load_config()
+        api_key = cfg_get(config, "llm.api_key", default="")
+        ...
+```
+
+### Plugin with dependencies
+
+Create a `requirements.txt` next to `__init__.py`. The loader will run
+`pip install -q -r requirements.txt` automatically if the initial import fails
+due to missing packages.
+
+```
+# nutcracker_core/plugins/myplugin/requirements.txt
+httpx>=0.27
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -537,7 +640,10 @@ nutcracker/
     ├── string_extractor.py         # APK string extraction
     ├── vuln_scanner.py             # Semgrep + regex + apkleaks + gitleaks
     ├── plugins/
-    │   └── aireview/               # ai-review plugin: LLM-powered false positive filter
+    │   ├── __init__.py             # Plugin loader + post-hook registry
+    │   ├── aipwn/                  # aipwn plugin: autonomous LLM-powered Frida bypass agent
+    │   ├── aireview/               # ai-review plugin: LLM-powered false positive filter
+    │   └── awareness/              # awareness plugin (stub)
     └── detectors/
         ├── __init__.py             # Detectors subpackage export
         ├── appdome.py              # Appdome detector
