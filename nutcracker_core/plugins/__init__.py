@@ -18,6 +18,34 @@ from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
+# ── Post-hook registry ────────────────────────────────────────────────────────
+# Plugins call register_post_hook(event, fn) during their register() call.
+# nutcracker.py calls fire_post_hooks(event, **kwargs) at the right moment.
+#
+# Supported events:
+#   "after_analysis"  — fired after every scan/analyze run that produces a result.
+#                       kwargs: package, result, vuln_scan, config
+#   "after_batch"     — fired once after a batch run finishes.
+#                       kwargs: packages (list[str]), config
+
+_POST_HOOKS: dict[str, list] = {}
+
+
+def register_post_hook(event: str, fn) -> None:
+    """Register *fn* to be called when *event* fires.  Called from plugin register()."""
+    _POST_HOOKS.setdefault(event, []).append(fn)
+
+
+def fire_post_hooks(event: str, **kwargs) -> None:
+    """Call every function registered for *event*, passing **kwargs**.  Never raises."""
+    for fn in _POST_HOOKS.get(event, []):
+        try:
+            fn(**kwargs)
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Post-hook %r from %r failed: %s", event, fn, exc)
+
 
 def load_plugins(cli) -> None:
     """Descubre y registra todos los plugins instalados en este directorio."""

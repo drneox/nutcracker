@@ -34,3 +34,7 @@ config.yaml
 CLAUDE.md
 AGENTS.md
 GEMINI.md
+logs/
+plugins/
+aipwn_memory/
+*.bk

@@ -43,6 +43,14 @@ _BUILDCONFIG_SKIP = frozenset({
     "FLAVOR_environment",
 })
 
+# Prefijos de nombres de constantes que NO son secrets (Intent extras, acciones, permisos, etc.)
+_BUILDCONFIG_SKIP_PREFIXES = (
+    "EXTRA_", "ACTION_", "PERMISSION_", "CATEGORY_", "SCHEME_",
+    "MIME_TYPE_", "BROADCAST_", "CHANNEL_", "NOTIFICATION_",
+    "REQUEST_CODE_", "RESULT_", "STATE_", "STATUS_", "TYPE_",
+    "KEY_", "PREF_", "TAG_", "LOG_", "EVENT_",
+)
+
 # Regex para detectar declaraciones static final String en BuildConfig
 _RE_STATIC_STRING = re.compile(
     r'public\s+static\s+final\s+(?:java\.lang\.)?String\s+'
@@ -79,12 +87,13 @@ class Subdomain:
 @dataclass
 class PublicLeak:
     """Un leak encontrado en fuentes públicas."""
-    source: str        # "github" | "postman" | "fofa"
+    source: str        # "github" | "postman" | "fofa" | "shodan"
     query: str
     url: str
     title: str
     snippet: str = ""
-    vulns: list[str] = field(default_factory=list)  # CVEs de FOFA
+    vulns: list[str] = field(default_factory=list)   # CVE IDs
+    vulns_cvss: dict[str, float] = field(default_factory=dict)  # CVE-ID -> CVSS (solo Shodan)
 
 
 @dataclass
@@ -113,7 +122,7 @@ class OsintResult:
             "public_leaks": [
                 {"source": l.source, "query": l.query, "url": l.url,
                  "title": l.title, "snippet": l.snippet,
-                 "vulns": l.vulns}
+                 "vulns": l.vulns, "vulns_cvss": l.vulns_cvss}
                 for l in self.public_leaks
             ],
             "domains_scanned": self.domains_scanned,
@@ -236,6 +245,8 @@ def extract_buildconfig_secrets(
 
             if name in _BUILDCONFIG_SKIP:
                 continue
+            if name.startswith(_BUILDCONFIG_SKIP_PREFIXES):
+                continue
             if value in seen_values:
                 continue
             # Saltar valores triviales
@@ -266,16 +277,47 @@ def extract_buildconfig_secrets(
 
 
 def _looks_like_secret_value(val: str) -> bool:
-    """Heurística para detectar valores que parecen secretos."""
+    """Heurística para detectar valores que parecen secretos reales."""
     # UUIDs
     if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", val, re.I):
         return True
-    # API keys largas (hex, alfanuméricas)
-    if len(val) >= 20 and re.fullmatch(r"[A-Za-z0-9_\-+/=.]+", val):
+
+    # Descartar patrones claramente NO secretos antes de las heurísticas generales:
+    # — constantes Android/Java: android.*, com.android.*, androidx.*, java.*, kotlin.*
+    _ANDROID_PREFIXES = (
+        "android.", "com.android.", "androidx.", "java.", "javax.",
+        "kotlin.", "org.json.", "org.apache.", "dalvik.", "sun.",
+    )
+    if val.lower().startswith(_ANDROID_PREFIXES):
+        return False
+    # — claves de Intent/Bundle con punto y sin dígitos (ej. "extra.MESSAGE_READ_STATUS")
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*\.[A-Z_]{4,}", val):
+        return False
+    # — cadenas que parecen nombres de clase o campo Java (CamelCase o SCREAMING_SNAKE con puntos)
+    if re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}", val):
+        return False
+    # — rutas de archivo o resource id de Android (R.string.xxx, layout/xxx)
+    if re.search(r"\bR\.(string|id|layout|drawable|color|dimen|attr|style)\b", val):
+        return False
+
+    # Google / Firebase API key: AIzaSy...
+    if re.match(r"AIza[0-9A-Za-z\-_]{35}", val):
         return True
-    # URLs de producción
-    if val.startswith("https://"):
+    # FCM server key: AAAA...
+    if re.match(r"AAAA[A-Za-z0-9_\-]{7}:", val):
         return True
+
+    # API keys largas puramente alfanuméricas (sin puntos ni barras bajas que
+    # sugieran identificadores compuestos)
+    if len(val) >= 20 and re.fullmatch(r"[A-Za-z0-9\-_]+", val) and not val.isupper():
+        return True
+    # Hex largo (tokens, hashes)
+    if len(val) >= 24 and re.fullmatch(r"[0-9a-fA-F]+", val):
+        return True
+    # Base64-like largo
+    if len(val) >= 32 and re.fullmatch(r"[A-Za-z0-9+/=]+", val) and "=" in val:
+        return True
+
     return False
 
 
@@ -558,7 +600,8 @@ def search_github_code(
     headers: dict[str, str] = {"User-Agent": _USER_AGENT}
     if use_api:
         headers["Authorization"] = f"Bearer {github_token}"
-        headers["Accept"] = "application/vnd.github+json"
+        # text-match media type para recibir fragmentos del match en text_matches[]
+        headers["Accept"] = "application/vnd.github.v3.text-match+json"
         headers["X-GitHub-Api-Version"] = "2022-11-28"
 
     for query in queries:
@@ -993,6 +1036,15 @@ def search_shodan(
                         parts.append(f"(+{len(sorted_cves) - 5} more)")
                 snippet = " | ".join(p for p in parts if p.strip(" ="))
 
+                # Construir mapa CVE -> CVSS (solo para Shodan que provee el dato)
+                cvss_map: dict[str, float] = {}
+                for cve_id in cve_list:
+                    raw_score = raw_vulns.get(cve_id, {}).get("cvss", 0) if isinstance(raw_vulns, dict) else 0
+                    try:
+                        cvss_map[cve_id] = float(raw_score or 0)
+                    except (TypeError, ValueError):
+                        cvss_map[cve_id] = 0.0
+
                 results.append(PublicLeak(
                     source="shodan",
                     query=query,
@@ -1000,6 +1052,7 @@ def search_shodan(
                     title=host or f"{ip_addr}:{port}",
                     snippet=snippet,
                     vulns=cve_list,
+                    vulns_cvss=cvss_map,
                 ))
 
         except (requests.RequestException, json.JSONDecodeError, ValueError):
@@ -1541,6 +1594,44 @@ def extract_target_domains(
     return sorted(result)
 
 
+# ── Helpers de análisis de activos expuestos ──────────────────────────────────
+
+def cvss_to_severity(score: float) -> str:
+    """Convierte un CVSS score a nivel de severidad estándar."""
+    if score >= 9.0:
+        return "critical"
+    if score >= 7.0:
+        return "high"
+    if score >= 4.0:
+        return "medium"
+    if score > 0.0:
+        return "low"
+    return "info"
+
+
+def exposed_assets_severity_counts(
+    public_leaks: "list[PublicLeak]",
+) -> dict[str, int]:
+    """
+    Dada la lista de leaks de activos expuestos (FOFA/Shodan), devuelve
+    un dict {severity: count} de CVEs.
+
+    - Shodan: usa vulns_cvss para mapear CVSS → severity.
+    - FOFA y otros: sin CVSS disponible, cuenta cada CVE como 'info'.
+    """
+    counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for leak in public_leaks:
+        if leak.source not in ("fofa", "shodan"):
+            continue
+        for cve_id in leak.vulns:
+            if leak.vulns_cvss and cve_id in leak.vulns_cvss:
+                sev = cvss_to_severity(leak.vulns_cvss[cve_id])
+            else:
+                sev = "info"  # FOFA no provee CVSS
+            counts[sev] = counts.get(sev, 0) + 1
+    return counts
+
+
 # ── Función principal de orquestación ─────────────────────────────────────────
 
 def _secrets_from_scan_findings(findings: list) -> list[Secret]:
@@ -1677,9 +1768,36 @@ def run_osint(
         )
 
     # 4. Búsqueda en fuentes públicas
-    # Construir queries relevantes
+    # leak_queries: fuente primaria = findings HC* del scanner (valores ya
+    # confirmados como credencial); fuente secundaria = secretos extraídos
+    # directamente del BuildConfig (cubre casos donde el scanner no hizo match
+    # exacto pero el valor sigue siendo una clave real).
+    # Ambas fuentes se deduплican por valor; se excluyen URLs (ya en `domains`).
+    _RE_QUOTED = re.compile(r'["\']([^"\']{12,})["\']')
+    _seen_leak_values: set[str] = set()
+    leak_queries: list[str] = []
+
+    # Fuente 1: solo HC001 (hardcoded secrets) y HC004 (API keys) — leaks confirmados
+    _LEAK_RULES = {"HC001", "HC004"}
+    if scan_findings:
+        for _f in scan_findings:
+            _rule = getattr(_f, "rule_id", "") or ""
+            if _rule not in _LEAK_RULES:
+                continue
+            _matched = getattr(_f, "matched_text", "") or ""
+            for _m in _RE_QUOTED.finditer(_matched):
+                _v = _m.group(1).strip()
+                if not _v or len(_v) < 8:
+                    continue
+                if _v.startswith(("http://", "https://")):
+                    continue
+                if _v not in _seen_leak_values:
+                    _seen_leak_values.add(_v)
+                    leak_queries.append(_v)
+
     search_queries = list(domains)
     search_queries.append(package)
+    search_queries.extend(leak_queries)
 
     if postman_search:
         result.public_leaks.extend(
@@ -1689,6 +1807,7 @@ def run_osint(
     if github_search:
         github_queries = [package]
         github_queries.extend(domains)
+        github_queries.extend(leak_queries)
         result.public_leaks.extend(
             search_github_code(
                 github_queries,
@@ -1700,6 +1819,7 @@ def run_osint(
     if grep_app_search:
         grep_app_queries = [package]
         grep_app_queries.extend(domains)
+        grep_app_queries.extend(leak_queries)
         result.public_leaks.extend(
             search_grep_app(
                 grep_app_queries,
