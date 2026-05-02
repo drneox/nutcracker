@@ -83,12 +83,16 @@ class ManifestAnalysisResult:
 def analyze_decompiled_dir(
     decompiled_dir: Path,
     progress_callback=None,
+    apk_path: Path | None = None,
 ) -> ManifestAnalysisResult:
     """
     Analiza el directorio decompilado por jadx buscando misconfigs en:
       - AndroidManifest.xml
       - res/xml/network_security_config.xml
       - res/values/strings.xml
+
+    Si no se encuentra el manifest y se provee apk_path, lo extrae
+    automáticamente del APK usando apktool/jadx (útil tras runtime dump).
     """
     result = ManifestAnalysisResult()
 
@@ -101,6 +105,17 @@ def analyze_decompiled_dir(
     if not manifest_path.exists():
         # Fallback: jadx a veces lo pone en la raíz
         manifest_path = decompiled_dir / "AndroidManifest.xml"
+
+    # ── Fallback: extraer del APK si se proporcionó y no hay manifest ────────
+    if not manifest_path.exists() and apk_path and apk_path.exists():
+        try:
+            from .decompiler import extract_manifest
+            _cb(t("analyzing_manifest_progress"))
+            extracted = extract_manifest(apk_path, decompiled_dir.parent)
+            if extracted:
+                manifest_path = extracted
+        except Exception:  # noqa: BLE001
+            pass
 
     if manifest_path.exists():
         _cb(t("analyzing_manifest_progress"))

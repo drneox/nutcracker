@@ -46,6 +46,22 @@ def t(key: str, **kwargs) -> str:
     return value
 
 
+def register(strings: dict[str, dict[str, str]]) -> None:
+    """
+    Register additional translation strings from a plugin.
+    *strings* must be a dict keyed by language code, e.g.::
+
+        register({"en": {"my_key": "Hello"}, "es": {"my_key": "Hola"}})
+
+    Existing keys are NOT overwritten — the plugin strings act as a fallback.
+    """
+    for lang, entries in strings.items():
+        if lang not in STRINGS:
+            STRINGS[lang] = {}
+        for key, value in entries.items():
+            STRINGS[lang].setdefault(key, value)
+
+
 # ── Translation tables ────────────────────────────────────────────────────────
 
 STRINGS: dict[str, dict[str, str]] = {
@@ -139,6 +155,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "vulns_card": "Vulns",
         "exposed_assets_card": "Exposed Assets",
         "exposed_assets_card_cves": "{count} CVEs",
+        "severity_summary_label": "FINDINGS BY SEVERITY ({total})",
 
         # ── PDF protections section ────────────────────────────────────────────
         "protections_section_title": "Discovered Protections",
@@ -387,7 +404,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli_skipping_decompilation": "  features.decompilation=false \u2014 skipping decompilation.",
         "cli_skipping_manifest_scan": "  features.manifest_scan=false \u2014 skipping manifest analysis.",
         "cli_skipping_osint": "  features.osint_scan=false \u2014 skipping OSINT.",
-        "cli_skipping_vuln_scan": "  features.vuln_scan=false and features.leak_scan=false \u2014 skipping scan.",
+        "cli_skipping_vuln_scan": "  features.sast_scan=false and features.leak_scan=false \u2014 skipping scan.",
         "cli_decompiling_with": "  Decompiling with {tool} \u2192 {output_dir}/{package}/",
         "cli_source_code_at": "Source code at:",
         "cli_java_files": "   {count} .java files generated",
@@ -943,6 +960,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "vulns_card": "Vulns",
         "exposed_assets_card": "Activos Expuestos",
         "exposed_assets_card_cves": "{count} CVEs",
+        "severity_summary_label": "HALLAZGOS POR SEVERIDAD ({total})",
 
         # ── PDF protections section ────────────────────────────────────────────
         "protections_section_title": "Protecciones Descubiertas",
@@ -1191,7 +1209,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli_skipping_decompilation": "  features.decompilation=false \u2014 omitiendo decompilaci\u00f3n.",
         "cli_skipping_manifest_scan": "  features.manifest_scan=false \u2014 omitiendo an\u00e1lisis del manifest.",
         "cli_skipping_osint": "  features.osint_scan=false \u2014 omitiendo OSINT.",
-        "cli_skipping_vuln_scan": "  features.vuln_scan=false y features.leak_scan=false \u2014 omitiendo escaneo.",
+        "cli_skipping_vuln_scan": "  features.sast_scan=false y features.leak_scan=false \u2014 omitiendo escaneo.",
         "cli_decompiling_with": "  Decompilando con {tool} \u2192 {output_dir}/{package}/",
         "cli_source_code_at": "C\u00f3digo fuente en:",
         "cli_java_files": "   {count} archivos .java generados",

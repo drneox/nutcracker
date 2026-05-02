@@ -26,7 +26,7 @@ from nutcracker_core.deobfuscator import (
     check_adb,
     decompile_dumps,
 )
-from nutcracker_core.downloader import APKPureDownloader, GooglePlayDownloader, DirectURLDownloader, APKDownloadError, is_direct_apk_url
+from nutcracker_core.downloader import APKPureDownloader, GooglePlayDownloader, DirectURLDownloader, APKDownloadError, is_direct_apk_url, download_apk_from_config
 from nutcracker_core.device import (
     find_sdk_tools,
     get_frida_version,
@@ -38,9 +38,9 @@ from nutcracker_core.frida_bypass import (
     generate_bypass_script,
     generate_fart_script,
 )
-from nutcracker_core import i18n
+from nutcracker_core import i18n, __version__ as _VERSION
 from nutcracker_core.i18n import t
-from nutcracker_core.plugins import load_plugins
+from nutcracker_core.plugins import load_plugins, fire_post_hooks
 from nutcracker_core.manifest_analyzer import analyze_decompiled_dir, Misconfiguration
 from nutcracker_core.pdf_reporter import generate_pdf_report
 from nutcracker_core.reporter import print_report, save_json_report, save_analysis_json, print_vuln_report, print_masvs_summary
@@ -261,7 +261,7 @@ def _validate_all_dependencies(protected: bool = True) -> bool:
                 warnings.append(t("cli_dep_apksigner_warn"))
     
     # ── Escaneo de vulnerabilidades ───────────────────────────────────────────
-    scanner_engine = cfg_get(_CFG, "strategies", "scanner_engine", default="auto") or "auto"
+    scanner_engine = cfg_get(_CFG, "sast", "engine", default="auto") or "auto"
     if str(scanner_engine).lower() == "semgrep":
         if not _shutil.which("semgrep"):
             warnings.append(t("cli_dep_semgrep_warn"))
@@ -368,7 +368,7 @@ def _print_banner() -> None:
     right[min(4, n - 1)] = tag
 
     ver = Text()
-    ver.append("v0.1", style="dim green")
+    ver.append(f"v{_VERSION}", style="dim green")
     ver.append(" · ", style="dim")
     ver.append("nutcracker.sh", style="dim red link https://nutcracker.sh")
     right[min(5, n - 1)] = ver
@@ -457,51 +457,11 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
     if not keep_apk:
         keep_apk = bool(cfg_get(config, "downloader", "keep_apk", default=False))
 
-    # ── URL directa a un APK ──────────────────────────────────────────────────
-    if is_direct_apk_url(url):
-        apk_path: Path | None = None
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                DownloadColumn(),
-                TransferSpeedColumn(),
-                console=console,
-                transient=True,
-            ) as progress:
-                task = progress.add_task(t("cli_downloading_apk"), total=None)
-
-                def _on_chunk(downloaded: int, total: int | None) -> None:
-                    progress.update(task, completed=downloaded, total=total)
-
-                _dl = DirectURLDownloader(output_dir)
-                _from_cache = keep_apk and _dl.dest_path(url).exists()
-                apk_path = _dl.download(url, progress_callback=_on_chunk, use_cache=keep_apk)
-            if _from_cache:
-                console.print(f"[green]✔[/green] {t('cli_apk_cached')} [bold]{apk_path}[/bold]")
-            else:
-                console.print(f"[green]✔[/green] {t('cli_apk_downloaded')} [bold]{apk_path}[/bold]")
-        except APKDownloadError as exc:
-            console.print(f"[red]{t('cli_error_download')}[/red] {exc}")
-            sys.exit(1)
-        _run_analysis(apk_path, report, keep_apk, gen_pdf=cfg_get(config, "reports", "save_pdf", default=True))
-        return
-
-    # Credenciales de Google Play
-    email = cfg_get(config, "google_play", "email")
-    aas_token = cfg_get(config, "google_play", "aas_token")
-
-    # Auto-determinar fuente si no se especificó
-    if source is None:
-        # Si hay email configurado, priorizar Google Play y permitir autogenerar aas_token.
-        source = "google-play" if email else "apk-pure"
-
     # Informe JSON automático si está configurado
     save_json_cfg = bool(
         cfg_get(config, "features", "report_json", default=cfg_get(config, "reports", "save_json", default=False))
     )
-    if not report and save_json_cfg:
+    if not report and save_json_cfg and not is_direct_apk_url(url):
         reports_dir = cfg_get(config, "reports", "output_dir") or "./reports"
         Path(reports_dir).mkdir(parents=True, exist_ok=True)
         pkg = url.split("id=")[-1].split("&")[0].rstrip("/")
@@ -510,62 +470,97 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
         cfg_get(config, "features", "report_pdf", default=cfg_get(config, "reports", "save_pdf", default=True))
     )
 
-    # Descargar
-    apk_path = None
+    def _token_resolver(email: str, cfg: dict) -> str | None:
+        """Genera el aas_token interactivamente si falta, recarga config y lo devuelve."""
+        nonlocal config
+        console.print(f"[yellow]Warning:[/yellow] {t('cli_gplay_token_empty')}")
+        script = Path(__file__).parent / "tools" / "extract_token.py"
+        if not script.exists():
+            console.print(f"[red]Error:[/red] {t('cli_extract_token_not_found')}")
+            sys.exit(1)
+        cmd = [sys.executable, str(script), "--config", config_path]
+        preferred_serial = _select_token_serial(cfg)
+        if preferred_serial:
+            cmd += ["--serial", preferred_serial]
+        if _unattended():
+            cmd.append("--no-interactive")
+        token_proc = subprocess.run(cmd)
+        if token_proc.returncode != 0:
+            console.print(f"[red]Error:[/red] {t('cli_token_gen_failed')}")
+            sys.exit(token_proc.returncode)
+        config = load_config(config_path)
+        _CFG = config
+        token = cfg_get(config, "google_play", "aas_token")
+        if not token:
+            console.print(f"[red]Error:[/red] {t('cli_token_still_empty')}")
+            sys.exit(1)
+        return token
+
+    def _on_start(label: str) -> None:
+        _on_start._progress_ctx.__enter__()
+        _on_start._progress_ctx.add_task(t("cli_downloading_from", label=label), total=None)
+
+    # Progreso para URL directa (con BarColumn) o spinner para stores
+    _progress_direct: Progress | None = None
+    _progress_store: Progress | None = None
+    _task_ref: list = []
+
+    def _progress_callback(downloaded: int, total: int | None) -> None:
+        if _progress_direct and _task_ref:
+            _progress_direct.update(_task_ref[0], completed=downloaded, total=total)
+
+    def _on_start_label(label: str) -> None:
+        nonlocal _progress_store
+        _progress_store.__enter__()
+        _progress_store.add_task(t("cli_downloading_from", label=label), total=None)
+
+    apk_path: Path | None = None
+    _from_cache = False
     try:
-        if source == "google-play":
-            if not email:
-                console.print(f"[red]Error:[/red] {t('cli_gplay_requires_email')}")
-                sys.exit(1)
-
-            if not aas_token:
-                console.print(
-                    f"[yellow]Warning:[/yellow] {t('cli_gplay_token_empty')}"
+        if is_direct_apk_url(url):
+            _dl_check = DirectURLDownloader(output_dir)
+            _from_cache = keep_apk and _dl_check.dest_path(url).exists()
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                console=console,
+                transient=True,
+            ) as _progress_direct:
+                _task = _progress_direct.add_task(t("cli_downloading_apk"), total=None)
+                _task_ref.append(_task)
+                apk_path = download_apk_from_config(
+                    url, config,
+                    output_dir=output_dir,
+                    use_cache=keep_apk,
+                    progress_callback=_progress_callback,
                 )
-                script = Path(__file__).parent / "tools" / "extract_token.py"
-                if not script.exists():
-                    console.print(f"[red]Error:[/red] {t('cli_extract_token_not_found')}")
-                    sys.exit(1)
-
-                cmd = [sys.executable, str(script), "--config", config_path]
-                preferred_serial = _select_token_serial(config)
-                if preferred_serial:
-                    cmd += ["--serial", preferred_serial]
-                if _unattended():
-                    cmd.append("--no-interactive")
-
-                token_proc = subprocess.run(cmd)
-                if token_proc.returncode != 0:
-                    console.print(
-                        f"[red]Error:[/red] {t('cli_token_gen_failed')}"
-                    )
-                    sys.exit(token_proc.returncode)
-
-                # Recargar config para continuar en la misma ejecución usando el token recién guardado.
-                config = load_config(config_path)
-                _CFG = config
-                aas_token = cfg_get(config, "google_play", "aas_token")
-
-                if not aas_token:
-                    console.print(
-                        f"[red]Error:[/red] {t('cli_token_still_empty')}"
-                    )
-                    sys.exit(1)
-
-            if aas_token:
-                label = "Google Play (apkeep)"
-                downloader: APKPureDownloader | GooglePlayDownloader = \
-                    GooglePlayDownloader(email, aas_token, output_dir)
         else:
-            label = "APKPure"
-            downloader = APKPureDownloader(output_dir)
+            if source == "google-play":
+                email = cfg_get(config, "google_play", "email")
+                if not email:
+                    console.print(f"[red]Error:[/red] {t('cli_gplay_requires_email')}")
+                    sys.exit(1)
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True,
+            ) as _progress_store:
+                apk_path = download_apk_from_config(
+                    url, config,
+                    source=source,
+                    output_dir=output_dir,
+                    token_resolver=_token_resolver,
+                    on_start=_on_start_label,
+                )
 
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                      console=console, transient=True) as progress:
-            progress.add_task(t("cli_downloading_from", label=label), total=None)
-            apk_path = downloader.download(url)
-
-        console.print(f"[green]✔[/green] {t('cli_apk_downloaded')} [bold]{apk_path}[/bold]")
+        if _from_cache:
+            console.print(f"[green]✔[/green] {t('cli_apk_cached')} [bold]{apk_path}[/bold]")
+        else:
+            console.print(f"[green]✔[/green] {t('cli_apk_downloaded')} [bold]{apk_path}[/bold]")
     except APKDownloadError as exc:
         console.print(f"[red]{t('cli_error_download')}[/red] {exc}")
         sys.exit(1)
@@ -744,6 +739,10 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
 
             analyzer = APKAnalyzer(progress_callback=on_progress, engine=anti_root_engine)
             result = analyzer.analyze(apk_path)
+            # Si anti_root_analysis=false en config, ignorar la detección de protección
+            if not bool(cfg_get(_CFG, "strategies", "anti_root_analysis", default=True)):
+                result.protected = False
+                console.print("[dim]  strategies.anti_root_analysis=false → omitiendo flujo Frida/emulador[/dim]")
 
     except FileNotFoundError as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -776,7 +775,17 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
 
         # Generar PDF solo si está habilitado en config (save_pdf)
         if gen_pdf:
-            _generate_pdf(result, vuln_scan)
+            _generate_pdf(result, vuln_scan,
+                          vuln_scan_enabled=_feature_enabled("sast_scan", default=True))
+
+        # ── Post-hooks de plugins ──────────────────────────────────────────
+        fire_post_hooks(
+            "after_analysis",
+            package=result.package,
+            result=result,
+            vuln_scan=vuln_scan,
+            config=_CFG,
+        )
 
     if not keep_apk and apk_path and apk_path.exists():
         apk_path.unlink()
@@ -877,7 +886,8 @@ def _post_analysis_flow(result, apk_path: Path):
     ).strip().lower()
     # DexGuard detectado → frida-dexdump (bytecode post-descifrado en memoria)
     # Sin DexGuard       → JADX por defecto, salvo pipeline runtime explícito
-    should_try_runtime = bool(dexguard_result) or (decomp_mode == "runtime")
+    # Si decompilation=jadx en config, nunca usar runtime aunque haya DexGuard
+    should_try_runtime = decomp_mode == "runtime"
 
     if should_try_runtime:
         if dexguard_result:
@@ -1135,19 +1145,19 @@ def _decompile_and_scan(
     # Análisis de misconfigs del manifest
     manifest_analysis = None
     if _feature_enabled("manifest_scan", default=True):
-        manifest_analysis = _do_manifest_scan(clean_dir)
+        manifest_analysis = _do_manifest_scan(clean_dir, apk_path=apk_path)
     else:
         console.print(f"[dim]{t('cli_skipping_manifest_scan')}[/dim]")
 
     # Escaneo de vulnerabilidades y leaks (antes de OSINT para alimentarlo)
     scan_result = None
-    vuln_enabled = _feature_enabled("vuln_scan", default=True)
+    vuln_enabled = _feature_enabled("sast_scan", default=True)
     leak_enabled = _feature_enabled("leak_scan", default=True)
     if not vuln_enabled and not leak_enabled:
         console.print(f"[dim]{t('cli_skipping_vuln_scan')}[/dim]")
     elif _ask_or_auto(
         t("cli_vuln_scan_deobf_prompt"),
-        "vuln_scan",
+        "sast_scan",
         default=True,
     ):
         scan_result = _do_vuln_scan(
@@ -1165,7 +1175,7 @@ def _decompile_and_scan(
     return scan_result
 
 
-def _do_manifest_scan(decompiled_dir: Path) -> "ManifestAnalysisResult | None":
+def _do_manifest_scan(decompiled_dir: Path, apk_path: Path | None = None) -> "ManifestAnalysisResult | None":
     """Analiza AndroidManifest.xml y archivos de config buscando misconfigs."""
     global _MANIFEST_ANALYSIS
     console.print()
@@ -1179,6 +1189,7 @@ def _do_manifest_scan(decompiled_dir: Path) -> "ManifestAnalysisResult | None":
         analysis = analyze_decompiled_dir(
             decompiled_dir,
             progress_callback=lambda m: progress.update(task, description=m),
+            apk_path=apk_path,
         )
 
     _print_manifest_report(analysis)
@@ -1412,17 +1423,17 @@ def _do_decompile(apk_path: Path, package: str) -> Path | None:
 
         # Análisis de misconfigs del manifest
         if _feature_enabled("manifest_scan", default=True):
-            _do_manifest_scan(dest)
+            _do_manifest_scan(dest, apk_path=apk_path)
         else:
             console.print(f"[dim]{t('cli_skipping_manifest_scan')}[/dim]")
 
         # Escaneo de vulnerabilidades y leaks (antes de OSINT para alimentarlo)
         scan_result = None
-        vuln_enabled = _feature_enabled("vuln_scan", default=True)
+        vuln_enabled = _feature_enabled("sast_scan", default=True)
         leak_enabled = _feature_enabled("leak_scan", default=True)
         if not vuln_enabled and not leak_enabled:
             console.print(f"[dim]{t('cli_skipping_vuln_scan')}[/dim]")
-        elif _ask_or_auto(t("cli_vuln_scan_code_prompt"), "vuln_scan", default=True):
+        elif _ask_or_auto(t("cli_vuln_scan_code_prompt"), "sast_scan", default=True):
             scan_result = _do_vuln_scan(
                 dest,
                 apk_path=apk_path,
@@ -1454,7 +1465,7 @@ def _do_vuln_scan(
     scan_result = None
 
     # Determinar motor de escaneo desde config
-    engine = cfg_get(_CFG, "strategies", "scanner_engine") or "auto"
+    engine = cfg_get(_CFG, "sast", "engine") or "auto"
 
     # ── Leer sección leak_scan ───────────────────────────────────────────
     use_native = bool(cfg_get(_CFG, "leak_scan", "native", default=True))
@@ -1477,7 +1488,7 @@ def _do_vuln_scan(
     semgrep_config = default_semgrep_config
     if str(engine).strip().lower() == "semgrep":
         semgrep_config = (
-            cfg_get(_CFG, "strategies", "scanner_config")
+            cfg_get(_CFG, "sast", "config")
             or default_semgrep_config
         )
     semgrep_config = " ".join(
@@ -1720,11 +1731,34 @@ def _load_vuln_json(package: str):
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))
         base_dir = Path("./decompiled") / package
+        import re as _re
+        _url_re = _re.compile(r'"(https?://[^"]{8,})"')
+        _ai_reviewed = bool(data.get("ai_reviewed"))
+
+        def _effective_sev(f: dict) -> str:
+            """URL → INFO solo si el LLM no confirmó el finding como crítico/alto/medio.
+
+            - Sin ai-review: aplicar heurística (URL → info).
+            - Con ai-review y LLM lo dejó como TRUE_POSITIVE (sin _ai_note): respetar severidad original.
+            - Con ai-review y LLM lo degradó (tiene _ai_note): ya tiene la severidad corregida, solo aplicar URL como fallback extra.
+            """
+            sev = f.get("severity", "info")
+            if sev in ("info",):
+                return sev
+            # Si el LLM ya revisó este finding y lo mantuvo sin cambios (TRUE_POSITIVE),
+            # confiamos en su criterio y no aplicamos la degradación automática.
+            if _ai_reviewed and not f.get("_ai_note"):
+                return sev
+            # Sin revisión LLM o LLM lo DOWNGRADE: aplicar heurística URL → info
+            if _url_re.search(f.get("matched_text", "")):
+                return "info"
+            return sev
+
         findings = [
             VulnFinding(
                 rule_id=f["rule_id"],
                 title=f["title"],
-                severity=f["severity"],
+                severity=_effective_sev(f),
                 category=f["category"],
                 file=base_dir / f["file"],
                 line=f["line"],
@@ -1733,6 +1767,7 @@ def _load_vuln_json(package: str):
                 recommendation=f["recommendation"],
             )
             for f in data.get("findings", [])
+            if not f.get("_fp")  # FPs etiquetados por ai-review no van al PDF
         ]
         return ScanResult(base_dir=base_dir, findings=findings,
                           files_scanned=data.get("files_scanned", 0))
@@ -1751,7 +1786,11 @@ def _load_analysis_json(package: str):
     # Soportar también el formato plano anterior (reports/<package>.json)
     legacy = Path("./reports") / f"{package}.json"
     if pkg_dir.is_dir():
-        jsons = sorted(pkg_dir.glob("*.json"), reverse=True)
+        jsons = sorted(
+            (f for f in pkg_dir.glob("*.json") if f.stem[0].isdigit()),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
         if jsons:
             try:
                 data = json.loads(jsons[0].read_text(encoding="utf-8"))
@@ -1767,7 +1806,7 @@ def _load_analysis_json(package: str):
     return None
 
 
-def _generate_pdf(result, vuln_scan=None) -> None:
+def _generate_pdf(result, vuln_scan=None, vuln_scan_enabled: bool = True) -> None:
     """Genera el informe PDF final con los resultados de anti-root y vulnerabilidades."""
     # Si no se pasó un scan en esta sesión, intentar cargar el JSON guardado
     if vuln_scan is None:
@@ -1784,7 +1823,8 @@ def _generate_pdf(result, vuln_scan=None) -> None:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                       console=console, transient=True) as progress:
             progress.add_task(t("cli_generating_pdf"), total=None)
-            generate_pdf_report(result, pdf_path, scan=vuln_scan, manifest=_MANIFEST_ANALYSIS, osint=_OSINT_RESULT)
+            generate_pdf_report(result, pdf_path, scan=vuln_scan, manifest=_MANIFEST_ANALYSIS,
+                                osint=_OSINT_RESULT, vuln_scan_enabled=vuln_scan_enabled)
         console.print(f"[green]✔[/green] {t('cli_pdf_saved')} [bold]{pdf_path}[/bold]")
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]{t('cli_error_pdf')}[/red] {exc}")
@@ -2073,19 +2113,20 @@ def regen_pdf(package: str) -> None:
     # Cargar manifest si existe
     manifest = None
     try:
-        from nutcracker_core.manifest_analyzer import ManifestAnalyzer
-        # Intentar desde dexguard_dump o directorio normal
+        from nutcracker_core.manifest_analyzer import analyze_decompiled_dir as _addir
+        # Detectar directorio decompilado disponible
         for candidate in [
-            Path("./decompiled") / f"dexguard_dump_{package}" / "source",
+            Path("./decompiled") / f"runtime_dump_{package}" / "source",
             Path("./decompiled") / package,
         ]:
-            manifest_path = candidate / "resources" / "AndroidManifest.xml"
-            if not manifest_path.exists():
-                manifest_path = candidate / "AndroidManifest.xml"
-            if manifest_path.exists():
-                ma = ManifestAnalyzer()
-                manifest = ma.analyze(manifest_path)
-                console.print(f"[dim]{t('cli_manifest_loaded', path=manifest_path)}[/dim]")
+            if candidate.exists():
+                # Buscar APK para fallback de manifest (runtime dump no tiene manifest)
+                apk_dir = Path("./downloads") / package
+                _apk = next(iter(sorted(apk_dir.glob(f"{package}.apk"))), None) if apk_dir.exists() else None
+                if _apk is None and apk_dir.exists():
+                    _apk = next(iter(sorted(apk_dir.glob("*.apk"))), None)
+                manifest = _addir(candidate, apk_path=_apk)
+                console.print(f"[dim]{t('cli_manifest_loaded', path=candidate)}[/dim]")
                 break
     except Exception:  # noqa: BLE001
         pass
@@ -2121,7 +2162,8 @@ def regen_pdf(package: str) -> None:
                 public_leaks=[
                     PublicLeak(source=l["source"], query=l.get("query", ""),
                                url=l.get("url", ""), title=l.get("title", ""),
-                               snippet=l.get("snippet", ""), vulns=l.get("vulns", []))
+                               snippet=l.get("snippet", ""), vulns=l.get("vulns", []),
+                               vulns_cvss=l.get("vulns_cvss", {}))
                     for l in raw.get("public_leaks", [])
                 ],
                 domains_scanned=raw.get("domains_scanned", []),
@@ -2131,7 +2173,8 @@ def regen_pdf(package: str) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-    _generate_pdf(result, vuln_scan)
+    _vuln_enabled = _feature_enabled("sast_scan", default=True)
+    _generate_pdf(result, vuln_scan, vuln_scan_enabled=_vuln_enabled)
 
 
 

@@ -290,4 +290,84 @@ class GooglePlayDownloader:
         return _find_downloaded_apk(self.output_dir, package_id)
 
 
+def download_apk_from_config(
+    package: str,
+    config: dict,
+    source: "str | None" = None,
+    output_dir: str = "./downloads",
+    use_cache: bool = False,
+    progress_callback: "callable | None" = None,
+    token_resolver: "callable | None" = None,
+    on_start: "callable | None" = None,
+) -> Path:
+    """
+    Descarga un APK usando la configuración del proyecto.
+
+    Selector de fuente automático:
+      - Si ``package`` es una URL directa a un .apk → DirectURLDownloader
+      - Si ``source="google-play"`` o hay email configurado → GooglePlayDownloader
+      - En caso contrario → APKPureDownloader (fallback sin autenticación)
+
+    Args:
+        package:           Package ID (ej. com.example.app), URL de Google Play
+                           o URL directa a un .apk.
+        config:            Diccionario de configuración (cargado desde config.yaml).
+        source:            Forzar fuente: ``"google-play"``, ``"apk-pure"`` o
+                           ``None`` para auto-detección.
+        output_dir:        Directorio de salida para el APK descargado.
+        use_cache:         Si True, reutiliza el APK si ya existe (solo URL directa).
+        progress_callback: ``callable(downloaded_bytes, total_bytes | None)``
+                           invocado por chunk al descargar una URL directa.
+        token_resolver:    ``callable(email: str, config: dict) -> str | None``
+                           invocado cuando ``source="google-play"`` pero falta
+                           ``aas_token``. Debe devolver el token generado o None.
+        on_start:          ``callable(label: str)`` invocado justo antes de iniciar
+                           la descarga. Útil para mostrar un spinner o mensaje.
+
+    Returns:
+        Path al APK descargado.
+
+    Raises:
+        APKDownloadError: Si la descarga falla o faltan credenciales requeridas.
+    """
+    gp_cfg = config.get("google_play", {})
+    email = (gp_cfg.get("email") or "").strip()
+    aas_token = (gp_cfg.get("aas_token") or "").strip()
+
+    # ── URL directa a un .apk ────────────────────────────────────────────────
+    if is_direct_apk_url(package):
+        if on_start:
+            on_start("Direct URL")
+        return DirectURLDownloader(output_dir).download(
+            package, progress_callback=progress_callback, use_cache=use_cache
+        )
+
+    # ── Auto-selección de fuente ─────────────────────────────────────────────
+    if source is None:
+        source = "google-play" if email else "apk-pure"
+
+    # ── Google Play ──────────────────────────────────────────────────────────
+    if source == "google-play":
+        if not email:
+            raise APKDownloadError(
+                "Google Play requiere email configurado en config.yaml (google_play.email)."
+            )
+        if not aas_token and token_resolver:
+            aas_token = token_resolver(email, config) or ""
+        if not aas_token:
+            raise APKDownloadError(
+                "Google Play requiere aas_token configurado en config.yaml (google_play.aas_token)."
+            )
+        if on_start:
+            on_start("Google Play (apkeep)")
+        return GooglePlayDownloader(
+            email=email, aas_token=aas_token, output_dir=output_dir
+        ).download(package)
+
+    # ── APKPure (fallback sin autenticación) ─────────────────────────────────
+    if on_start:
+        on_start("APKPure")
+    return APKPureDownloader(output_dir=output_dir).download(package)
+
+
 

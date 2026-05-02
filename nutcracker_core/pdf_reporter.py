@@ -15,8 +15,11 @@ Usa fpdf2 (pip install fpdf2).
 from __future__ import annotations
 
 import datetime
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from nutcracker_core import __version__ as _VERSION
 
 from fpdf import FPDF, XPos, YPos
 
@@ -62,6 +65,17 @@ C = {
     "medium_bg":    (219, 234, 254),
     "low_bg":       (240, 253, 244),
     "info_bg":      (248, 250, 252),
+    # portada ejecutiva
+    "teal":          (32, 211, 162),
+    "risk_critical": (239,  68,  68),
+    "risk_high":     (249, 115,  22),
+    "risk_medium":   (234, 179,   8),
+    "risk_low":      (32, 211, 162),
+    "score_a":       (32, 211, 162),
+    "score_b":       (56, 189, 248),
+    "score_c":       (234, 179,   8),
+    "score_d":       (249, 115,  22),
+    "score_f":       (239,  68,  68),
 }
 
 SEV_COLOR = {
@@ -166,7 +180,7 @@ class APKReportPDF(FPDF):
         self.set_y(-12)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C["muted"])
-        self.cell(0, 5, f"{t('generated_on')} {_now_tz().strftime('%d/%m/%Y %H:%M')}  ·  nutcracker.sh",
+        self.cell(0, 5, f"{t('generated_on')} {_now_tz().strftime('%d/%m/%Y %H:%M')}  ·  nutcracker v{_VERSION}",
                   align="L", link="https://nutcracker.sh")
         self.cell(0, 5, f"{t('page')} {self.page_no()}", align="R")
 
@@ -187,6 +201,323 @@ class APKReportPDF(FPDF):
         self.ln(3)
 
 
+# ── Helpers de portada ejecutiva ─────────────────────────────────────────────
+
+def _draw_donut_ring(
+    pdf: APKReportPDF,
+    cx: float, cy: float,
+    r_outer: float, r_inner: float,
+    start_deg: float, end_deg: float,
+    color: tuple,
+    n: int = 60,
+) -> None:
+    """Dibuja un segmento de anillo (arco) usando un poligono."""
+    if end_deg <= start_deg:
+        return
+    a0 = math.radians(start_deg - 90)
+    a1 = math.radians(end_deg - 90)
+    pts: list[tuple[float, float]] = []
+    for i in range(n + 1):
+        t_ = a0 + (a1 - a0) * i / n
+        pts.append((cx + r_outer * math.cos(t_), cy + r_outer * math.sin(t_)))
+    for i in range(n + 1):
+        t_ = a1 + (a0 - a1) * i / n
+        pts.append((cx + r_inner * math.cos(t_), cy + r_inner * math.sin(t_)))
+    pdf.set_fill_color(*color)
+    pdf.set_draw_color(*color)
+    pdf.polygon(pts, style="F")
+
+
+def _draw_score_gauge(
+    pdf: APKReportPDF,
+    cx: float, cy: float,
+    score: int, grade: str,
+    grade_color: tuple,
+) -> None:
+    """Dibuja el gauge circular de score en la portada oscura."""
+    R_OUT = 28.0
+    R_IN  = 20.0
+    # Track de fondo
+    _draw_donut_ring(pdf, cx, cy, R_OUT, R_IN, 0, 360, (35, 45, 75))
+    # Arco de score
+    filled_deg = (score / 100) * 360
+    _draw_donut_ring(pdf, cx, cy, R_OUT, R_IN, 0, filled_deg, grade_color)
+    # Punto terminal del arco
+    if filled_deg > 0:
+        end_rad = math.radians(filled_deg - 90)
+        dot_cx = cx + ((R_OUT + R_IN) / 2) * math.cos(end_rad)
+        dot_cy = cy + ((R_OUT + R_IN) / 2) * math.sin(end_rad)
+        pdf.set_fill_color(*C["white"])
+        pdf.ellipse(dot_cx - 1.5, dot_cy - 1.5, 3, 3, style="F")
+    # Agujero central
+    pdf.set_fill_color(*C["bg"])
+    pdf.ellipse(cx - R_IN, cy - R_IN, R_IN * 2, R_IN * 2, style="F")
+    # Letra grade
+    pdf.set_font("Helvetica", "B", 22)
+    pdf.set_text_color(*grade_color)
+    pdf.set_xy(cx - 10, cy - 10)
+    pdf.cell(20, 8, grade, align="C")
+    # Score numerico
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(*C["muted"])
+    pdf.set_xy(cx - 10, cy - 1)
+    pdf.cell(20, 5, f"{score}/100", align="C")
+
+
+def _cover_meta_row(
+    pdf: APKReportPDF,
+    x: float, label: str, value: str,
+    label_w: float = 42, row_h: float = 6,
+) -> None:
+    """Fila de metadata sobre fondo oscuro de la portada."""
+    pdf.set_font("Helvetica", "B", 7.5)
+    pdf.set_text_color(*C["muted"])
+    pdf.set_x(x)
+    pdf.cell(label_w, row_h, label, new_x=XPos.RIGHT, new_y=YPos.TOP)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(*C["white"])
+    pdf.cell(0, row_h, value, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+
+def compute_risk_score(
+    result: "AnalysisResult",
+    scan: "ScanResult | None" = None,
+    manifest: "ManifestAnalysisResult | None" = None,
+    osint: "OsintResult | None" = None,
+) -> tuple[int, str, str, tuple]:
+    """
+    Calcula risk score (0-100, mayor = mas seguro) con deduciones desde 100.
+    Retorna (score, grade, risk_label, grade_color).
+    """
+    score = 100.0
+    protected = result.protected
+    was_bypassed = _protection_broken(result)
+
+    # RASP
+    if not protected:
+        score -= 30
+    elif was_bypassed:
+        score -= 20
+
+    # Vulnerabilidades (sin leaks)
+    leaks_list, vulns_list = _split_findings(scan) if scan else ([], [])
+    sev: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for f in vulns_list:
+        k = (f.severity or "info").lower()
+        if k in sev:
+            sev[k] += 1
+    score -= min(sev["critical"] * 15, 45)
+    score -= min(sev["high"]     *  8, 24)
+    score -= min(sev["medium"]   *  3, 12)
+    score -= min(sev["low"]      *  1,  5)
+
+    # Leaks
+    score -= min(len(leaks_list) * 4, 20)
+
+    # Misconfigs
+    misconfig_count = len(manifest.misconfigurations) if manifest else 0
+    score -= min(misconfig_count * 2, 10)
+
+    # Exposed assets CVEs
+    if osint and osint.public_leaks:
+        exposed = [l for l in osint.public_leaks if l.source in ("fofa", "shodan")]
+        if exposed:
+            from .osint import exposed_assets_severity_counts
+            ea_sev = exposed_assets_severity_counts(exposed)
+            score -= min(ea_sev.get("critical", 0) * 8 + ea_sev.get("high", 0) * 4, 15)
+
+    score = max(0, round(score))
+
+    if score >= 85:
+        return score, "A", "MINIMAL",  C["score_a"]
+    elif score >= 70:
+        return score, "B", "LOW",      C["score_b"]
+    elif score >= 50:
+        return score, "C", "MEDIUM",   C["score_c"]
+    elif score >= 30:
+        return score, "D", "HIGH",     C["score_d"]
+    else:
+        return score, "F", "CRITICAL", C["score_f"]
+
+
+def _build_findings_by_cat(
+    scan: "ScanResult | None",
+    manifest: "ManifestAnalysisResult | None",
+    osint: "OsintResult | None",
+) -> dict:
+    """Construye el dict findings_by_cat para la tabla de portada."""
+    result: dict = {}
+
+    # Misconfigurations
+    if manifest and manifest.misconfigurations:
+        sev: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for m in manifest.misconfigurations:
+            k = (m.severity or "info").lower()
+            if k in sev:
+                sev[k] += 1
+        result["Misconfigurations"] = sev
+
+    # Leaks / Vulnerabilidades
+    if scan:
+        leaks_list, vulns_list = _split_findings(scan)
+        if leaks_list:
+            sev = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+            for f in leaks_list:
+                k = (f.severity or "info").lower()
+                if k in sev:
+                    sev[k] += 1
+            result["Leaks"] = sev
+        if vulns_list:
+            sev = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+            for f in vulns_list:
+                k = (f.severity or "info").lower()
+                if k in sev:
+                    sev[k] += 1
+            result["Vulnerabilities"] = sev
+
+    # Exposed Assets
+    if osint and osint.public_leaks:
+        exposed = [l for l in osint.public_leaks if l.source in ("fofa", "shodan")]
+        if exposed:
+            from .osint import exposed_assets_severity_counts
+            ea_sev = exposed_assets_severity_counts(exposed)
+            ea_sev["_assets"] = len(exposed)
+            sources = {l.source for l in exposed}
+            ea_sev["_source"] = "shodan" if "shodan" in sources else "fofa"
+            result["Exposed Assets"] = ea_sev
+
+    return result
+
+
+def _draw_cover_findings_table(
+    pdf: APKReportPDF,
+    findings_by_cat: dict,
+    protected: bool,
+    was_bypassed: bool,
+    rasp_detected: int,
+    rasp_total: int,
+) -> None:
+    """Tabla de hallazgos por categoria estilo Veracode sobre fondo oscuro."""
+    X        = 15.0
+    W        = 180.0
+    SEV_COLS = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "TOTAL"]
+    SEV_KEYS = ["critical", "high", "medium", "low", "info"]
+    SEV_CLR  = [C["risk_critical"], C["risk_high"], C["risk_medium"],
+                C["risk_low"],      C["muted"]]
+    CAT_W    = 50.0
+    NUM_W    = (W - CAT_W) / len(SEV_COLS)
+    ROW_H    = 8.0
+    HDR_H    = 7.0
+
+    Y = pdf.get_y()
+
+    # Encabezado
+    pdf.set_fill_color(22, 33, 62)
+    pdf.rect(X, Y, W, HDR_H, style="F")
+    pdf.set_xy(X + 2, Y + 1)
+    pdf.set_font("Helvetica", "B", 7)
+    pdf.set_text_color(*C["muted"])
+    pdf.cell(CAT_W - 2, HDR_H - 2, "CATEGORY")
+    for i, lbl in enumerate(SEV_COLS):
+        col_clr = SEV_CLR[i] if i < len(SEV_CLR) else C["white"]
+        pdf.set_xy(X + CAT_W + i * NUM_W, Y + 1)
+        pdf.set_font("Helvetica", "B", 6.5)
+        pdf.set_text_color(*col_clr)
+        pdf.cell(NUM_W, HDR_H - 2, lbl, align="C")
+    Y += HDR_H
+
+    # Linea bajo header
+    pdf.set_draw_color(*C["teal"])
+    pdf.set_line_width(0.4)
+    pdf.line(X, Y, X + W, Y)
+
+    # Filas por categoria
+    row_bgs = [(18, 27, 52), (22, 33, 62)]
+    for ri, (cat, sevs) in enumerate(findings_by_cat.items()):
+        row_bg = row_bgs[ri % 2]
+        pdf.set_fill_color(*row_bg)
+        pdf.rect(X, Y, W, ROW_H, style="F")
+
+        pdf.set_xy(X + 4, Y + 1.5)
+        pdf.set_font("Helvetica", "B", 7.5)
+        pdf.set_text_color(*C["white"])
+        pdf.cell(CAT_W - 4, ROW_H - 3, _safe(cat))
+
+        cve_total   = sum(v for k, v in sevs.items() if not k.startswith("_"))
+        assets_count = sevs.get("_assets")
+
+        for ci, key in enumerate(SEV_KEYS):
+            cnt = sevs.get(key, 0)
+            clr = SEV_CLR[ci] if cnt > 0 else C["muted"]
+            pdf.set_xy(X + CAT_W + ci * NUM_W, Y + 1.5)
+            pdf.set_font("Helvetica", "B" if cnt > 0 else "", 8)
+            pdf.set_text_color(*clr)
+            pdf.cell(NUM_W, ROW_H - 3, str(cnt) if cnt > 0 else "-", align="C")
+
+        total_x = X + CAT_W + 5 * NUM_W
+        if assets_count is not None:
+            src      = sevs.get("_source", "")
+            src_lbl  = "via Shodan" if src == "shodan" else ("via FOFA" if src == "fofa" else "")
+            pdf.set_xy(total_x, Y + 0.5)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_text_color(*C["white"])
+            pdf.cell(NUM_W, 4, f"{assets_count} assets", align="C")
+            pdf.set_xy(total_x, Y + 4.5)
+            pdf.set_font("Helvetica", "", 5.5)
+            cve_lbl = _safe(f"({cve_total} CVEs{' ' + src_lbl if src_lbl else ''})")
+            pdf.set_text_color(*(C["risk_critical"] if sevs.get("critical", 0)
+                                 else C["risk_high"] if cve_total else C["muted"]))
+            pdf.cell(NUM_W, 3, cve_lbl, align="C")
+        else:
+            pdf.set_xy(total_x, Y + 1.5)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_text_color(*C["white"])
+            pdf.cell(NUM_W, ROW_H - 3, str(cve_total), align="C")
+
+        Y += ROW_H
+
+    # Fila Protection (RASP) — siempre al final
+    prot_bg = (28, 16, 38) if was_bypassed else ((15, 23, 42) if not protected else (16, 30, 28))
+    pdf.set_fill_color(*prot_bg)
+    pdf.rect(X, Y, W, ROW_H, style="F")
+
+    rasp_color = C["risk_critical"] if was_bypassed else (C["risk_critical"] if not protected else C["risk_low"])
+    if was_bypassed:
+        prot_status = "BYPASSED"
+        prot_detail = f"{rasp_detected} of {rasp_total} mechanisms detected, bypass confirmed"
+    elif protected:
+        prot_status = "PROTECTED"
+        prot_detail = f"{rasp_detected} of {rasp_total} mechanisms detected, no bypass"
+    else:
+        prot_status = "UNPROTECTED"
+        prot_detail = f"No protection mechanisms detected ({rasp_total} checked)"
+
+    pdf.set_xy(X + 4, Y + 1.5)
+    pdf.set_font("Helvetica", "B", 7.5)
+    pdf.set_text_color(*C["white"])
+    pdf.cell(CAT_W - 4, ROW_H - 3, "Protection")
+
+    BADGE_W = 30.0
+    bx = X + CAT_W
+    pdf.set_fill_color(*rasp_color)
+    pdf.rect(bx + 1, Y + 1.5, BADGE_W, ROW_H - 3, style="F")
+    pdf.set_xy(bx + 1, Y + 1.5)
+    pdf.set_font("Helvetica", "B", 7)
+    pdf.set_text_color(*C["white"])
+    pdf.cell(BADGE_W, ROW_H - 3, prot_status, align="C")
+
+    pdf.set_xy(bx + BADGE_W + 3, Y + 1.5)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(*C["muted"])
+    pdf.cell(W - CAT_W - BADGE_W - 4, ROW_H - 3, _safe(prot_detail))
+
+    Y += ROW_H
+    pdf.set_draw_color(*C["teal"])
+    pdf.set_line_width(0.3)
+    pdf.line(X, Y, X + W, Y)
+    pdf.set_y(Y + 2)
+
+
 # ── 1. Portada + Resumen ─────────────────────────────────────────────────────
 
 def _cover_page(
@@ -196,197 +527,113 @@ def _cover_page(
     manifest: "ManifestAnalysisResult | None" = None,
     osint: "OsintResult | None" = None,
 ) -> None:
-    # Fondo oscuro superior
-    pdf.set_fill_color(*C["bg"])
-    pdf.rect(0, 0, 210, 85, style="F")
-
-    # Titulo
-    pdf.set_y(20)
-    pdf.set_font("Helvetica", "B", 28)
-    pdf.set_text_color(*C["white"])
-    pdf.cell(0, 12, "nutcracker", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(*C["muted"])
-    pdf.cell(0, 5, "nutcracker.sh", align="C",
-             link="https://nutcracker.sh",
-             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    pdf.set_font("Helvetica", "", 11)
-    pdf.set_text_color(*C["info"])
-    pdf.cell(0, 7, t("android_security_report"), align="C",
-             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    # Linea acento
-    pdf.set_draw_color(*C["accent"])
-    pdf.set_line_width(0.8)
-    pdf.line(70, pdf.get_y() + 3, 140, pdf.get_y() + 3)
-    pdf.ln(10)
-
-    # ── Veredicto ─────────────────────────────────────────────────────────────
-    protected = result.protected
+    protected    = result.protected
     was_bypassed = _protection_broken(result)
+    detected_count = sum(1 for d in result.results if d.detected)
+    rasp_total     = len(result.results)
 
-    if not protected:
-        verdict_txt = t("no_protection_verdict")
-        verdict_bg  = C["danger"]
-        verdict_sub = t("no_protection_verdict_sub")
-    elif was_bypassed:
-        verdict_txt = t("protection_broken_verdict")
-        verdict_bg  = (220, 95, 0)
-        verdict_sub = t("protection_broken_verdict_sub")
-    else:
-        verdict_txt = t("protected_verdict")
-        verdict_bg  = C["success"]
-        verdict_sub = t("protected_verdict_sub")
+    score, grade, risk_label, grade_color = compute_risk_score(result, scan, manifest, osint)
 
-    pdf.set_fill_color(*verdict_bg)
-    pdf.set_x(45)
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.set_text_color(*C["white"])
-    pdf.cell(120, 12, verdict_txt, align="C", fill=True,
-             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    # ── Fondo oscuro (pagina completa) ────────────────────────────────────────
+    pdf.set_fill_color(*C["bg"])
+    pdf.rect(0, 0, 210, 297, style="F")
 
-    pdf.set_font("Helvetica", "I", 8)
+    # ── Barra superior de acento ─────────────────────────────────────────────
+    pdf.set_fill_color(*C["teal"])
+    pdf.rect(0, 0, 210, 4, style="F")
+
+    # ── Titulo ────────────────────────────────────────────────────────────────
+    pdf.set_y(12)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(*C["teal"])
+    pdf.cell(0, 9, "NUTCRACKER", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(*C["muted"])
-    pdf.cell(0, 5, _safe(verdict_sub), align="C",
+    pdf.cell(0, 6, "Android Security Analysis Report", align="C",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(1)
 
-    # ── Metadata ──────────────────────────────────────────────────────────────
-    pdf.set_y(max(pdf.get_y() + 2, 95))
-    pdf.set_text_color(*C["text"])
+    # App name y package
+    app_name = _safe(getattr(result, "app_name", None) or result.package)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(*C["teal"])
+    pdf.cell(0, 8, app_name, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    def meta_row(label: str, value: str) -> None:
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(*C["muted"])
-        pdf.cell(40, 6, label, new_x=XPos.RIGHT, new_y=YPos.TOP)
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(*C["text"])
-        pdf.cell(0, 6, value, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_text_color(*C["muted"])
+    pdf.cell(0, 5, _safe(result.package), align="C",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    meta_row("Package:", _safe(result.package))
-    meta_row(t("version_label"), _safe(f"{result.version_name}  (codigo {result.version_code})"))
-    meta_row(t("sdk_min_target_label"), _safe(f"{result.min_sdk} / {result.target_sdk}"))
-    meta_row(t("analyzed_label"), result.analyzed_at[:19].replace("T", "  "))
+    # ── Gauge central ─────────────────────────────────────────────────────────
+    GAUGE_CX = 105.0
+    GAUGE_CY = 106.0
+    _draw_score_gauge(pdf, GAUGE_CX, GAUGE_CY, score, grade, grade_color)
+
+    # ── "Overall Risk: LABEL" ─────────────────────────────────────────────────
+    pdf.set_xy(0, GAUGE_CY + 33)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*grade_color)
+    pdf.cell(0, 7, f"Overall Risk: {risk_label}", align="C",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    # ── Primera linea divisoria ───────────────────────────────────────────────
+    pdf.ln(3)
+    pdf.set_draw_color(*C["teal"])
+    pdf.set_line_width(0.3)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(4)
+
+    # ── Metadata (fondo oscuro) ───────────────────────────────────────────────
+    meta_x = 40.0
+    _cover_meta_row(pdf, meta_x, "Scanned on:", result.analyzed_at[:19].replace("T", "  "))
+    _cover_meta_row(pdf, meta_x, "Package:", _safe(result.package))
+    _cover_meta_row(pdf, meta_x, _safe(t("version_label")),
+                    _safe(f"{result.version_name}  (build {result.version_code})"))
+    _cover_meta_row(pdf, meta_x, _safe(t("sdk_min_target_label")),
+                    _safe(f"{result.min_sdk} / {result.target_sdk}"))
     if result.elapsed_seconds is not None:
-        meta_row(t("duration_label"), _format_elapsed(result.elapsed_seconds))
-
-    # Decompilacion con Frida (si se realizo)
+        _cover_meta_row(pdf, meta_x, _safe(t("duration_label")),
+                        _safe(_format_elapsed(result.elapsed_seconds)))
     dec = getattr(result, "decompilation_info", None)
     if dec and dec.get("method"):
-        meta_row(
-            t("decompiled_label"),
-            _safe(f"{dec['method']}  ({dec.get('dex_count', 0)} DEX volcados)"),
-        )
-        if dec.get("source_dir"):
-            meta_row(t("sources_label"), _safe(str(dec["source_dir"])))
+        _cover_meta_row(pdf, meta_x, _safe(t("decompiled_label")),
+                        _safe(f"{dec['method']}  ({dec.get('dex_count', 0)} DEX)"))
+    if scan is not None and scan.scanner_engine:
+        _cover_meta_row(pdf, meta_x, "Scanner:",
+                        _safe(f"{scan.scanner_engine}  ({scan.files_scanned} files)"))
 
-    # Motores de escaneo (vuln y leaks por separado)
+    # ── Segunda linea divisoria ───────────────────────────────────────────────
+    pdf.ln(3)
+    pdf.set_draw_color(*C["teal"])
+    pdf.set_line_width(0.3)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(4)
+
+    # ── Tabla de hallazgos por categoria ─────────────────────────────────────
+    findings_by_cat = _build_findings_by_cat(scan, manifest, osint)
+    _draw_cover_findings_table(
+        pdf, findings_by_cat,
+        protected=protected,
+        was_bypassed=was_bypassed,
+        rasp_detected=detected_count,
+        rasp_total=rasp_total,
+    )
+
+    # Nota AI review (si hay datos)
     if scan is not None:
-        vuln_eng = scan.scanner_engine or ""
-        leak_eng = scan.leak_engine or ""
-
-        # Vulnerabilidades
-        if vuln_eng:
-            vuln_label = vuln_eng.replace("regex", "regex interno")
-            meta_row(
-                t("vuln_scan_engine_label"),
-                _safe(f"{vuln_label}  ({scan.files_scanned} archivos)"),
-            )
-
-        # Leaks
-        if leak_eng:
-            parts = [p.strip() for p in leak_eng.split("+") if p.strip()]
-            meta_row(t("leak_scan_engine_label"), _safe(" + ".join(parts)))
-
-    pdf.ln(6)
-    pdf.hline()
-
-    # ── Tarjetas resumen ──────────────────────────────────────────────────────
-    leaks, vulns = _split_findings(scan)
-    detected_count = sum(1 for d in result.results if d.detected)
-    total_modules = len(result.results)
-    misconfig_count = len(manifest.misconfigurations) if manifest else 0
-
-    # Exposed assets (FOFA / Shodan)
-    _exposed_assets: list = []
-    _exposed_cves = 0
-    if osint is not None:
-        _exposed_assets = [l for l in (osint.public_leaks or []) if l.source in ("fofa", "shodan")]
-        _exposed_cves = sum(len(l.vulns) for l in _exposed_assets)
-
-    pdf.set_y(pdf.get_y() + 2)
-
-    # Sub-etiqueta de estado para la tarjeta de Protecciones
-    if was_bypassed:
-        _prot_sub: tuple | None = (t("bypassed_badge"), (220, 95, 0))
-    elif not protected:
-        _prot_sub = (t("not_detected_badge")[:10], C["danger"])
-    else:
-        _prot_sub = None
-
-    _exposed_sub: tuple | None = (
-        t("exposed_assets_card_cves", count=_exposed_cves), C["danger"]
-    ) if _exposed_cves else None
-
-    counts = [
-        (t("protections_card"), f"{detected_count} / {total_modules}",
-         (150, 150, 150), _prot_sub),
-        (t("misconfigs_card"), str(misconfig_count),
-         C["warning"] if misconfig_count else C["success"], None),
-        (t("leaks_card"), str(len(leaks)),
-         C["danger"] if leaks else C["success"], None),
-        (t("vulns_card"), str(len(vulns)),
-         C["danger"] if vulns else C["success"], None),
-        (t("exposed_assets_card"), str(len(_exposed_assets)),
-         C["warning"] if _exposed_assets else C["success"], _exposed_sub),
-    ]
-
-    card_w = 34
-    card_h = 18
-    card_gap = 4
-    total_w = card_w * len(counts) + card_gap * (len(counts) - 1)
-    start_x = (210 - total_w) / 2
-    card_y = pdf.get_y()
-
-    for i, (label, value, color, sub) in enumerate(counts):
-        x = start_x + i * (card_w + card_gap)
-        pdf.set_fill_color(*C["row_alt"])
-        pdf.rect(x, card_y, card_w, card_h, style="F")
-        # Barra superior de color
-        pdf.set_fill_color(*color)
-        pdf.rect(x, card_y, card_w, 2, style="F")
-        if sub:
-            sub_txt, sub_color = sub
-            # Valor (fuente más pequeña para hacer espacio al indicador)
-            pdf.set_xy(x, card_y + 2)
-            pdf.set_font("Helvetica", "B", 11)
-            pdf.set_text_color(*C["text"])
-            pdf.cell(card_w, 5, value, align="C")
-            # Indicador de estado (ej. "ELUDIDA")
-            pdf.set_xy(x, card_y + 7)
-            pdf.set_font("Helvetica", "B", 7)
-            pdf.set_text_color(*sub_color)
-            pdf.cell(card_w, 4, sub_txt, align="C")
-            # Etiqueta
-            pdf.set_xy(x, card_y + 12)
-            pdf.set_font("Helvetica", "", 7)
+        ai_fp = getattr(scan, "ai_false_positives", 0) or 0
+        if ai_fp:
+            ai_tp = getattr(scan, "ai_true_positives", len(scan.findings)) or 0
+            pdf.set_font("Helvetica", "I", 6)
             pdf.set_text_color(*C["muted"])
-            pdf.cell(card_w, 4, label, align="C")
-        else:
-            # Valor
-            pdf.set_xy(x, card_y + 4)
-            pdf.set_font("Helvetica", "B", 13)
-            pdf.set_text_color(*C["text"])
-            pdf.cell(card_w, 6, value, align="C")
-            # Etiqueta
-            pdf.set_xy(x, card_y + 12)
-            pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(*C["muted"])
-            pdf.cell(card_w, 4, label, align="C")
+            pdf.cell(0, 4,
+                     f"* {ai_tp} confirmed  ({ai_fp} false positives removed by AI review).",
+                     align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    pdf.set_y(card_y + card_h)
+    # ── Barra inferior de acento ──────────────────────────────────────────────
+    pdf.set_fill_color(*C["teal"])
+    pdf.rect(0, 293, 210, 4, style="F")
+
     pdf.set_text_color(*C["text"])
 
 
@@ -970,23 +1217,62 @@ def _render_cve_detail(pdf: APKReportPDF, exposed: "list") -> None:
         pdf.set_text_color(*C["text"])
 
         # ── Grilla de CVEs ─────────────────────────────────────────────────
+        from .osint import cvss_to_severity
+        vulns_cvss = getattr(asset, "vulns_cvss", {}) or {}
+        _SEV_COLOR = {
+            "critical": C["risk_critical"],
+            "high":     C["risk_high"],
+            "medium":   C["risk_medium"],
+            "low":      C["risk_low"],
+            "info":     C["muted"],
+        }
+        _SEV_LABEL = {
+            "critical": "CRIT",
+            "high":     "HIGH",
+            "medium":   "MED",
+            "low":      "LOW",
+            "info":     "INFO",
+        }
+        ROW_H = 7  # CVE id (4) + badge (3)
         cves = sorted(asset.vulns)
         for chunk_start in range(0, len(cves), cves_per_row):
             row_cves = cves[chunk_start:chunk_start + cves_per_row]
-            if pdf.will_page_break(4):
+            if pdf.will_page_break(ROW_H + 1):
                 pdf.add_page()
+            rx = pdf.l_margin
+            ry = pdf.get_y()
+            # Fila 1: ID del CVE
             pdf.set_font("Helvetica", "", 5.5)
-            pdf.set_fill_color(255, 255, 255)
             for cve in row_cves:
+                pdf.set_xy(rx, ry)
+                pdf.set_fill_color(255, 255, 255)
                 pdf.set_text_color(*C["danger"])
                 pdf.cell(cve_w, 4, _safe(cve), fill=True,
                          new_x=XPos.RIGHT, new_y=YPos.TOP)
-            # Completar fila con celdas vacías si es la última fila incompleta
+                rx += cve_w
+            # Completar fila con vacíos
             for _ in range(cves_per_row - len(row_cves)):
+                pdf.set_xy(rx, ry)
                 pdf.cell(cve_w, 4, "", fill=True,
                          new_x=XPos.RIGHT, new_y=YPos.TOP)
+                rx += cve_w
+            # Fila 2: badge de severidad
+            rx = pdf.l_margin
+            pdf.set_font("Helvetica", "B", 4.5)
+            for cve in row_cves:
+                cvss_score = vulns_cvss.get(cve, 0.0)
+                sev = cvss_to_severity(float(cvss_score))
+                badge_col = _SEV_COLOR[sev]
+                badge_lbl = _SEV_LABEL[sev]
+                badge_w = cve_w - 2
+                pdf.set_xy(rx + 1, ry + 4)
+                pdf.set_fill_color(*badge_col)
+                pdf.set_text_color(*C["white"])
+                pdf.cell(badge_w, 3, badge_lbl, align="C", fill=True,
+                         new_x=XPos.RIGHT, new_y=YPos.TOP)
+                rx += cve_w
             pdf.set_text_color(*C["text"])
-            pdf.ln(4)
+            pdf.set_y(ry + ROW_H)
 
         pdf.ln(2)
 
@@ -1154,7 +1440,7 @@ _STATUS_COLOR_PDF: dict[str, tuple] = {
 
 
 def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResult | None" = None, manifest: "ManifestAnalysisResult | None" = None) -> None:
-    """Sección MASVS v2 — score, grado e incumplimientos."""
+    """Sección MASVS v2 — compliance informativo (sin score ni penalización)."""
     from .masvs import build_masvs_report
 
     masvs = build_masvs_report(result, scan, manifest)
@@ -1176,56 +1462,8 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
 
     fw  = pdf.w - pdf.l_margin - pdf.r_margin
     x0  = pdf.l_margin
-    grade_color = _GRADE_COLOR_PDF.get(masvs.grade, C["muted"])
 
-    # ── Banner de score ───────────────────────────────────────────────────────
-    banner_h = 22
-    pdf.set_fill_color(*C["bg"])
-    pdf.rect(x0, pdf.get_y(), fw, banner_h, style="F")
-
-    by = pdf.get_y()
-
-    # Score grande
-    pdf.set_xy(x0 + 4, by + 3)
-    pdf.set_font("Helvetica", "B", 22)
-    pdf.set_text_color(*grade_color)
-    pdf.cell(28, 10, str(masvs.score), align="R")
-
-    pdf.set_xy(x0 + 33, by + 6)
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(*C["muted"])
-    pdf.cell(16, 5, "/ 100", align="L")
-
-    # Separador vertical
-    pdf.set_draw_color(*C["accent"])
-    pdf.set_line_width(0.3)
-    pdf.line(x0 + 52, by + 3, x0 + 52, by + banner_h - 3)
-
-    # Grado
-    pdf.set_xy(x0 + 55, by + 3)
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.set_text_color(*grade_color)
-    pdf.cell(14, 10, masvs.grade, align="C")
-
-    pdf.set_xy(x0 + 55, by + 13)
-    pdf.set_font("Helvetica", "", 7)
-    pdf.set_text_color(*C["muted"])
-    pdf.cell(14, 4, _safe(t("grade_label_pdf")), align="C")
-
-    # Separador vertical
-    pdf.line(x0 + 72, by + 3, x0 + 72, by + banner_h - 3)
-
-    # Bypass badge (si aplica)
-    bx = x0 + 76
-    if masvs.bypass_confirmed:
-        pdf.set_xy(bx, by + 5)
-        pdf.set_fill_color(220, 95, 0)
-        pdf.set_text_color(*C["white"])
-        pdf.set_font("Helvetica", "B", 7)
-        pdf.cell(28, 6, _safe(t("bypass_confirmed")), align="C", fill=True)
-        bx += 32
-
-    # Estadísticas de controles
+    # ── Resumen compacto de controles (pills) ─────────────────────────────────
     summary = masvs.to_dict()["summary"]
     _fail_total = summary['fail'] + summary['no_protection']
     _all_stats = [
@@ -1234,33 +1472,35 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
         (summary['bypass'],      "bypass",  (220, 95, 0)),
         (summary['not_tested'],  "no eval", C["muted"]),
     ]
-    stats = [(str(v), l, c) for v, l, c in _all_stats if v > 0]
-    sx = bx + 4
-    for val, lbl, col in stats:
-        if sx + 18 > x0 + fw - 4:
-            break
-        pdf.set_xy(sx, by + 3)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(*col)
-        pdf.cell(14, 6, val, align="C")
-        pdf.set_xy(sx, by + 10)
-        pdf.set_font("Helvetica", "", 6)
-        pdf.set_text_color(*C["muted"])
-        pdf.cell(14, 4, lbl, align="C")
-        sx += 16
+    pill_h = 9
+    pill_w = 28
+    pill_gap = 4
+    px = x0
+    py = pdf.get_y()
+    for val, lbl, col in _all_stats:
+        pdf.set_fill_color(*col)
+        pdf.rect(px, py, pill_w, pill_h, style="F")
+        pdf.set_xy(px, py + 0.5)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*C["white"])
+        pdf.cell(pill_w, 5, str(val), align="C")
+        pdf.set_xy(px, py + 5)
+        pdf.set_font("Helvetica", "", 5.5)
+        pdf.cell(pill_w, 3, lbl.upper(), align="C")
+        px += pill_w + pill_gap
 
-    pdf.set_y(by + banner_h + 3)
+    pdf.set_y(py + pill_h + 4)
     pdf.set_text_color(*C["text"])
 
     # ── Tabla de controles (todos, peores primero) ────────────────────────────
     _STATUS_ORDER_PDF = {"bypass": 0, "fail": 1, "no_protection": 2, "not_tested": 3, "pass": 4}
     all_controls = sorted(
         masvs.controls,
-        key=lambda c: (_STATUS_ORDER_PDF.get(c.status, 3), -c.penalty),
+        key=lambda c: (_STATUS_ORDER_PDF.get(c.status, 3), c.control_id),
     )
 
-    # Cabecera de tabla
-    COL_W = {"ctrl": 36, "status": 22, "desc": fw - 36 - 22 - 18 - 16, "findings": 18, "penalty": 16}
+    # Cabecera de tabla — sin columna Penalty
+    COL_W = {"ctrl": 36, "status": 22, "findings": 18, "desc": fw - 36 - 22 - 18}
     HDR_H = 6
 
     def _draw_table_header() -> None:
@@ -1268,9 +1508,12 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
         pdf.set_text_color(*C["white"])
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_x(x0)
-        for txt, w in [(t("masvs_ctrl_col"), COL_W["ctrl"]), (t("masvs_status_col"), COL_W["status"]),
-                       (t("masvs_desc_col"), COL_W["desc"]),
-                       (t("masvs_findings_col"), COL_W["findings"]), (t("masvs_penalty_col"), COL_W["penalty"])]:
+        for txt, w in [
+            (t("masvs_ctrl_col"),     COL_W["ctrl"]),
+            (t("masvs_status_col"),   COL_W["status"]),
+            (t("masvs_desc_col"),     COL_W["desc"]),
+            (t("masvs_findings_col"), COL_W["findings"]),
+        ]:
             pdf.cell(w, HDR_H + 1, _safe(txt), align="C", fill=True,
                      new_x=XPos.RIGHT, new_y=YPos.TOP)
         pdf.ln(HDR_H + 1)
@@ -1350,14 +1593,6 @@ def _masvs_section(pdf: APKReportPDF, result: "AnalysisResult", scan: "ScanResul
         pdf.set_font("Helvetica", findings_bold, 7)
         pdf.set_text_color(*findings_color)
         pdf.cell(COL_W["findings"], row_h, findings_val, align="C", fill=False,
-                 new_x=XPos.RIGHT, new_y=YPos.TOP)
-
-        # ── Paso 6: Penalización ─────────────────────────────────────────────
-        penalty_val = f"-{ctrl.penalty}" if ctrl.penalty > 0 else "-"
-        penalty_color = C["danger"] if ctrl.penalty > 0 else C["muted"]
-        pdf.set_font("Helvetica", "B" if ctrl.penalty > 0 else "", 7)
-        pdf.set_text_color(*penalty_color)
-        pdf.cell(COL_W["penalty"], row_h, penalty_val, align="C", fill=False,
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         pdf.set_y(ry + row_h + 1.5)
@@ -1373,6 +1608,7 @@ def _leaks_section(pdf: APKReportPDF, scan: "ScanResult") -> None:
 
 def _vuln_section(pdf: APKReportPDF, scan: "ScanResult") -> None:
     _, vulns = _split_findings(scan)
+    # Siempre mostrar si está habilitado (aunque haya 0 hallazgos)
     _findings_section(pdf, scan.base_dir, vulns, t("vulns_section_title"), t("no_vulns"))
 
 
@@ -1385,6 +1621,7 @@ def generate_pdf_report(
     scan: "ScanResult | None" = None,
     manifest: "ManifestAnalysisResult | None" = None,
     osint: "OsintResult | None" = None,
+    vuln_scan_enabled: bool = True,
 ) -> Path:
     """
     Genera un informe PDF con las secciones:
@@ -1407,11 +1644,11 @@ def generate_pdf_report(
     pdf.add_page()
     _cover_page(pdf, result, scan=scan, manifest=manifest, osint=osint)
 
-    # 2. Protecciones descubiertas
-    _protections_section(pdf, result)
-
-    # 3. MASVS v2 compliance
+    # 2. MASVS v2 compliance
     _masvs_section(pdf, result, scan=scan, manifest=manifest)
+
+    # 3. Protecciones descubiertas
+    _protections_section(pdf, result)
 
     # 4. Misconfigurations del manifest
     if manifest is not None:
@@ -1428,8 +1665,8 @@ def generate_pdf_report(
     if scan is not None:
         _leaks_section(pdf, scan)
 
-    # 6. Vulnerabilidades
-    if scan is not None:
+    # 6. Vulnerabilidades — omitir si no se escaneó ningún archivo (ej: APK protegido + jadx)
+    if scan is not None and vuln_scan_enabled and scan.files_scanned > 0:
         _vuln_section(pdf, scan)
 
     pdf.output(str(output_path))
