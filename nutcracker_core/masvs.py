@@ -111,14 +111,15 @@ RULE_TO_MASVS: dict[str, list[str]] = {
 # ── Mapeo detectores → MASVS ──────────────────────────────────────────────────
 
 DETECTOR_TO_MASVS: dict[str, list[str]] = {
-    "Librerías anti-root conocidas":             ["MASVS-RESILIENCE-1"],
+    # Claves = detector.name tal como están definidas en cada clase detector
+    "Known anti-root libraries":                 ["MASVS-RESILIENCE-1"],
     "SafetyNet / Play Integrity API":            ["MASVS-RESILIENCE-1"],
-    "Comprobaciones manuales de root":           ["MASVS-RESILIENCE-1"],
+    "Manual root checks":                        ["MASVS-RESILIENCE-1"],
     "Anti Magisk / SuperSU / KernelSU / Frida":  ["MASVS-RESILIENCE-1", "MASVS-RESILIENCE-2"],
     "DexGuardDetector":                          ["MASVS-RESILIENCE-3", "MASVS-RESILIENCE-4"],
     "AppDome":                                   ["MASVS-RESILIENCE-1", "MASVS-RESILIENCE-2",
                                                   "MASVS-RESILIENCE-3", "MASVS-RESILIENCE-4"],
-    "Verificación de firma del APK":             ["MASVS-RESILIENCE-4"],
+    "APK signature verification":               ["MASVS-RESILIENCE-4"],
     "Certificate pinning":                       ["MASVS-NETWORK-2"],
 }
 
