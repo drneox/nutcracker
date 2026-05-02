@@ -26,14 +26,15 @@
   </a>
 </p>
 
-# nutcracker v0.1 — Mobile Security & Offensive Threat Intelligence
+# nutcracker v0.2.0 beta — Mobile Security & Offensive Threat Intelligence
 
 Android application analysis tool aimed at security researchers.
 Downloads apps directly from Google Play, detects and attempts to bypass
 anti-root/RASP protections (DexGuard, Arxan, Appdome, Promon, RootBeer), decompiles them, extracts hardcoded secrets and endpoints,
 analyzes insecure manifest configurations, and launches OSINT reconnaissance on the package ID,
 domains, endpoints and extracted secrets (subdomains via crt.sh, public leaks on GitHub/Postman/FOFA/Wayback and optional web searches).
-All findings are consolidated into a technical PDF report ready for reporting.
+Findings go through an optional LLM-powered false positive filter (`ai-review`).
+All results are consolidated into a technical PDF report ready for reporting.
 
 ---
 ## ⚠️ Legal Disclaimer 
@@ -48,13 +49,16 @@ All findings are consolidated into a technical PDF report ready for reporting.
 - Smart analytics SDK filtering (AppMetrica, AppsFlyer, etc.) to avoid false positives
 - Dynamic deobfuscation via `frida_server`, `gadget` or `fart`, depending on the configured pipeline
 - Optional Frida Gadget instrumentation as an embedded fallback path
-- Vulnerability scanner: semgrep (OWASP MASTG) + 38 internal regex rules
+- SAST scanner: semgrep (OWASP MASTG) + 38 internal regex rules (`sast_scan` feature)
 - Configurable leak/secret search: internal HC rules + apkleaks + gitleaks on decompiled code and original APK
 - Optional OSINT module: subdomains via crt.sh, public leaks on GitHub/Postman/FOFA/Shodan/Wayback, false-positive filter and optional web searches via DuckDuckGo
+- **AI Review** (`ai-review`): LLM-powered false positive filter — reviews each finding, tags FPs with `_fp: true` (preserved in JSON for audit), downgrades low-confidence findings severity; auto-regenerates PDF
 - AndroidManifest.xml analysis: dangerous permissions, exported components, `network security config` and insecure configurations
-- Complete PDF report: cover page, executive summary, anti-root, RASP bypass, insecure configurations, leaks, OSINT and vulnerabilities
+- MASVS v2 compliance scoring: 24-control evaluation with numeric pass/fail count (e.g. `10/24 controls`)
+- Complete PDF report: cover page, MASVS compliance, protections, misconfigurations, OSINT, leaks, and SAST vulnerabilities
 - Batch mode to scan multiple apps in sequence
 - Modules controllable via feature flags in `config.yaml`
+- `decompilation: jadx` pipeline option forces static-only analysis — disables Frida/emulator even when DexGuard is detected
 
 ---
 
@@ -82,11 +86,10 @@ python3 -m pip install --user pipx
 python3 -m pipx ensurepath
 pipx install semgrep
 
-# apkeep (official binary)
-APKEEP_VERSION="0.18.0"
-curl -L -o /tmp/apkeep.tgz \
-  "https://github.com/EFForg/apkeep/releases/download/v${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-musl.tar.gz"
-tar -xzf /tmp/apkeep.tgz -C /tmp
+# apkeep (official binary — direct download, no archive)
+APKEEP_VERSION="1.0.0"
+curl -L -o /tmp/apkeep \
+  "https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-gnu"
 sudo install /tmp/apkeep /usr/local/bin/apkeep
 apkeep --version
 ```
@@ -211,8 +214,9 @@ git -C ./semgrep_rules_android pull
 
 The path is configured in `config.yaml`:
 ```yaml
-strategies:
-  scanner_config: "p/secrets ./semgrep_rules_android/rules"
+sast:
+  engine: auto          # auto | semgrep | regex | none
+  config: "p/secrets ./semgrep_rules_android/rules"
 ```
 
 > **Note:** The `p/android`, `p/secrets` and `p/owasp-top-ten` profiles are no longer
@@ -223,6 +227,8 @@ strategies:
 ## Obtaining the Google Play AAS Token
 
 apkeep requires a long-lived AAS token to download from Google Play.
+
+> **Important:** `setup-token` requires a real device or an emulator **without Google Play** (i.e. `google_apis` image, not `google_play`). Play Store-protected AVDs block the token extraction flow.
 
 ```bash
 # Interactive assistant (step-by-step guided on the device):
@@ -298,11 +304,15 @@ features:                       # Feature flags: enable or disable modules
   anti_root_analysis: true      # Anti-root protection detection
   decompilation: true           # Decompilation (jadx or runtime, depending on pipeline)
   manifest_scan: true           # Insecure manifest configuration analysis
-  vuln_scan: false              # Vulnerability scanner (regex + semgrep)
+  sast_scan: false              # SAST scanner (semgrep + regex)
   leak_scan: true               # Leak/secret scanner
   osint_scan: true              # OSINT: subdomains and public leaks
   report_pdf: true              # Generate PDF report
   report_json: false            # Generate JSON report
+
+sast:                           # SAST scanner settings
+  engine: auto                  # auto | semgrep | regex | none
+  config: "p/secrets ./semgrep_rules_android/rules"
 
 leak_scan:
   native: true                  # Internal HC rules on decompiled code
@@ -326,9 +336,7 @@ osint:
   wayback_filter_interesting: true  # Filter to sensitive paths/queries
 
 strategies:
-  anti_root_engine: native      # Anti-root detection engine
-  scanner_engine: auto          # auto | semgrep | regex | none
-  scanner_config: "p/secrets ./semgrep_rules_android/rules"
+  anti_root_engine: native      # Anti-root detection engine: native | apkid
   show_emulator: true
   runtime_target: emulator      # auto | emulator | device
   default_emulator_avd: ""
@@ -338,17 +346,29 @@ strategies:
 
 pipelines:
   protected:                    # Apps with detected protection
-    decompilation: runtime      # Runtime decompilation (frida-dexdump)
+    decompilation: runtime      # runtime | jadx (jadx = static-only, disables Frida)
     fallback_jadx: true         # If runtime fails, try jadx
-    runtime_methods:            # Executed in the order listed below
-    # - frida_server: runtime extraction using Frida with frida-server on the device or emulator
-    # - gadget: instrumentation via Frida Gadget embedded in the APK
-    # - fart: alternative runtime DEX extraction flow
+    runtime_methods:
     - frida_server
     - gadget
     - fart
   unprotected:                  # Apps without protection
     decompilation_jadx: true    # Direct static decompilation
+
+# LLM-powered false positive filter (runs as a post-hook after analysis)
+post_hooks: [ai-review]
+ai_review:
+  batch_size: 8                 # Findings per LLM request
+  context_lines: 4              # Source lines of context sent to LLM
+  regen_pdf: true               # Regenerate PDF after filtering
+
+llm:
+  model: deepseek-v4-pro        # Any OpenAI-compatible model
+  api_key: "sk-..."
+  base_url: "https://api.deepseek.com"
+  provider: openai
+  max_tokens: 4096
+  timeout: 120
 
 auto:
   unattended: true              # Unattended mode (no manual intervention)
@@ -373,17 +393,71 @@ APK
                └─► jadx → scan → PDF
 ```
 
+### Risk Score & Letter Grade
+
+The PDF cover page shows a single risk score (0–100, higher = worse) and a letter grade
+derived from weighted deductions across all finding categories:
+
+| Factor | Deduction | Cap |
+|---|---|---|
+| No protection detected | −30 | — |
+| Protection bypassed (RASP) | −20 | — |
+| Each CRITICAL vulnerability | −15 | −45 |
+| Each HIGH vulnerability | −8 | −24 |
+| Each MEDIUM vulnerability | −3 | −12 |
+| Each LOW vulnerability | −1 | −5 |
+| Each hardcoded secret / leak | −4 | −20 |
+| Each manifest misconfiguration | −2 | −10 |
+| Each CVE CRITICAL (Shodan) | −8 | −15 (assets total) |
+| Each CVE HIGH (Shodan) | −4 | ↑ |
+
+**Grade thresholds** (score = 100 − deductions, floor 0):
+
+| Score | Grade | Risk Level |
+|---|---|---|
+| 85–100 | **A** | MINIMAL |
+| 70–84 | **B** | LOW |
+| 50–69 | **C** | MEDIUM |
+| 30–49 | **D** | HIGH |
+| 0–29 | **F** | CRITICAL |
+
+> **Note:** MASVS v2 compliance uses a separate numeric count (`10/24 controls passed`).
+> It is not included in the risk score — it measures regulatory compliance, not operational risk.
+
+---
+
 ### PDF Report Sections
 
 | Section | Description |
 |---|---|
-| Cover | Binary protection verdict (NO PROTECTION / PROTECTION BROKEN / PROTECTED) and APK metadata |
-| Executive Summary | Executive summary with app data and risk per module |
-| Anti-Root Analysis | Detected vs bypassed protections (5 detectors) |
-| Bypass RASP | Bypass techniques for each found protection |
+| Cover | Risk score (0–100), letter grade (A–F), overall risk level and findings breakdown by category |
+| MASVS v2 Compliance | 24-control pass/fail evaluation — numeric count only (`10/24 controls`), no letter grade |
+| Protections | Detected vs bypassed protections (8 detectors) |
 | Misconfigurations | AndroidManifest.xml analysis: `debuggable`, `allowBackup`, `cleartext`, exported components and dangerous permissions |
-| Leaks | Hardcoded secrets: API keys, tokens, AWS/Firebase credentials |
-| Vulnerabilities | semgrep + regex findings classified by severity |
+| OSINT | Own domains, subdomains and public leaks (GitHub, Postman, FOFA, Shodan, Wayback) |
+| Leaks | Hardcoded secrets: API keys, tokens, URLs, AWS/Firebase credentials |
+| Vulnerabilities | semgrep + regex findings classified by severity (only if `sast_scan: true` and files were scanned) |
+
+### AI Review (`ai-review`)
+
+An optional LLM-powered post-hook that filters false positives from findings:
+
+```bash
+# Runs automatically after scan if configured in post_hooks:
+post_hooks: [ai-review]
+
+# Or manually:
+python nutcracker.py ai-review com.example.app
+python nutcracker.py ai-review com.example.app --dry-run   # preview only
+```
+
+**How it works:**
+- Sends findings in batches to the configured LLM (any OpenAI-compatible provider)
+- Each finding is classified as `TRUE_POSITIVE`, `FALSE_POSITIVE` or `DOWNGRADE`
+- FPs are tagged `_fp: true` in the JSON — **never deleted** — so the audit trail is preserved
+- Downgrades reduce severity (e.g. `high` → `info` for URL-only findings)
+- URL-valued findings (`HC007`/`HC008` with only a URL as matched text) are automatically degraded to `info` even without LLM review
+- PDF is regenerated with only true positives visible
 
 ### False Positive Reduction
 
@@ -425,6 +499,163 @@ See [ROADMAP.md](ROADMAP.md) for pending tasks: OSINT improvements, iOS/IPA supp
 
 ---
 
+## Plugin System
+
+Nutcracker auto-discovers plugins: any subdirectory inside `nutcracker_core/plugins/`
+that exposes a `register(cli)` function is loaded at startup.
+
+### Installing an external plugin
+
+```bash
+git clone https://github.com/<user>/<plugin-repo> nutcracker_core/plugins/<name>
+# requirements.txt is installed automatically on first use
+```
+
+### Built-in plugins
+
+| Plugin | Command | Description |
+|---|---|---|
+| `aipwn` | `nutcracker aipwn <package>` | Autonomous LLM-powered Frida bypass agent |
+| `aireview` | `nutcracker ai-review <package>` | LLM-powered false positive filter |
+
+---
+
+## Building a Plugin
+
+A plugin is a Python package (a folder with `__init__.py`) placed inside
+`nutcracker_core/plugins/`. The only required contract is a top-level
+`register(cli)` function — everything else is optional.
+
+### Step 1 — Create the folder structure
+
+```
+nutcracker_core/plugins/myplugin/
+├── __init__.py        # required
+└── requirements.txt   # optional — auto-installed if import fails
+```
+
+### Step 2 — Implement `register(cli)`
+
+`cli` is the root `click.Group` of `nutcracker.py`. Use it to attach one or
+more subcommands:
+
+```python
+# nutcracker_core/plugins/myplugin/__init__.py
+from __future__ import annotations
+import click
+
+def register(cli: click.Group) -> None:
+    @cli.command("my-command")
+    @click.argument("package")
+    @click.option("--verbose", "-v", is_flag=True)
+    def my_command(package: str, verbose: bool) -> None:
+        """Short description shown in nutcracker --help."""
+        click.echo(f"Running myplugin on {package}")
+```
+
+After adding the file, the command is available immediately:
+
+```bash
+python nutcracker.py my-command com.example.app
+python nutcracker.py --help          # shows my-command in the list
+```
+
+### Step 3 — Read `config.yaml` (optional)
+
+```python
+from nutcracker_core.config import load_config, get as cfg_get
+
+def register(cli: click.Group) -> None:
+    @cli.command("my-command")
+    @click.argument("package")
+    def my_command(package: str) -> None:
+        config = load_config()
+        api_key  = cfg_get(config, "llm.api_key",  default="")
+        timeout  = cfg_get(config, "llm.timeout",  default=60)
+        ...
+```
+
+You can also add your own block to `config.yaml`:
+
+```yaml
+# config.yaml
+myplugin:
+  output_dir: "./myplugin_output"
+  max_items: 10
+```
+
+```python
+output_dir = cfg_get(config, "myplugin.output_dir", default="./myplugin_output")
+```
+
+### Step 4 — React to analysis events with post-hooks (optional)
+
+Post-hooks let you run code automatically after `scan` / `analyze` / `batch`
+without modifying `nutcracker.py`:
+
+```python
+from nutcracker_core.plugins import register_post_hook
+
+def _after_analysis(package, result, vuln_scan, config):
+    # Runs after every scan/analyze that produces a result
+    print(f"[myplugin] {package} — {len(vuln_scan.findings)} findings")
+
+def _after_batch(packages, config):
+    # Runs once after a full batch completes
+    print(f"[myplugin] batch done — {len(packages)} apps")
+
+def register(cli: click.Group) -> None:
+    register_post_hook("after_analysis", _after_analysis)
+    register_post_hook("after_batch",    _after_batch)
+```
+
+**Available events:**
+
+| Event | When | kwargs |
+|---|---|---|
+| `after_analysis` | After every `scan` / `analyze` run | `package`, `result`, `vuln_scan`, `config` |
+| `after_batch` | Once after `batch` finishes | `packages` (list[str]), `config` |
+
+### Step 5 — Declare Python dependencies (optional)
+
+Create `requirements.txt` next to `__init__.py`. If the plugin fails to import
+due to missing packages, the loader automatically runs `pip install -q -r requirements.txt`
+and retries the import.
+
+```
+# nutcracker_core/plugins/myplugin/requirements.txt
+httpx>=0.27
+rich>=13
+```
+
+### Complete minimal example
+
+```python
+# nutcracker_core/plugins/myplugin/__init__.py
+from __future__ import annotations
+from pathlib import Path
+import click
+from nutcracker_core.plugins import register_post_hook
+
+
+def _after_analysis(package, result, vuln_scan, config):
+    out = Path("./myplugin_output") / f"{package}.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(f"{len(vuln_scan.findings)} findings\n")
+
+
+def register(cli: click.Group) -> None:
+    register_post_hook("after_analysis", _after_analysis)
+
+    @cli.command("my-command")
+    @click.argument("package")
+    def my_command(package: str) -> None:
+        """Run myplugin manually on PACKAGE."""
+        click.echo(f"myplugin: {package}")
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -444,27 +675,32 @@ nutcracker/
 ├── semgrep_rules_android/          # OWASP MASTG rules
 ├── tools/                          # Auxiliary utilities
 └── nutcracker_core/
-  ├── __init__.py                 # Main package
+    ├── __init__.py                 # Main package
     ├── analyzer.py                 # Main static analysis (androguard)
-  ├── apk_tools.py                # APK manipulation and installation utilities
-  ├── config.py                   # config.yaml loading and access
-  ├── device.py                   # Devices, SDK, Frida and adb utilities
+    ├── apk_tools.py                # APK manipulation and installation utilities
+    ├── config.py                   # config.yaml loading and access
+    ├── device.py                   # Devices, SDK, Frida and adb utilities
     ├── downloader.py               # Download APKs (Google Play / APKPure / direct URL)
     ├── decompiler.py               # jadx interface
     ├── deobfuscator.py             # FART flow for physical device
-  ├── frida_bypass.py             # Frida scripts (bypass, FART)
+    ├── frida_bypass.py             # Frida scripts (bypass, FART)
     ├── manifest_analyzer.py        # AndroidManifest.xml and insecure configuration analysis
-  ├── osint.py                    # Subdomains, public leaks, Wayback and optional web searches
+    ├── masvs.py                    # MASVS v2 compliance scoring (24 controls, numeric pass/fail)
+    ├── osint.py                    # Subdomains, public leaks, Wayback and optional web searches
     ├── pdf_reporter.py             # PDF report generation (fpdf2)
     ├── pipeline.py                 # End-to-end analysis pipeline
-  ├── reporter.py                 # JSON reports and console output
-  ├── runtime.py                  # Dynamic analysis orchestration
+    ├── reporter.py                 # JSON reports and console output
+    ├── runtime.py                  # Dynamic analysis orchestration
     ├── string_extractor.py         # APK string extraction
-  ├── vuln_scanner.py             # Semgrep + regex + apkleaks + gitleaks
+    ├── vuln_scanner.py             # Semgrep + regex + apkleaks + gitleaks
+    ├── plugins/
+    │   ├── __init__.py             # Plugin loader + post-hook registry
+    │   ├── aireview/               # ai-review plugin: LLM-powered false positive filter
     └── detectors/
-    ├── __init__.py             # Detectors subpackage export
-    ├── appdome.py              # Appdome detector
-    ├── base.py                 # Common base for detectors
+        ├── __init__.py             # Detectors subpackage export
+        ├── appdome.py              # Appdome detector
+        ├── base.py                 # Common base for detectors
+        ├── certificate_pinning.py  # Certificate pinning detector
         ├── dexguard.py             # DexGuard / Arxan detector (requires vendor signature)
         ├── libraries.py            # Anti-root library detector (classes only, no strings)
         ├── magisk.py               # Magisk / SuperSU / KernelSU / Frida detector

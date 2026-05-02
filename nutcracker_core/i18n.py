@@ -46,6 +46,22 @@ def t(key: str, **kwargs) -> str:
     return value
 
 
+def register(strings: dict[str, dict[str, str]]) -> None:
+    """
+    Register additional translation strings from a plugin.
+    *strings* must be a dict keyed by language code, e.g.::
+
+        register({"en": {"my_key": "Hello"}, "es": {"my_key": "Hola"}})
+
+    Existing keys are NOT overwritten — the plugin strings act as a fallback.
+    """
+    for lang, entries in strings.items():
+        if lang not in STRINGS:
+            STRINGS[lang] = {}
+        for key, value in entries.items():
+            STRINGS[lang].setdefault(key, value)
+
+
 # ── Translation tables ────────────────────────────────────────────────────────
 
 STRINGS: dict[str, dict[str, str]] = {
@@ -139,6 +155,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "vulns_card": "Vulns",
         "exposed_assets_card": "Exposed Assets",
         "exposed_assets_card_cves": "{count} CVEs",
+        "severity_summary_label": "FINDINGS BY SEVERITY ({total})",
 
         # ── PDF protections section ────────────────────────────────────────────
         "protections_section_title": "Discovered Protections",
@@ -387,7 +404,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli_skipping_decompilation": "  features.decompilation=false \u2014 skipping decompilation.",
         "cli_skipping_manifest_scan": "  features.manifest_scan=false \u2014 skipping manifest analysis.",
         "cli_skipping_osint": "  features.osint_scan=false \u2014 skipping OSINT.",
-        "cli_skipping_vuln_scan": "  features.vuln_scan=false and features.leak_scan=false \u2014 skipping scan.",
+        "cli_skipping_vuln_scan": "  features.sast_scan=false and features.leak_scan=false \u2014 skipping scan.",
         "cli_decompiling_with": "  Decompiling with {tool} \u2192 {output_dir}/{package}/",
         "cli_source_code_at": "Source code at:",
         "cli_java_files": "   {count} .java files generated",
@@ -801,6 +818,56 @@ STRINGS: dict[str, dict[str, str]] = {
         "osint_wayback_error": "Wayback: error for {domain}",
         "osint_no_source_dir": "No decompiled source directory \u2014 skipping BuildConfig scan.",
         "osint_running": "Running OSINT for {package}...",
+
+        # ── extract_token tool ────────────────────────────────────────────────
+        "et_err_unauthorized": "ERROR: Unauthorized device(s) detected:",
+        "et_unlock_usb": "Unlock the phone and accept 'Allow USB debugging'.",
+        "et_err_no_devices": "ERROR: No Android devices connected.",
+        "et_suggested_steps": "Suggested steps:",
+        "et_step_connect_usb": "  1. Connect the phone via USB",
+        "et_step_dev_options": "  2. Enable Developer options > USB debugging",
+        "et_step_accept_dialog": "  3. Accept the debugging dialog on the device",
+        "et_warn_serial": "Warning: --serial {serial} not available. Using auto-selection.",
+        "et_devices_found": "Detected devices:",
+        "et_unknown_model": "(unknown model)",
+        "et_choose_device": "Choose device [1-{count}]: ",
+        "et_invalid_input": "Invalid input.",
+        "et_device_steps_header": "\nFollow these steps on the device:",
+        "et_device_no_play_store": "* Make sure the device does NOT have Play Store",
+        "et_device_step1": "  1. Go to Settings > Accounts > Add account > Google",
+        "et_device_step2": "  2. Log in with the target account (if not already added)",
+        "et_device_step3": "  3. Keep the screen unlocked during extraction",
+        "et_err_no_config": "ERROR: {path} does not exist",
+        "et_err_no_email": "ERROR: Set google_play.email in config.yaml or pass --email",
+        "et_diag_v1": "[diag] V1 detected, conversion attempt {idx}/{total}",
+        "et_diag_apkeep_fail": "[diag] apkeep failed with code {code}",
+        "et_diag_apkeep_line": "[diag] apkeep: {line}",
+        "et_diag_auth_timeout": "[diag] auth endpoint unreachable or timeout",
+        "et_diag_auth_line": "[diag] auth: {line}",
+        "et_diag_auth_no_token": "[diag] auth: no Token/Auth in response (http={status})",
+        "et_trying_method": "\nTrying method: {method}",
+        "et_no_token_method": "  No token obtained with this method.",
+        "et_next_method": "  Press ENTER to try the next method...",
+        "et_argparse_desc": "Interactive AAS token assistant",
+        "et_arg_config": "Path to config.yaml",
+        "et_arg_serial": "Target ADB serial",
+        "et_arg_email": "Google Play email (override)",
+        "et_arg_method": "Intermediate token extraction method",
+        "et_arg_no_interactive": "Do not prompt for confirmations",
+        "et_header": "=== nutcracker \u2014 AAS Token Extraction Assistant ===",
+        "et_device_info": "\nDevice: {serial} [{model}]",
+        "et_android_id": "Android ID: {android_id}",
+        "et_press_enter": "\nPress ENTER when you complete the steps on the device...",
+        "et_no_auto_token": "\nCould not extract token automatically.",
+        "et_suggestions": "Suggestions:",
+        "et_sugg1": "  1. Open Play Store and confirm the account is logged in",
+        "et_sugg2": "  2. Wait 30-60s for Google Play Services to sync",
+        "et_sugg3": "  3. Retry with --method root if using emulator/root",
+        "et_intermediate_token": "\nIntermediate token extracted: {token}...",
+        "et_err_apkeep_convert": "ERROR: apkeep could not convert the token to aas_token.",
+        "et_verify_apkeep": "Verify that apkeep is installed and the device has a valid session.",
+        "et_aas_saved": "\nAAS token saved to {path}",
+        "et_ready": "You can now use Google Play in nutcracker.",
     },
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -893,6 +960,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "vulns_card": "Vulns",
         "exposed_assets_card": "Activos Expuestos",
         "exposed_assets_card_cves": "{count} CVEs",
+        "severity_summary_label": "HALLAZGOS POR SEVERIDAD ({total})",
 
         # ── PDF protections section ────────────────────────────────────────────
         "protections_section_title": "Protecciones Descubiertas",
@@ -1141,7 +1209,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "cli_skipping_decompilation": "  features.decompilation=false \u2014 omitiendo decompilaci\u00f3n.",
         "cli_skipping_manifest_scan": "  features.manifest_scan=false \u2014 omitiendo an\u00e1lisis del manifest.",
         "cli_skipping_osint": "  features.osint_scan=false \u2014 omitiendo OSINT.",
-        "cli_skipping_vuln_scan": "  features.vuln_scan=false y features.leak_scan=false \u2014 omitiendo escaneo.",
+        "cli_skipping_vuln_scan": "  features.sast_scan=false y features.leak_scan=false \u2014 omitiendo escaneo.",
         "cli_decompiling_with": "  Decompilando con {tool} \u2192 {output_dir}/{package}/",
         "cli_source_code_at": "C\u00f3digo fuente en:",
         "cli_java_files": "   {count} archivos .java generados",
@@ -1555,5 +1623,55 @@ STRINGS: dict[str, dict[str, str]] = {
         "osint_wayback_error": "Wayback: error para {domain}",
         "osint_no_source_dir": "Sin directorio fuente decompilado \u2014 omitiendo escaneo BuildConfig.",
         "osint_running": "Ejecutando OSINT para {package}...",
+
+        # ── extract_token tool ────────────────────────────────────────────────
+        "et_err_unauthorized": "ERROR: Hay dispositivo(s) no autorizados:",
+        "et_unlock_usb": "Desbloquea el tel\u00e9fono y acepta 'Permitir depuraci\u00f3n USB'.",
+        "et_err_no_devices": "ERROR: No hay dispositivos Android conectados.",
+        "et_suggested_steps": "Pasos sugeridos:",
+        "et_step_connect_usb": "  1. Conecta el tel\u00e9fono por USB",
+        "et_step_dev_options": "  2. Activa Opciones de desarrollador > Depuraci\u00f3n USB",
+        "et_step_accept_dialog": "  3. Acepta el di\u00e1logo de depuraci\u00f3n en el dispositivo",
+        "et_warn_serial": "Aviso: --serial {serial} no est\u00e1 disponible. Usando selecci\u00f3n autom\u00e1tica.",
+        "et_devices_found": "Dispositivos detectados:",
+        "et_unknown_model": "(modelo desconocido)",
+        "et_choose_device": "Elige dispositivo [1-{count}]: ",
+        "et_invalid_input": "Entrada inv\u00e1lida.",
+        "et_device_steps_header": "\nSigue estos pasos en el dispositivo:",
+        "et_device_no_play_store": "* Aseg\u00farate que el dispositivo no tenga Play Store",
+        "et_device_step1": "  1. Ve a Ajustes > Cuentas > A\u00f1adir cuenta > Google",
+        "et_device_step2": "  2. Inicia sesi\u00f3n con la cuenta objetivo (si a\u00fan no est\u00e1 agregada)",
+        "et_device_step3": "  3. Deja la pantalla desbloqueada durante la extracci\u00f3n",
+        "et_err_no_config": "ERROR: No existe {path}",
+        "et_err_no_email": "ERROR: Configura google_play.email en config.yaml o pasa --email",
+        "et_diag_v1": "[diag] V1 detectado, intento de conversi\u00f3n {idx}/{total}",
+        "et_diag_apkeep_fail": "[diag] apkeep fall\u00f3 con c\u00f3digo {code}",
+        "et_diag_apkeep_line": "[diag] apkeep: {line}",
+        "et_diag_auth_timeout": "[diag] auth endpoint no alcanzable o timeout",
+        "et_diag_auth_line": "[diag] auth: {line}",
+        "et_diag_auth_no_token": "[diag] auth sin Token/Auth (http={status})",
+        "et_trying_method": "\nIntentando m\u00e9todo: {method}",
+        "et_no_token_method": "  No se obtuvo token con este m\u00e9todo.",
+        "et_next_method": "  Pulsa ENTER para intentar el siguiente m\u00e9todo...",
+        "et_argparse_desc": "Asistente interactivo de AAS token",
+        "et_arg_config": "Ruta a config.yaml",
+        "et_arg_serial": "ADB serial objetivo",
+        "et_arg_email": "Email Google Play (override)",
+        "et_arg_method": "M\u00e9todo de extracci\u00f3n del token intermedio",
+        "et_arg_no_interactive": "No pedir confirmaciones",
+        "et_header": "=== nutcracker \u2014 Asistente de extracci\u00f3n AAS Token ===",
+        "et_device_info": "\nDispositivo: {serial} [{model}]",
+        "et_android_id": "Android ID: {android_id}",
+        "et_press_enter": "\nPulsa ENTER cuando completes los pasos en el dispositivo...",
+        "et_no_auto_token": "\nNo se pudo extraer token autom\u00e1ticamente.",
+        "et_suggestions": "Sugerencias:",
+        "et_sugg1": "  1. Abre Play Store y confirma que la cuenta est\u00e9 logueada",
+        "et_sugg2": "  2. Espera 30-60s a que sincronice Google Play Services",
+        "et_sugg3": "  3. Reintenta con --method root si usas emulador/root",
+        "et_intermediate_token": "\nToken intermedio extra\u00eddo: {token}...",
+        "et_err_apkeep_convert": "ERROR: apkeep no pudo convertir el token a aas_token.",
+        "et_verify_apkeep": "Verifica que apkeep est\u00e9 instalado y que el dispositivo tenga sesi\u00f3n v\u00e1lida.",
+        "et_aas_saved": "\nAAS token guardado en {path}",
+        "et_ready": "Ya puedes usar Google Play en nutcracker.",
     },
 }

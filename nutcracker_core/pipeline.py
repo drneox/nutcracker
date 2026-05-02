@@ -218,7 +218,7 @@ def do_fart_emulator(
 
     avd_name = _pick_avd(cfg, avds)
     arch = frida_arch_for_avd(avd_name)
-    local_dump_dir = Path("./decompiled") / f"dexguard_dump_{package}"
+    local_dump_dir = Path("./decompiled") / f"runtime_dump_{package}"
     clean_dir = local_dump_dir / "source"
 
     frida_proc = None
@@ -883,7 +883,7 @@ def do_fart_manual(
         console.print(f"[dim]  {t('pipe_device_target', serial=selected_device)}[/dim]")
 
     frida_proc = None
-    local_dump_dir = Path("./decompiled") / f"dexguard_dump_{package}"
+    local_dump_dir = Path("./decompiled") / f"runtime_dump_{package}"
     clean_dir = local_dump_dir / "source"
 
     sdk_tools = find_sdk_tools()
