@@ -127,3 +127,55 @@ def _decompile_apktool(apktool_path: str, apk_path: Path, output_dir: Path) -> P
         )
 
     return dest
+
+
+def extract_manifest(apk_path: Path, output_dir: Path) -> Path | None:
+    """
+    Extrae y decodifica únicamente el AndroidManifest.xml del APK.
+
+    Útil cuando el código fue obtenido por runtime dump (Frida) y no hay
+    manifest disponible, pero sí existe el APK original.
+
+    Intenta primero con apktool (--no-src), luego con jadx (--no-res).
+    Devuelve la ruta al AndroidManifest.xml decodificado, o None si falla.
+    """
+    import tempfile
+
+    # ── Intento 1: apktool --no-src (solo recursos + manifest) ───────────────
+    apktool_path = _find_tool("apktool")
+    if apktool_path:
+        tmp = output_dir / f"_manifest_apktool_{apk_path.stem}"
+        try:
+            result = subprocess.run(
+                [apktool_path, "d", "--force", "--no-src", "-o", str(tmp), str(apk_path)],
+                capture_output=True, text=True, timeout=120,
+            )
+            manifest = tmp / "AndroidManifest.xml"
+            if manifest.exists():
+                return manifest
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    # ── Intento 2: jadx --no-res (sin recursos, pero extrae manifest decodificado) ─
+    jadx_path = _find_tool("jadx")
+    if jadx_path:
+        tmp = output_dir / f"_manifest_jadx_{apk_path.stem}"
+        try:
+            result = subprocess.run(
+                [jadx_path, "--no-res", "--no-src", "-d", str(tmp), str(apk_path)],
+                capture_output=True, text=True, timeout=120,
+            )
+            # jadx coloca el manifest en resources/AndroidManifest.xml
+            for candidate in [
+                tmp / "resources" / "AndroidManifest.xml",
+                tmp / "AndroidManifest.xml",
+            ]:
+                if candidate.exists():
+                    return candidate
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    # ── Intento 3: unzip directo (manifest binario — no decodificado, no válido) ─
+    # No intentar: el AXML binario no es parseable por ManifestAnalyzer sin decodificar.
+
+    return None

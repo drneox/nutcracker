@@ -1147,13 +1147,18 @@ def auto_scan(
         # Si no usamos leaks desde APK, hacer pass regex sobre resources/.
         if apk_path and leak_engine in {"apk", "both"}:
             _apply_apkleaks(semgrep_result)
-        elif include_xml_leak_rules:
+        # Siempre escanear recursos XML aunque apkleaks ya haya corrido —
+        # apkleaks opera sobre el binario APK y puede no ver keys en resources/
+        # ni claves en código obfuscado decriptado por frida-dexdump.
+        if include_xml_leak_rules:
             xml_findings = _scan_xml_resources_for_secrets(source_dir)
             if xml_findings:
                 if progress_callback:
                     progress_callback(f"Secretos en recursos XML: {len(xml_findings)} hallazgo(s)")
-                semgrep_result.findings.extend(xml_findings)
-                semgrep_result.files_scanned += len({f.file for f in xml_findings})
+                existing_keys = {(str(f.file), f.line, f.rule_id) for f in semgrep_result.findings}
+                new_xml = [f for f in xml_findings if (str(f.file), f.line, f.rule_id) not in existing_keys]
+                semgrep_result.findings.extend(new_xml)
+                semgrep_result.files_scanned += len({f.file for f in new_xml})
         return semgrep_result
 
     scan_rules = RULES if include_code_leak_rules else [
@@ -1162,12 +1167,14 @@ def auto_scan(
     result = scan_directory(scan_code_dir, rules=scan_rules, progress_callback=progress_callback)
     if apk_path and leak_engine in {"apk", "both"}:
         _apply_apkleaks(result)
-    elif include_xml_leak_rules:
-        # Fallback: secretos en XML vía regex
+    # Siempre escanear recursos XML aunque apkleaks ya haya corrido.
+    if include_xml_leak_rules:
         xml_findings = _scan_xml_resources_for_secrets(source_dir)
         if xml_findings:
-            result.findings.extend(xml_findings)
-            result.files_scanned += len({f.file for f in xml_findings})
+            existing_keys = {(str(f.file), f.line, f.rule_id) for f in result.findings}
+            new_xml = [f for f in xml_findings if (str(f.file), f.line, f.rule_id) not in existing_keys]
+            result.findings.extend(new_xml)
+            result.files_scanned += len({f.file for f in new_xml})
     return result
 
 
