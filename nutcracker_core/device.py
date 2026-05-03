@@ -27,6 +27,8 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
+from .i18n import t
+
 # ── Rutas conocidas del SDK de Android en macOS/Linux ─────────────────────────
 
 _SDK_SEARCH_PATHS: list[Path] = [
@@ -256,16 +258,16 @@ def start_emulator(
     emulator = tools.get("emulator")
     adb = tools.get("adb")
     if not emulator or not adb:
-        cb("emulator o adb no encontrado en Android SDK")
+        cb(t("dev_tools_not_found"))
         return None
 
     # ¿Ya hay un emulador corriendo?
     serial = get_running_emulator(tools)
     if serial:
-        cb(f"Emulador ya en ejecución: {serial}")
+        cb(t("dev_emulator_already_running", serial=serial))
         return serial
 
-    cb(f"Iniciando AVD: {avd_name} ...")
+    cb(t("dev_starting_avd", avd_name=avd_name))
 
     # Lanzar emulador en background (no bloqueante)
     emu_cmd = [emulator, "-avd", avd_name, "-no-snapshot-save", "-no-audio"]
@@ -284,27 +286,27 @@ def start_emulator(
         serial = get_running_emulator(tools)
         if serial:
             break
-        cb(f"Esperando que el emulador aparezca en adb devices...")
+        cb(t("dev_waiting_adb_devices"))
         time.sleep(POLL_INTERVAL)
 
     if not serial:
-        cb("Timeout: el emulador no apareció en adb devices")
+        cb(t("dev_timeout_adb_devices"))
         return None
 
     # Esperar a que Android arranque completamente
-    cb(f"Emulador {serial} detectado — esperando arranque de Android...")
+    cb(t("dev_emulator_detected", serial=serial))
     while time.monotonic() < deadline:
         boot = _adb_shell(adb, serial, "getprop sys.boot_completed", timeout=10)
         if boot == "1":
-            cb(f"Android arrancado: {serial}")
+            cb(t("dev_android_booted", serial=serial))
             # Pequeña pausa extra para que se estabilicen los servicios
             time.sleep(3)
             return serial
         remaining = int(deadline - time.monotonic())
-        cb(f"Esperando boot completo ({remaining}s)...")
+        cb(t("dev_waiting_boot", remaining=remaining))
         time.sleep(POLL_INTERVAL)
 
-    cb("Timeout: Android no arrancó en el tiempo esperado")
+    cb(t("dev_timeout_boot"))
     return None
 
 
@@ -361,30 +363,27 @@ def download_frida_server(
     cached = cache_dir / binary_name
 
     if cached.exists():
-        cb(f"frida-server {version}-{arch} en caché: {cached.name}")
+        cb(t("dev_frida_cached", version=version, arch=arch, name=cached.name))
         return cached
 
     url = (
         f"https://github.com/frida/frida/releases/download/"
         f"{version}/frida-server-{version}-android-{arch}.xz"
     )
-    cb(f"Descargando frida-server {version} ({arch}) desde GitHub...")
+    cb(t("dev_frida_downloading", version=version, arch=arch))
 
     try:
         with urllib.request.urlopen(url, timeout=120) as resp:  # noqa: S310
             xz_data = resp.read()
     except Exception as exc:
-        raise RuntimeError(
-            f"No se pudo descargar frida-server: {exc}\n"
-            f"URL: {url}"
-        ) from exc
+        raise RuntimeError(t("dev_frida_download_error", exc=exc, url=url)) from exc
 
-    cb("Descomprimiendo frida-server...")
+    cb(t("dev_frida_decompressing"))
     binary_data = lzma.decompress(xz_data)
     cached.write_bytes(binary_data)
     cached.chmod(0o755)
 
-    cb(f"frida-server guardado en caché: {cached.name}")
+    cb(t("dev_frida_saved_cache", name=cached.name))
     return cached
 
 
@@ -416,13 +415,13 @@ def setup_frida_server(
     ps_out = _adb_shell(adb, serial, "ps -A | grep frida-server", timeout=10)
     if "frida-server" in ps_out:
         if not force_restart:
-            cb("frida-server ya está corriendo")
+            cb(t("dev_frida_already_running"))
             return True
-        cb("Reiniciando frida-server (force_restart)...")
+        cb(t("dev_frida_restarting"))
         _adb_shell(adb, serial, "killall frida-server 2>/dev/null; sleep 1", timeout=8)
 
     # Push del binario
-    cb("Subiendo frida-server al device...")
+    cb(t("dev_frida_pushing"))
     result = subprocess.run(
         [adb, "-s", serial, "push", str(server_binary), remote_path],
         capture_output=True,
@@ -430,13 +429,13 @@ def setup_frida_server(
         timeout=60,
     )
     if result.returncode != 0:
-        cb(f"Error subiendo frida-server: {result.stderr[:200]}")
+        cb(t("dev_frida_push_error", err=result.stderr[:200]))
         return False
 
     _adb_shell(adb, serial, f"chmod 755 {remote_path}", timeout=10)
 
     # Intentar 'adb root' primero — funciona en emuladores y devices userdebug/rooteados con adbd root
-    cb("Elevando permisos con adb root...")
+    cb(t("dev_adb_rooting"))
     root_result = subprocess.run(
         [adb, "-s", serial, "root"],
         capture_output=True, text=True, timeout=10,
@@ -446,36 +445,32 @@ def setup_frida_server(
     # Deshabilitar SELinux enforcing — necesario para que el helper de Frida pueda arrancar
     selinux_out = _adb_shell(adb, serial, "getenforce", timeout=5).strip()
     if selinux_out.lower() == "enforcing":
-        cb("SELinux enforcing detectado — poniendo en permissive...")
+        cb(t("dev_selinux_enforcing"))
         if root_ok:
             _adb_shell(adb, serial, "setenforce 0", timeout=5)
         else:
             # Intentar con su — en dispositivos físicos Magisk/SuperSU puede
             # mostrar un popup pidiendo autorización, por eso el timeout largo
-            cb("  (si aparece un popup de root en el dispositivo, acéptalo)")
+            cb(t("dev_selinux_root_popup"))
             try:
                 subprocess.run(
                     [adb, "-s", serial, "shell", "su 0 setenforce 0"],
                     capture_output=True, timeout=30,
                 )
             except subprocess.TimeoutExpired:
-                cb("⚠  Timeout esperando autorización de root para setenforce")
+                cb(t("dev_selinux_timeout"))
         selinux_after = _adb_shell(adb, serial, "getenforce", timeout=5).strip()
         if selinux_after.lower() == "enforcing":
-            cb(
-                "⚠  No se pudo cambiar SELinux a permissive. "
-                "Frida puede fallar con: assertion failed (res == OK).\n"
-                f"  Comando manual: adb -s {serial} shell su 0 setenforce 0"
-            )
+            cb(t("dev_selinux_failed", serial=serial))
         else:
-            cb("SELinux permissive OK")
+            cb(t("dev_selinux_ok"))
 
     _bin_cmd = f"{remote_path} -l 0.0.0.0" if listen_all else remote_path
     # Limpiar LD_PRELOAD para evitar conflictos con el mecanismo de inyección de Frida.
     # Magisk/Zygisk y algunos módulos LSPosed lo setean en el shell, y los procesos hijos
     # lo heredan — lo que provoca fallos al attacharse o spawnar la app.
     _launch_cmd = f"unset LD_PRELOAD; {_bin_cmd}"
-    _err_tmp = "/tmp/.frida_stderr"
+    _err_tmp = remote_path.rsplit("/", 1)[0] + "/.frida_stderr"
     if root_ok:
         time.sleep(1.5)  # adbd necesita un momento para reiniciarse como root
         subprocess.Popen(
@@ -485,7 +480,7 @@ def setup_frida_server(
         )
     else:
         # Fallback: su (Magisk y otros managers de root)
-        cb("adb root no disponible — intentando con su...")
+        cb(t("dev_adb_root_fallback_su"))
         launched = False
         for su_cmd in [
             f"su 0 sh -c '{_launch_cmd} 2>{_err_tmp} &'",
@@ -502,11 +497,7 @@ def setup_frida_server(
             launched = True
             break
         if not launched:
-            cb(
-                "No se pudo arrancar frida-server.\n"
-                "Prueba: adb root, o root con Magisk y 'su 0' habilitado.\n"
-                f"Comando manual: adb -s {serial} shell \"su 0 sh -c 'unset LD_PRELOAD; {remote_path} &'\""
-            )
+            cb(t("dev_frida_launch_failed", serial=serial, remote_path=remote_path))
             return False
 
     # Detectar error CANNOT LINK EXECUTABLE por mismatch de arquitectura en LD_PRELOAD
@@ -515,7 +506,7 @@ def setup_frida_server(
     if "CANNOT LINK EXECUTABLE" in _init_err and (
         "64-bit instead of 32" in _init_err or "32-bit instead of 64" in _init_err
     ):
-        cb("⚠  Error de arquitectura en LD_PRELOAD — matando frida-server y reintentando sin LD_PRELOAD...")
+        cb(t("dev_frida_ldpreload_error"))
         _adb_shell(adb, serial, "killall frida-server 2>/dev/null; true", timeout=5)
         time.sleep(1)
         _retry_cmd = f"env LD_PRELOAD= {_bin_cmd}"
@@ -546,11 +537,11 @@ def setup_frida_server(
         time.sleep(2)
         ps_out = _adb_shell(adb, serial, "ps -A | grep frida-server", timeout=10)
         if "frida-server" in ps_out:
-            cb("frida-server arrancado correctamente")
+            cb(t("dev_frida_started"))
             return True
-        cb("Esperando a que frida-server arranque...")
+        cb(t("dev_frida_waiting"))
 
-    cb("Timeout: frida-server no arrancó")
+    cb(t("dev_frida_timeout"))
     return False
 
 
