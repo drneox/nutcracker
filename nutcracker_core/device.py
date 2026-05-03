@@ -475,7 +475,7 @@ def setup_frida_server(
     # Magisk/Zygisk y algunos módulos LSPosed lo setean en el shell, y los procesos hijos
     # lo heredan — lo que provoca fallos al attacharse o spawnar la app.
     _launch_cmd = f"unset LD_PRELOAD; {_bin_cmd}"
-    _err_tmp = "/tmp/.frida_stderr"
+    _err_tmp = remote_path.rsplit("/", 1)[0] + "/.frida_stderr"
     if root_ok:
         time.sleep(1.5)  # adbd necesita un momento para reiniciarse como root
         subprocess.Popen(
