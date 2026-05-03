@@ -10,6 +10,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from .i18n import t
+
 # Directorio caché para debug keystore
 _CACHE_DIR = Path.home() / ".cache" / "nutcracker"
 
@@ -281,15 +283,15 @@ def patch_split_apk(
     sdk = find_sdk_root()
     apksigner = find_apksigner(sdk)
     if not apksigner:
-        cb("apksigner no encontrado en Android SDK — no se puede parchear el APK")
+        cb(t("apk_no_apksigner"))
         return None
 
     keystore = ensure_debug_keystore()
     if not keystore:
-        cb("keytool no disponible — no se puede generar la clave de firma debug")
+        cb(t("apk_no_keytool"))
         return None
 
-    cb("Parcheando APK — anulando atributos de splits requeridos...")
+    cb(t("apk_patching_splits"))
 
     unsigned = apk_path.parent / f"{apk_path.stem}_unsigned.apk"
     aligned  = apk_path.parent / f"{apk_path.stem}_aligned.apk"
@@ -302,7 +304,7 @@ def patch_split_apk(
              _zipfile.ZipFile(str(unsigned), "w") as zout:
             for item in zin.infolist():
                 if item.filename in REMOVE:
-                    cb(f"  Eliminado: {item.filename}")
+                    cb(t("apk_removed_item", filename=item.filename))
                     continue
                 if item.filename.startswith("META-INF/"):
                     continue
@@ -312,30 +314,30 @@ def patch_split_apk(
                 if item.filename == "AndroidManifest.xml":
                     patched_raw = strip_required_splits_from_manifest(raw)
                     if patched_raw != raw:
-                        cb("  Parcheado: AndroidManifest.xml (requiredSplitTypes anulado)")
+                        cb(t("apk_patched_manifest"))
                     raw = patched_raw
 
                 zout.writestr(item, raw, compress_type=item.compress_type)
     except Exception as exc:
-        cb(f"Error al reempaquetar APK: {exc}")
+        cb(t("apk_repack_error", exc=exc))
         unsigned.unlink(missing_ok=True)
         return None
 
     zipalign = str(Path(apksigner).parent / "zipalign")
     if Path(zipalign).exists():
-        cb("Alineando APK con zipalign...")
+        cb(t("apk_aligning"))
         za_result = subprocess.run(
             [zipalign, "-f", "4", str(unsigned), str(aligned)],
             capture_output=True, text=True, timeout=60,
         )
         unsigned.unlink(missing_ok=True)
         if za_result.returncode != 0:
-            cb(f"Advertencia — zipalign falló: {za_result.stderr[:200]}")
+            cb(t("apk_zipalign_warning", err=za_result.stderr[:200]))
             aligned.rename(unsigned)
     else:
         aligned = unsigned
 
-    cb("Firmando APK parcheada con clave debug...")
+    cb(t("apk_signing"))
     sign_result = subprocess.run(
         [
             apksigner, "sign",
@@ -351,11 +353,11 @@ def patch_split_apk(
     aligned.unlink(missing_ok=True)
 
     if sign_result.returncode != 0:
-        cb(f"Error firmando APK: {sign_result.stderr[:300]}")
+        cb(t("apk_sign_error", err=sign_result.stderr[:300]))
         patched.unlink(missing_ok=True)
         return None
 
-    cb(f"APK parcheada lista: {patched.name}")
+    cb(t("apk_patched_ready", name=patched.name))
     return patched
 
 
@@ -403,63 +405,55 @@ def install_apk(
             return True, ""
         return False, combined[:300].strip()
 
-    cb(f"Instalando APK en emulador {serial}...")
+    cb(t("apk_installing", serial=serial))
     ok, err = _run_install([apk_path])
 
     if ok:
-        cb("APK instalada correctamente")
+        cb(t("apk_installed_ok"))
         return True
 
-    cb(f"Fallo inicial: {err}")
+    cb(t("apk_install_initial_fail", err=err))
 
     # ── Splits requeridos ─────────────────────────────────────────────────────
     if "MISSING_SPLIT" in err:
         splits = find_split_apks(apk_path)
         if len(splits) > 1:
-            cb(f"Bundle detectado — instalando {len(splits)} splits con install-multiple...")
+            cb(t("apk_bundle_detected", count=len(splits)))
             ok, err = _run_install(splits)
             if ok:
-                cb(f"APK instalada correctamente ({len(splits)} splits)")
+                cb(t("apk_installed_splits_ok", count=len(splits)))
                 return True
-            cb(f"Fallo con splits: {err}")
+            cb(t("apk_install_splits_fail", err=err))
 
-        cb("No se encontraron splits locales — intentando parcheado del APK...")
+        cb(t("apk_no_splits_patching"))
         patched = patch_split_apk(apk_path, tools, cb)
         if patched:
             ok, err = _run_install([patched])
             if ok:
-                cb("APK parcheada instalada correctamente")
+                cb(t("apk_patched_installed_ok"))
                 return True
-            cb(f"Fallo después de parcheado: {err}")
+            cb(t("apk_install_patched_fail", err=err))
 
-        cb(
-            "INSTALL_FAILED_MISSING_SPLIT: no se pudo instalar el APK.\n"
-            "La app se distribuye como App Bundle y apkeep solo descargó el split base.\n"
-            "Prueba obtener el APK completo (todos los splits) de APKMirror u otra fuente."
-        )
+        cb(t("apk_install_missing_split"))
         return False
 
     # ── Firma incompatible: desinstalar primero ───────────────────────────────
     if "UPDATE_INCOMPATIBLE" in err or "SIGNATURES_DO_NOT_MATCH" in err:
         pkg_to_uninstall = package_name or apk_path.stem
-        cb("Firma incompatible — desinstalando versión anterior...")
+        cb(t("apk_incompatible_sig"))
         subprocess.run(
             [adb, "-s", serial, "uninstall", pkg_to_uninstall],
             capture_output=True, text=True, timeout=30,
         )
         ok, err = _run_install([apk_path])
         if ok:
-            cb("APK instalada correctamente (tras desinstalación)")
+            cb(t("apk_installed_after_uninstall"))
             return True
 
     # ── Mismatch de ABI ───────────────────────────────────────────────────────
     if "NO_MATCHING_ABIS" in err:
-        cb(
-            "ERROR: La APK no contiene libs nativas para la arquitectura del AVD. "
-            "Usa un AVD arm64 con una APK arm64, o un AVD x86_64. "
-            "Prueba el AVD Resizable o elige otro AVD."
-        )
+        cb(t("apk_no_matching_abis"))
         return False
 
-    cb(f"Error instalando APK: {err}")
+    cb(t("apk_install_error", err=err))
     return False
