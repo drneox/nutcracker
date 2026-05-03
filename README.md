@@ -37,6 +37,12 @@ Findings go through an optional LLM-powered false positive filter (`ai-review`).
 All results are consolidated into a technical PDF report ready for reporting.
 
 ---
+
+## Demo
+
+[![Demo video](https://img.youtube.com/vi/nMcFy7ibgp0/maxresdefault.jpg)](https://youtu.be/nMcFy7ibgp0?si=jpTBApvVqix5pKd9)
+
+---
 ## ⚠️ Legal Disclaimer 
 
 > Nutcracker is intended for security research, penetration testing, and educational purposes only. Use this tool exclusively on applications you own or have explicit written authorization to test. Unauthorized analysis of third-party applications may violate local laws, international regulations, and app store terms of service. The authors assume no liability for misuse or any damage caused by this tool. Use responsibly.
