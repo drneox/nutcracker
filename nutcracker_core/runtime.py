@@ -486,12 +486,12 @@ def simulate_app_navigation(
         (W + 200, H, W - 200, H, 300),
     ]
 
-    cb(f"UI: esperando {startup_delay:.0f}s para el arranque de la app...")
+    cb(t("rt_ui_waiting_startup", delay=startup_delay))
     stop_event.wait(timeout=startup_delay)
     if stop_event.is_set():
         return
 
-    cb("UI: iniciando automatización de pantalla")
+    cb(t("rt_ui_starting"))
     cycle = 0
     while not stop_event.is_set():
         try:
@@ -532,7 +532,7 @@ def simulate_app_navigation(
         except Exception:  # noqa: BLE001
             stop_event.wait(timeout=3.0)
 
-    cb("UI: automatización detenida")
+    cb(t("rt_ui_stopped"))
 
 
 # ── Cierre de proceso Frida ───────────────────────────────────────────────────

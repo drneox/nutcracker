@@ -15,6 +15,7 @@ venv/
 decompiled/
 downloads/
 reports/
+logs/
 *.apk
 *.apks
 /tmp/
@@ -23,7 +24,8 @@ reports/
 .semgrep/
 frida_scripts/
 config.yaml
-# Added by code-review-graph
+
+# AI / IDE tool files
 .code-review-graph/
 .claude
 .kiro
@@ -34,7 +36,10 @@ config.yaml
 CLAUDE.md
 AGENTS.md
 GEMINI.md
-logs/
+
+# Plugin outputs / memory
 plugins/
 aipwn_memory/
+
+# Backup files
 *.bk
