@@ -1628,11 +1628,7 @@ def _do_vuln_scan(
 
         print_vuln_report(scan_result, source_dir)
         pkg_name = package_hint or source_dir.name
-        canonical_report = Path("./decompiled") / f"vuln_{pkg_name}.json"
-        _save_vuln_json(scan_result, canonical_report)
-        legacy_report = source_dir.parent / f"vuln_{source_dir.name}.json"
-        if legacy_report.resolve() != canonical_report.resolve():
-            _save_vuln_json(scan_result, legacy_report)
+        _save_vuln_json(scan_result, pkg_name)
         return scan_result
 
     try:
@@ -1721,16 +1717,9 @@ def _do_vuln_scan(
 
     print_vuln_report(scan_result, source_dir)
 
-    # Guardar JSON con nombre canónico por paquete para que el PDF siempre
-    # cargue el último scan correcto (incluyendo flujos DexGuard/FART).
+    # Guardar JSON con nombre canónico por paquete.
     pkg_name = package_hint or source_dir.name
-    canonical_report = Path("./decompiled") / f"vuln_{pkg_name}.json"
-    _save_vuln_json(scan_result, canonical_report)
-
-    # Compatibilidad: mantener también el path histórico local al source_dir.
-    legacy_report = source_dir.parent / f"vuln_{source_dir.name}.json"
-    if legacy_report.resolve() != canonical_report.resolve():
-        _save_vuln_json(scan_result, legacy_report)
+    _save_vuln_json(scan_result, pkg_name)
     return scan_result
 
 
@@ -1739,7 +1728,11 @@ def _load_vuln_json(package: str):
     import json
     from nutcracker_core.vuln_scanner import ScanResult, VulnFinding
 
-    json_path = Path("./decompiled") / f"vuln_{package}.json"
+    # Primario: reports/<package>/vuln.json
+    # Fallback: decompiled/vuln_<package>.json (legacy)
+    json_path = Path("./reports") / package / "vuln.json"
+    if not json_path.exists():
+        json_path = Path("./decompiled") / f"vuln_{package}.json"
     if not json_path.exists():
         return None
     try:
@@ -1844,10 +1837,14 @@ def _generate_pdf(result, vuln_scan=None, vuln_scan_enabled: bool = True) -> Non
         console.print(f"[red]{t('cli_error_pdf')}[/red] {exc}")
 
 
-def _save_vuln_json(scan_result, output_path: Path) -> None:
-    """Guarda los hallazgos de vulnerabilidades en JSON."""
+def _save_vuln_json(scan_result, package: str) -> None:
+    """Guarda los hallazgos de vulnerabilidades en JSON.
+
+    Escribe en dos ubicaciones:
+      - reports/<package>/vuln.json  (primario, junto al AnalysisResult)
+      - decompiled/vuln_<package>.json  (legacy, usado por aireview)
+    """
     import json
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "files_scanned": scan_result.files_scanned,
         "total_findings": len(scan_result.findings),
@@ -1866,9 +1863,15 @@ def _save_vuln_json(scan_result, output_path: Path) -> None:
             for f in scan_result.findings
         ],
     }
-    with output_path.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-    console.print(f"[dim]{t('cli_vuln_json_saved')}[/dim] [bold]{output_path}[/bold]")
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    primary = Path("./reports") / package / "vuln.json"
+    primary.parent.mkdir(parents=True, exist_ok=True)
+    primary.write_text(payload, encoding="utf-8")
+    # Legacy copy para aireview y otros usos directos de decompiled/
+    legacy = Path("./decompiled") / f"vuln_{package}.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(payload, encoding="utf-8")
+    console.print(f"[dim]{t('cli_vuln_json_saved')}[/dim] [bold]{primary}[/bold]")
 
 
 # ── Comando: batch ───────────────────────────────────────────────────────────

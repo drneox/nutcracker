@@ -750,6 +750,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "pipe_fart_manual_hint": "Continue with the manual flow shown above.",
         "pipe_waiting_dex_dumps": "Waiting for DEX dumps...",
         "pipe_fart_timeout_device": "FART timeout on device. Trying next method...",
+        "pipe_adb_uninstall_timeout": "adb uninstall timed out \u2014 continuing anyway",
         "pipe_downloading_dex_dumps": "Downloading DEX dumps...",
 
         # ── Runtime messages ──────────────────────────────────────────────────
@@ -806,6 +807,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "dev_frida_restarting": "Restarting frida-server (force_restart)...",
         "dev_frida_pushing": "Uploading frida-server to device...",
         "dev_frida_push_error": "Error uploading frida-server: {err}",
+        "dev_frida_push_timeout": "Timeout uploading frida-server — adb push took too long",
         "dev_adb_rooting": "Elevating permissions with adb root...",
         "dev_selinux_enforcing": "SELinux enforcing detected — switching to permissive...",
         "dev_selinux_root_popup": "  (if a root popup appears on the device, accept it)",
@@ -1615,6 +1617,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "pipe_fart_manual_hint": "Contin\u00faa con el flujo manual mostrado arriba.",
         "pipe_waiting_dex_dumps": "Esperando volcados DEX...",
         "pipe_fart_timeout_device": "FART timeout en device. Probando siguiente m\u00e9todo...",
+        "pipe_adb_uninstall_timeout": "adb uninstall agot\u00f3 el tiempo de espera \u2014 continuando",
         "pipe_downloading_dex_dumps": "Descargando DEX volcados...",
 
         # ── Runtime messages ──────────────────────────────────────────────────
@@ -1671,6 +1674,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "dev_frida_restarting": "Reiniciando frida-server (force_restart)...",
         "dev_frida_pushing": "Subiendo frida-server al device...",
         "dev_frida_push_error": "Error subiendo frida-server: {err}",
+        "dev_frida_push_timeout": "Timeout subiendo frida-server — adb push tardó demasiado",
         "dev_adb_rooting": "Elevando permisos con adb root...",
         "dev_selinux_enforcing": "SELinux enforcing detectado — poniendo en permissive...",
         "dev_selinux_root_popup": "  (si aparece un popup de root en el dispositivo, acéptalo)",
