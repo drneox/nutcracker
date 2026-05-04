@@ -34,6 +34,7 @@ import click
 # ── Constants ────────────────────────────────────────────────────────────────
 
 _DECOMPILED_DIR = Path("./decompiled")
+_REPORTS_DIR = Path("./reports")
 _DEFAULT_BATCH_SIZE = 8
 _DEFAULT_CONTEXT_LINES = 4
 _VALID_VERDICTS = {"TRUE_POSITIVE", "FALSE_POSITIVE", "DOWNGRADE"}
@@ -86,10 +87,13 @@ _SYSTEM_PROMPT = (
 
 def _load_findings(package: str) -> tuple[Path, dict]:
     """Load the vulnerability JSON for a package. Raises click.ClickException."""
-    path = _DECOMPILED_DIR / f"vuln_{package}.json"
+    # Primario: reports/<package>/vuln.json; fallback: decompiled/vuln_<package>.json
+    path = _REPORTS_DIR / package / "vuln.json"
+    if not path.exists():
+        path = _DECOMPILED_DIR / f"vuln_{package}.json"
     if not path.exists():
         raise click.ClickException(
-            f"No vuln scan found at {path}. Run a full analysis first."
+            f"No vuln scan found for {package}. Run a full analysis first."
         )
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -203,7 +207,7 @@ def _parse_verdicts(raw: str, expected: int) -> list[dict] | None:
         if verdict == "DOWNGRADE":
             sev = str(v.get("suggested_severity", "")).upper().strip()
             if sev in {"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"}:
-                entry["suggested_severity"] = sev
+                entry["suggested_severity"] = sev.lower()
             cat = str(v.get("suggested_category", "")).strip()
             if cat:
                 entry["suggested_category"] = cat
@@ -371,8 +375,12 @@ def _after_analysis_hook(
         f"dropped {fp_count} FPs, downgraded {dg_count} for {package}"
     )
 
-    # Save audit trail
-    review_path = _DECOMPILED_DIR / f"vuln_{package}_review.json"
+    # Save audit trail — primario en reports/<package>/review.json
+    pkg_reports_dir = _REPORTS_DIR / package
+    pkg_reports_dir.mkdir(parents=True, exist_ok=True)
+    review_path = pkg_reports_dir / "review.json"
+    # Legacy copy en decompiled/ para compatibilidad
+    legacy_review_path = _DECOMPILED_DIR / f"vuln_{package}_review.json"
     review_payload = {
         "package": package,
         "reviewed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -384,9 +392,9 @@ def _after_analysis_hook(
         "downgraded": dg_count,
         "verdicts": verdicts,
     }
-    review_path.write_text(
-        json.dumps(review_payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    review_json = json.dumps(review_payload, ensure_ascii=False, indent=2)
+    review_path.write_text(review_json, encoding="utf-8")
+    legacy_review_path.write_text(review_json, encoding="utf-8")
 
     if fp_count == 0 and dg_count == 0:
         return
@@ -406,8 +414,12 @@ def _after_analysis_hook(
         "dropped": fp_count,
         "downgraded": dg_count,
     }
-    path.write_text(json.dumps(new_data, ensure_ascii=False, indent=2), encoding="utf-8")
-    console.print(f"[dim]  {path} rewritten in place.[/dim]")
+    new_json = json.dumps(new_data, ensure_ascii=False, indent=2)
+    # Escribir en primario (reports/) y en legacy (decompiled/)
+    primary_vuln = pkg_reports_dir / "vuln.json"
+    primary_vuln.write_text(new_json, encoding="utf-8")
+    path.write_text(new_json, encoding="utf-8")
+    console.print(f"[dim]  vuln.json rewritten in {pkg_reports_dir} and {path.parent}[/dim]")
 
     if regen_pdf:
         try:
@@ -603,7 +615,10 @@ def register(cli) -> None:
                 console.print(f"[dim]... and {len(downgraded) - 50} more[/dim]")
 
         # ── Persist results ──────────────────────────────────────────────
-        review_path = _DECOMPILED_DIR / f"vuln_{package}_review.json"
+        pkg_reports_dir = _REPORTS_DIR / package
+        pkg_reports_dir.mkdir(parents=True, exist_ok=True)
+        review_path = pkg_reports_dir / "review.json"
+        legacy_review_path = _DECOMPILED_DIR / f"vuln_{package}_review.json"
         review_payload = {
             "package": package,
             "reviewed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -623,10 +638,9 @@ def register(cli) -> None:
             )
             return
 
-        review_path.write_text(
-            json.dumps(review_payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        review_json = json.dumps(review_payload, ensure_ascii=False, indent=2)
+        review_path.write_text(review_json, encoding="utf-8")
+        legacy_review_path.write_text(review_json, encoding="utf-8")
         console.print(f"[dim]Audit trail saved to {review_path}[/dim]")
 
         if fp_count == 0 and dg_count == 0:
@@ -653,11 +667,11 @@ def register(cli) -> None:
             "dropped": fp_count,
             "downgraded": dg_count,
         }
-        path.write_text(
-            json.dumps(new_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        console.print(f"[green]✔[/green] {path} updated in place.")
+        new_json = json.dumps(new_data, ensure_ascii=False, indent=2)
+        # Escribir en primario (reports/) y en legacy (decompiled/)
+        (pkg_reports_dir / "vuln.json").write_text(new_json, encoding="utf-8")
+        path.write_text(new_json, encoding="utf-8")
+        console.print(f"[green]✔[/green] vuln.json updated in {pkg_reports_dir} and {path.parent}.")
 
         # ── Optionally regenerate the PDF ────────────────────────────────
         if no_regen_pdf:

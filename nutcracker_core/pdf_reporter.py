@@ -1035,7 +1035,7 @@ def _findings_section(
     # Pills de resumen por severidad
     by_sev: dict[str, list["VulnFinding"]] = {"critical": [], "high": [], "medium": [], "low": [], "info": []}
     for f in findings:
-        by_sev.setdefault(f.severity, []).append(f)
+        by_sev.setdefault((f.severity or "info").lower(), []).append(f)
 
     sev_order = ["critical", "high", "medium", "low", "info"]
     pdf.set_font("Helvetica", "B", 8)
