@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     adb \
     apktool \
+    binutils-aarch64-linux-gnu \
     curl \
     default-jre \
     git \

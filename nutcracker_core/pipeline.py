@@ -385,10 +385,13 @@ def do_fart_emulator(
                     # Gadget puede haber reinstalado un APK parcheado en el emulador.
                     # Desinstalar el parcheado para que el siguiente método pueda
                     # instalar el original sin UPDATE_INCOMPATIBLE (firma debug ≠ Play Store).
-                    subprocess.run(
-                        [sdk_tools["adb"], "-s", serial, "uninstall", package],
-                        capture_output=True, text=True, timeout=30,
-                    )
+                    try:
+                        subprocess.run(
+                            [sdk_tools["adb"], "-s", serial, "uninstall", package],
+                            capture_output=True, text=True, timeout=30,
+                        )
+                    except subprocess.TimeoutExpired:
+                        console.print(f"[yellow]⚠[/yellow]  {t('pipe_adb_uninstall_timeout')}")
                     app_installed = False
                 continue
 
@@ -398,10 +401,13 @@ def do_fart_emulator(
                 if not _ensure_frida_server(force_restart=True):
                     continue
                 # Reinstalar APK original: gadget puede haber dejado APK parcheado.
-                subprocess.run(
-                    [sdk_tools["adb"], "-s", serial, "uninstall", package],
-                    capture_output=True, text=True, timeout=30,
-                )
+                try:
+                    subprocess.run(
+                        [sdk_tools["adb"], "-s", serial, "uninstall", package],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                except subprocess.TimeoutExpired:
+                    console.print(f"[yellow]⚠[/yellow]  {t('pipe_adb_uninstall_timeout')}")
                 app_installed = False
                 if not _ensure_installed(apk_path, package):
                     continue
@@ -436,10 +442,13 @@ def do_fart_emulator(
                 # previo de gadget tuvo éxito dejó un APK parcheado con
                 # libfrida-gadget.so. Hacer spawn sobre ese APK causa doble
                 # inyección → DeadSystemException en el system_server.
-                subprocess.run(
-                    [sdk_tools["adb"], "-s", serial, "uninstall", package],
-                    capture_output=True, text=True, timeout=30,
-                )
+                try:
+                    subprocess.run(
+                        [sdk_tools["adb"], "-s", serial, "uninstall", package],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                except subprocess.TimeoutExpired:
+                    console.print(f"[yellow]⚠[/yellow]  {t('pipe_adb_uninstall_timeout')}")
                 app_installed = False
                 if not _ensure_installed(apk_path, package):
                     continue
@@ -793,8 +802,11 @@ def try_gadget_inject(
             )
             console.print(f"  {t('pipe_installing_splits_gadget', count=len(patched_splits))}")
             # Desinstalar primero (firma cambió)
-            subprocess.run([sdk_tools["adb"], "-s", serial, "uninstall", package],
-                           capture_output=True, text=True, timeout=30)
+            try:
+                subprocess.run([sdk_tools["adb"], "-s", serial, "uninstall", package],
+                               capture_output=True, text=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                console.print(f"[yellow]⚠[/yellow]  {t('pipe_adb_uninstall_timeout')}")
             r = subprocess.run(
                 [sdk_tools["adb"], "-s", serial, "install-multiple", "-r", "-t", "-d",
                  *[str(p) for p in patched_splits]],
