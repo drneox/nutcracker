@@ -79,7 +79,7 @@ brew install android-platform-tools  # adb
 ```bash
 # Base tools
 sudo apt update
-sudo apt install -y openjdk-21-jre-headless jadx apktool adb curl
+sudo apt install -y openjdk-21-jre-headless jadx apktool adb curl binutils-aarch64-linux-gnu
 
 # semgrep (via pipx recommended)
 python3 -m pip install --user pipx
@@ -517,6 +517,12 @@ git clone https://github.com/<user>/<plugin-repo> nutcracker_core/plugins/<name>
 |---|---|---|
 | `aipwn` | `nutcracker aipwn <package>` | Autonomous LLM-powered Frida bypass agent |
 | `aireview` | `nutcracker ai-review <package>` | LLM-powered false positive filter |
+
+> **`aipwn` native library analysis** — The agent can disassemble and patch `.so` files
+> (native RASP checks). This requires a cross-compiler `objdump` for ARM64:
+> - **macOS**: system `objdump` (LLVM) supports ELF ARM64 — no extra install needed.
+> - **Linux**: `sudo apt install binutils-aarch64-linux-gnu` (provides `aarch64-linux-gnu-objdump`). Already included in the Docker image.
+> - **Optional**: `radare2` — if present, preferred over objdump for richer output.
 
 ---
 

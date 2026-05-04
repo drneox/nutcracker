@@ -34,6 +34,20 @@ else
 fi
 
 echo ""
+echo ""
+echo "==> Verificando desensamblador para libs nativas (.so ARM64)..."
+if command -v objdump &>/dev/null || command -v aarch64-linux-gnu-objdump &>/dev/null || command -v r2 &>/dev/null; then
+    echo "    OK: desensamblador disponible"
+else
+    if [[ "$(uname)" == "Linux" ]]; then
+        echo "    AVISO: no se encontró objdump ARM64. Instalando binutils-aarch64-linux-gnu..."
+        sudo apt-get install -y binutils-aarch64-linux-gnu 2>/dev/null || \
+            echo "    No se pudo instalar automáticamente. Ejecuta: sudo apt install binutils-aarch64-linux-gnu"
+    else
+        echo "    INFO (macOS): objdump del sistema soporta ELF ARM64. OK"
+    fi
+fi
+
 echo "==> ¡Configuración completada!"
 echo ""
 echo "Activa el entorno virtual con:"

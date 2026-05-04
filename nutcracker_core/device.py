@@ -230,13 +230,16 @@ def _adb_shell(
     timeout: int = 15,
 ) -> str:
     """Ejecuta un comando en el shell del dispositivo y devuelve stdout."""
-    result = subprocess.run(
-        [adb, "-s", serial, "shell", command],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    return result.stdout.strip()
+    try:
+        result = subprocess.run(
+            [adb, "-s", serial, "shell", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        return ""
 
 
 # ── Arrancar emulador ─────────────────────────────────────────────────────────
@@ -422,12 +425,16 @@ def setup_frida_server(
 
     # Push del binario
     cb(t("dev_frida_pushing"))
-    result = subprocess.run(
-        [adb, "-s", serial, "push", str(server_binary), remote_path],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            [adb, "-s", serial, "push", str(server_binary), remote_path],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        cb(t("dev_frida_push_timeout"))
+        return False
     if result.returncode != 0:
         cb(t("dev_frida_push_error", err=result.stderr[:200]))
         return False
