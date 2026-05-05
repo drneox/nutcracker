@@ -1175,7 +1175,129 @@ def auto_scan(
             new_xml = [f for f in xml_findings if (str(f.file), f.line, f.rule_id) not in existing_keys]
             result.findings.extend(new_xml)
             result.files_scanned += len({f.file for f in new_xml})
+    # ── Escaneo de librerías nativas (.so) si hay APK disponible ─────────────
+    if apk_path and apk_path.exists():
+        try:
+            from .native_scanner import scan_native_libs
+            _nat_work = source_dir.parent / "_native_scan_work"
+            nat_findings = scan_native_libs(
+                apk_path=apk_path,
+                work_dir=_nat_work,
+                progress_callback=progress_callback,
+            )
+            if nat_findings:
+                result.findings.extend(nat_findings)
+                if progress_callback:
+                    progress_callback(f"Librerías nativas: {len(nat_findings)} hallazgo(s) NAT")
+        except Exception as _nat_err:
+            if progress_callback:
+                progress_callback(f"native_scanner omitido: {_nat_err}")
     return result
+
+
+def scan_manifest_components(source_dir: Path) -> list[VulnFinding]:
+    """
+    Parsea AndroidManifest.xml buscando:
+      - Activities/Services/Receivers con android:exported="true" sin android:permission (COMP004/COMP006)
+      - ContentProviders con android:exported="true" sin android:permission (COMP008)
+      - android:usesCleartextTraffic="true" (NET001)
+      - android:debuggable="true" (INFO001)
+    """
+    import xml.etree.ElementTree as ET
+
+    findings: list[VulnFinding] = []
+
+    # Buscar AndroidManifest.xml
+    candidates = [
+        source_dir / "resources" / "AndroidManifest.xml",
+        source_dir / "AndroidManifest.xml",
+    ]
+    manifest_path = next((p for p in candidates if p.exists()), None)
+    if manifest_path is None:
+        return findings
+
+    try:
+        tree = ET.parse(manifest_path)
+    except ET.ParseError:
+        return findings
+
+    root = tree.getroot()
+    ns = "http://schemas.android.com/apk/res/android"
+
+    # ── usesCleartextTraffic ──────────────────────────────────────────────────
+    app_el = root.find("application")
+    if app_el is not None:
+        if app_el.get(f"{{{ns}}}usesCleartextTraffic") == "true":
+            findings.append(VulnFinding(
+                rule_id="NET001",
+                title="usesCleartextTraffic habilitado",
+                severity="high",
+                category="M3 - Comunicación insegura",
+                file=manifest_path,
+                line=0,
+                matched_text='android:usesCleartextTraffic="true"',
+                description="La app permite tráfico HTTP sin cifrar a cualquier destino.",
+                recommendation="Eliminar usesCleartextTraffic o restringir con un Network Security Config.",
+            ))
+        # ── debuggable ───────────────────────────────────────────────────────
+        if app_el.get(f"{{{ns}}}debuggable") == "true":
+            findings.append(VulnFinding(
+                rule_id="INFO001",
+                title="android:debuggable=true en producción",
+                severity="high",
+                category="M7 - Calidad del código",
+                file=manifest_path,
+                line=0,
+                matched_text='android:debuggable="true"',
+                description="La app tiene depuración habilitada. Permite attach con adb/jdb y extracción de datos.",
+                recommendation="Nunca distribuir con android:debuggable=\"true\". Usar BuildConfig.DEBUG.",
+            ))
+
+    # ── Componentes exported sin permission ──────────────────────────────────
+    component_tags = {
+        "activity":  ("COMP006", "Activity exported sin permission",   "critical", "M6 - Componentes inseguros"),
+        "service":   ("COMP007", "Service exported sin permission",    "high",     "M6 - Componentes inseguros"),
+        "receiver":  ("COMP004", "BroadcastReceiver exported sin permission", "high", "M6 - Componentes inseguros"),
+        "provider":  ("COMP008", "ContentProvider exported sin permission",   "critical", "M6 - Componentes inseguros"),
+    }
+
+    if app_el is not None:
+        for tag, (rule_id, title, severity, category) in component_tags.items():
+            for el in app_el.findall(tag):
+                exported = el.get(f"{{{ns}}}exported")
+                permission = el.get(f"{{{ns}}}permission")
+                name = el.get(f"{{{ns}}}name", "")
+
+                # Los Launchers tienen exported=true intencionalmente
+                is_launcher = any(
+                    action.get(f"{{{ns}}}name") == "android.intent.action.MAIN"
+                    for action in el.findall(".//action")
+                )
+                if is_launcher:
+                    continue
+
+                if exported == "true" and not permission:
+                    desc = (
+                        f"{tag.capitalize()} `{name}` tiene android:exported=\"true\" sin "
+                        f"android:permission. Cualquier app o comando ADB puede invocarlo directamente."
+                    )
+                    rec = (
+                        f"Añadir android:exported=\"false\" o proteger con "
+                        f"android:permission=\"<custom-signature-permission>\"."
+                    )
+                    findings.append(VulnFinding(
+                        rule_id=rule_id,
+                        title=f"{title}: {name.split('.')[-1]}",
+                        severity=severity,
+                        category=category,
+                        file=manifest_path,
+                        line=0,
+                        matched_text=f'<{tag} android:name="{name}" android:exported="true">',
+                        description=desc,
+                        recommendation=rec,
+                    ))
+
+    return findings
 
 
 # Reglas solo para secretos en XML de recursos Android

@@ -96,6 +96,9 @@ RULE_TO_MASVS: dict[str, list[str]] = {
     "COMP003":   ["MASVS-PLATFORM-2"],
     "COMP004":   ["MASVS-PLATFORM-1"],
     "COMP005":   ["MASVS-PLATFORM-2"],
+    "COMP006":   ["MASVS-PLATFORM-1"],  # Activity exported sin permission
+    "COMP007":   ["MASVS-PLATFORM-1"],  # Service exported sin permission
+    "INFO001":   ["MASVS-CODE-2"],       # debuggable=true
     "INJ001":    ["MASVS-CODE-4"],
     "INJ002":    ["MASVS-CODE-4"],
     "INJ003":    ["MASVS-CODE-4"],
@@ -106,6 +109,15 @@ RULE_TO_MASVS: dict[str, list[str]] = {
     "OBF001":    ["MASVS-RESILIENCE-3"],
     "DESER001":  ["MASVS-CODE-4"],
     "EXTRA001":  ["MASVS-PLATFORM-1"],
+    # ── Reglas nativas (native_scanner) ──────────────────────────────────────
+    "NAT001":    ["MASVS-CODE-4"],
+    "NAT002":    ["MASVS-CODE-4"],
+    "NAT003":    ["MASVS-RESILIENCE-2"],
+    "NAT004":    ["MASVS-STORAGE-2"],
+    "NAT005":    ["MASVS-NETWORK-1"],
+    "NAT006":    ["MASVS-RESILIENCE-1"],
+    "NAT007":    ["MASVS-NETWORK-1", "MASVS-NETWORK-2"],
+    "NAT008":    ["MASVS-CRYPTO-1"],
 }
 
 # ── Mapeo detectores → MASVS ──────────────────────────────────────────────────
