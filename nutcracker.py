@@ -772,12 +772,12 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
         result.elapsed_seconds = elapsed_seconds
 
         # Guardar JSON una vez que todos los datos están completos
-        save_analysis_json(result, scan_result=vuln_scan)
+        save_analysis_json(result, scan_result=vuln_scan, manifest=_MANIFEST_ANALYSIS)
 
         # ── Resumen MASVS v2 ─────────────────────────────────────────────
         try:
             from nutcracker_core.masvs import build_masvs_report
-            _masvs = build_masvs_report(result, vuln_scan)
+            _masvs = build_masvs_report(result, vuln_scan, _MANIFEST_ANALYSIS)
             print_masvs_summary(_masvs)
         except Exception:
             pass
@@ -1628,7 +1628,7 @@ def _do_vuln_scan(
 
         print_vuln_report(scan_result, source_dir)
         pkg_name = package_hint or source_dir.name
-        _save_vuln_json(scan_result, pkg_name)
+        _save_vuln_json(scan_result, pkg_name, manifest=_MANIFEST_ANALYSIS)
         return scan_result
 
     try:
@@ -1719,7 +1719,7 @@ def _do_vuln_scan(
 
     # Guardar JSON con nombre canónico por paquete.
     pkg_name = package_hint or source_dir.name
-    _save_vuln_json(scan_result, pkg_name)
+    _save_vuln_json(scan_result, pkg_name, manifest=_MANIFEST_ANALYSIS)
     return scan_result
 
 
@@ -1823,7 +1823,7 @@ def _generate_pdf(result, vuln_scan=None, vuln_scan_enabled: bool = True) -> Non
                 f"[dim]  {t('cli_loading_prev_findings', count=len(vuln_scan.findings))}[/dim]"
             )
 
-    reports_dir = Path("./reports")
+    reports_dir = Path("./reports") / result.package
     reports_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = reports_dir / f"nutcracker_{result.package}_report.pdf"
     try:
@@ -1837,7 +1837,7 @@ def _generate_pdf(result, vuln_scan=None, vuln_scan_enabled: bool = True) -> Non
         console.print(f"[red]{t('cli_error_pdf')}[/red] {exc}")
 
 
-def _save_vuln_json(scan_result, package: str) -> None:
+def _save_vuln_json(scan_result, package: str, manifest=None) -> None:
     """Guarda los hallazgos de vulnerabilidades en JSON.
 
     Escribe en dos ubicaciones:
@@ -1863,6 +1863,18 @@ def _save_vuln_json(scan_result, package: str) -> None:
             for f in scan_result.findings
         ],
     }
+    if manifest is not None and manifest.misconfigurations:
+        data["manifest_misconfigs"] = [
+            {
+                "severity": m.severity,
+                "category": m.category,
+                "title": m.title,
+                "description": m.description,
+                "location": m.location,
+                "recommendation": m.recommendation,
+            }
+            for m in manifest.misconfigurations
+        ]
     payload = json.dumps(data, ensure_ascii=False, indent=2)
     primary = Path("./reports") / package / "vuln.json"
     primary.parent.mkdir(parents=True, exist_ok=True)
@@ -2016,18 +2028,19 @@ def batch(
             pkg = result.package
             pdf_path: Path | None = None
             if save_pdf:
-                Path(reports_dir).mkdir(parents=True, exist_ok=True)
-                pdf_dest = Path(reports_dir) / f"nutcracker_{pkg}_report.pdf"
+                pkg_dir = Path(reports_dir) / pkg
+                pkg_dir.mkdir(parents=True, exist_ok=True)
+                pdf_dest = pkg_dir / f"nutcracker_{pkg}_report.pdf"
                 scan_result = _post_analysis_flow(result, apk_path)
                 # Guardar JSON una vez que todos los datos están completos
-                save_analysis_json(result, scan_result=scan_result)
+                save_analysis_json(result, scan_result=scan_result, manifest=_MANIFEST_ANALYSIS)
                 from nutcracker_core.pdf_reporter import generate_pdf_report
                 pdf_path = generate_pdf_report(result, pdf_dest, scan=scan_result, manifest=_MANIFEST_ANALYSIS)
                 console.print(f"  [green]✔[/green] PDF: [bold]{pdf_path}[/bold]")
             else:
                 scan_result = _post_analysis_flow(result, apk_path)
                 # Guardar JSON una vez que todos los datos están completos
-                save_analysis_json(result, scan_result=scan_result)
+                save_analysis_json(result, scan_result=scan_result, manifest=_MANIFEST_ANALYSIS)
 
             status = "protected_broken" if result.protection_broken \
                 else ("protected" if result.protected else "unprotected")
