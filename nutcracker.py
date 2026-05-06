@@ -1716,21 +1716,48 @@ def _do_vuln_scan(
         )
 
     # ── Componentes del manifest exportados (COMP006/COMP007/COMP008) ─────────
-    # auto_scan trabaja sobre el directorio jadx (sin manifest XML).
-    # El manifest decodificado está en _manifest_apktool_*/AndroidManifest.xml.
-    if scan_result is not None:
+    # _MANIFEST_ANALYSIS ya tiene exported_components del manifest extraído.
+    if scan_result is not None and _MANIFEST_ANALYSIS and getattr(_MANIFEST_ANALYSIS, "exported_components", None):
         try:
-            from nutcracker_core.vuln_scanner import scan_manifest_components
-            # Buscar directorio apktool: padre del source_dir
-            _apktool_candidates = sorted(source_dir.parent.glob("_manifest_apktool_*"))
-            if _apktool_candidates:
-                _comp_findings = scan_manifest_components(_apktool_candidates[0])
-                if _comp_findings:
-                    existing_comp = {(f.rule_id, f.matched_text) for f in scan_result.findings}
-                    new_comp = [f for f in _comp_findings if (f.rule_id, f.matched_text) not in existing_comp]
-                    scan_result.findings.extend(new_comp)
-                    if new_comp:
-                        console.print(f"  [dim]Componentes exportados (manifest): {len(new_comp)} hallazgo(s) COMP[/dim]")
+            from nutcracker_core.vuln_scanner import VulnFinding
+            _COMP_MAP = {
+                "activity":  ("COMP006", "Activity exported sin permission",              "critical", "M6 - Componentes inseguros"),
+                "service":   ("COMP007", "Service exported sin permission",               "high",     "M6 - Componentes inseguros"),
+                "receiver":  ("COMP004", "BroadcastReceiver exported sin permission",     "high",     "M6 - Componentes inseguros"),
+                "provider":  ("COMP008", "ContentProvider exported sin permission",       "critical", "M6 - Componentes inseguros"),
+            }
+            existing_comp = {(f.rule_id, f.matched_text) for f in scan_result.findings if f.rule_id.startswith("COMP")}
+            new_comp = []
+            for ec in _MANIFEST_ANALYSIS.exported_components:
+                tag = ec.get("tag", "").lower()
+                name = ec.get("name", "")
+                if tag not in _COMP_MAP:
+                    continue
+                rule_id, title, severity, category = _COMP_MAP[tag]
+                matched = f'<{tag} android:name="{name}" android:exported="true">'
+                if (rule_id, matched) in existing_comp:
+                    continue
+                new_comp.append(VulnFinding(
+                    rule_id=rule_id,
+                    title=f"{title}: {name.split('.')[-1]}",
+                    severity=severity,
+                    category=category,
+                    file=None,
+                    line=0,
+                    matched_text=matched,
+                    description=(
+                        f"{tag.capitalize()} `{name}` tiene android:exported=\"true\" sin "
+                        f"android:permission. Cualquier app o comando ADB puede invocarlo directamente."
+                    ),
+                    recommendation=(
+                        f"Añadir android:exported=\"false\" o proteger con "
+                        f"android:permission=\"<custom-signature-permission>\"."
+                    ),
+                ))
+                existing_comp.add((rule_id, matched))
+            if new_comp:
+                scan_result.findings.extend(new_comp)
+                console.print(f"  [dim]Componentes exportados (manifest): {len(new_comp)} hallazgo(s) COMP[/dim]")
         except Exception:
             pass
 
