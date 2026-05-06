@@ -1192,6 +1192,7 @@ def auto_scan(
         except Exception as _nat_err:
             if progress_callback:
                 progress_callback(f"native_scanner omitido: {_nat_err}")
+
     return result
 
 
