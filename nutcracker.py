@@ -1715,6 +1715,25 @@ def _do_vuln_scan(
             f"  [dim]{t('cli_scanner_used_dim', engine=engine_used, files=scan_result.files_scanned, findings=len(scan_result.findings))}[/dim]"
         )
 
+    # ── Componentes del manifest exportados (COMP006/COMP007/COMP008) ─────────
+    # auto_scan trabaja sobre el directorio jadx (sin manifest XML).
+    # El manifest decodificado está en _manifest_apktool_*/AndroidManifest.xml.
+    if scan_result is not None:
+        try:
+            from nutcracker_core.vuln_scanner import scan_manifest_components
+            # Buscar directorio apktool: padre del source_dir
+            _apktool_candidates = sorted(source_dir.parent.glob("_manifest_apktool_*"))
+            if _apktool_candidates:
+                _comp_findings = scan_manifest_components(_apktool_candidates[0])
+                if _comp_findings:
+                    existing_comp = {(f.rule_id, f.matched_text) for f in scan_result.findings}
+                    new_comp = [f for f in _comp_findings if (f.rule_id, f.matched_text) not in existing_comp]
+                    scan_result.findings.extend(new_comp)
+                    if new_comp:
+                        console.print(f"  [dim]Componentes exportados (manifest): {len(new_comp)} hallazgo(s) COMP[/dim]")
+        except Exception:
+            pass
+
     print_vuln_report(scan_result, source_dir)
 
     # Guardar JSON con nombre canónico por paquete.

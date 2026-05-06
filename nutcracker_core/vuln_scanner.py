@@ -1159,25 +1159,6 @@ def auto_scan(
                 new_xml = [f for f in xml_findings if (str(f.file), f.line, f.rule_id) not in existing_keys]
                 semgrep_result.findings.extend(new_xml)
                 semgrep_result.files_scanned += len({f.file for f in new_xml})
-        # ── Componentes del manifest exportados (COMP006/COMP007/COMP008) ─────
-        try:
-            comp_findings = scan_manifest_components(source_dir)
-            if comp_findings:
-                existing_comp = {
-                    (str(f.file), f.rule_id, f.matched_text)
-                    for f in semgrep_result.findings
-                    if f.rule_id.startswith("COMP")
-                }
-                new_comp = [
-                    f for f in comp_findings
-                    if (str(f.file), f.rule_id, f.matched_text) not in existing_comp
-                ]
-                semgrep_result.findings.extend(new_comp)
-                if progress_callback and new_comp:
-                    progress_callback(f"Componentes exportados: {len(new_comp)} hallazgo(s) COMP")
-        except Exception as _comp_err:
-            if progress_callback:
-                progress_callback(f"scan_manifest_components omitido: {_comp_err}")
         return semgrep_result
 
     scan_rules = RULES if include_code_leak_rules else [
@@ -1211,26 +1192,6 @@ def auto_scan(
         except Exception as _nat_err:
             if progress_callback:
                 progress_callback(f"native_scanner omitido: {_nat_err}")
-
-    # ── Componentes del manifest exportados (COMP006/COMP007/COMP008) ─────────
-    try:
-        comp_findings = scan_manifest_components(source_dir)
-        if comp_findings:
-            existing_comp = {
-                (str(f.file), f.rule_id, f.matched_text)
-                for f in result.findings
-                if f.rule_id.startswith("COMP")
-            }
-            new_comp = [
-                f for f in comp_findings
-                if (str(f.file), f.rule_id, f.matched_text) not in existing_comp
-            ]
-            result.findings.extend(new_comp)
-            if progress_callback and new_comp:
-                progress_callback(f"Componentes exportados: {len(new_comp)} hallazgo(s) COMP")
-    except Exception as _comp_err:
-        if progress_callback:
-            progress_callback(f"scan_manifest_components omitido: {_comp_err}")
 
     return result
 
