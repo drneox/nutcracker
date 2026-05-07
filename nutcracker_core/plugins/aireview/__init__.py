@@ -277,76 +277,89 @@ def _llm_call(llm_cfg: dict, system: str, user: str) -> str:
     return str(content)
 
 
-# ── Auto-run hook (triggered by fire_post_hooks) ──────────────────────────────
+# ── Shared helpers ─────────────────────────────────────────────────────────────
 
-def _after_analysis_hook(
+def _apply_severity_filter(
+    findings: list[dict],
+    review_severities: list[str] | None,
+) -> tuple[list[dict], list[dict]]:
+    """Split findings into (to_review, to_skip) by review_severities config.
+
+    findings_to_skip are passed through without LLM review (always kept).
+    Returns (findings_to_review, findings_to_skip).
+    """
+    if not review_severities:
+        return findings, []
+    allowed = {s.strip().lower() for s in review_severities}
+    to_review = [f for f in findings if (f.get("severity") or "").lower() in allowed]
+    to_skip   = [f for f in findings if (f.get("severity") or "").lower() not in allowed]
+    return to_review, to_skip
+
+
+def _run_review_batches(
+    findings_to_review: list[dict],
     package: str,
-    result,  # AnalysisResult
-    vuln_scan,  # ScanResult | None
-    config: dict,
-) -> None:
-    """Runs ai-review automatically if enabled in config post_hooks."""
-    enabled_hooks = config.get("post_hooks") or []
-    if "ai-review" not in enabled_hooks:
-        return
+    llm_cfg: dict,
+    batch_size: int,
+    context_lines: int,
+    on_batch_start=None,  # callable(start: int, end: int, total: int)
+    on_batch_error=None,  # callable(start: int, exc)
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Run LLM review over findings_to_review in batches.
 
-    # Skip if there's no vuln scan with findings to review
-    if vuln_scan is None or not getattr(vuln_scan, "findings", None):
-        return
+    Callbacks (both optional):
+      on_batch_start(start, end, total) — called before each LLM call.
+      on_batch_error(start, exc)        — called on LLM failure or unparseable
+                                          response; batch findings are kept.
 
-    # Skip if no LLM is configured
-    llm_cfg = config.get("llm") or {}
-    if not llm_cfg.get("provider"):
-        return
-
-    from rich.console import Console
-    console = Console()
-    console.print("[dim][ai-review] Auto-running after analysis...[/dim]")
-
-    ai_review_cfg = config.get("ai_review", {}) or {}
-    batch_size = int(ai_review_cfg.get("batch_size", _DEFAULT_BATCH_SIZE))
-    context_lines = int(ai_review_cfg.get("context_lines", _DEFAULT_CONTEXT_LINES))
-    regen_pdf = bool(ai_review_cfg.get("regen_pdf", True))
-
-    try:
-        path, data = _load_findings(package)
-    except Exception:  # noqa: BLE001
-        return  # no findings file yet; silently skip
-
-    findings = data.get("findings", []) or []
-    if not findings:
-        return
-
+    Returns (verdicts, kept, dropped, downgraded).
+    ``kept`` contains only findings from findings_to_review (not skipped ones).
+    """
     verdicts: list[dict] = []
     kept: list[dict] = []
     dropped: list[dict] = []
     downgraded: list[dict] = []
 
-    for start in range(0, len(findings), batch_size):
-        batch = findings[start:start + batch_size]
+    for start in range(0, len(findings_to_review), batch_size):
+        batch = findings_to_review[start:start + batch_size]
+        end   = start + len(batch)
+        if on_batch_start:
+            on_batch_start(start + 1, end, len(findings_to_review))
+
         user_prompt = _build_user_prompt(batch, package, context_lines)
         try:
             raw = _llm_call(llm_cfg, _SYSTEM_PROMPT, user_prompt)
         except Exception as exc:  # noqa: BLE001
+            if on_batch_error:
+                on_batch_error(start, exc)
             for i, f in enumerate(batch):
                 verdicts.append({"id": start + i, "verdict": "TRUE_POSITIVE",
                                   "reason": f"LLM error: {exc}"})
                 kept.append(f)
             continue
+
         parsed = _parse_verdicts(raw, len(batch))
         if parsed is None:
+            if on_batch_error:
+                on_batch_error(start, "unparseable LLM response")
             for i, f in enumerate(batch):
                 verdicts.append({"id": start + i, "verdict": "TRUE_POSITIVE",
                                   "reason": "unparseable"})
                 kept.append(f)
             continue
+
         parsed.sort(key=lambda v: v["id"])
         vmap = {v["id"]: v for v in parsed}
         for i, f in enumerate(batch):
             v = vmap.get(i, {"verdict": "TRUE_POSITIVE", "reason": "missing"})
-            enriched = {"id": start + i, "rule_id": f.get("rule_id"),
-                        "file": f.get("file"), "line": f.get("line"),
-                        "verdict": v["verdict"], "reason": v.get("reason", "")}
+            enriched = {
+                "id": start + i,
+                "rule_id": f.get("rule_id"),
+                "file": f.get("file"),
+                "line": f.get("line"),
+                "verdict": v["verdict"],
+                "reason": v.get("reason", ""),
+            }
             if v["verdict"] == "DOWNGRADE":
                 if v.get("suggested_severity"):
                     enriched["suggested_severity"] = v["suggested_severity"]
@@ -364,74 +377,164 @@ def _after_analysis_hook(
                 modified["_ai_note"] = v.get("reason", "")
                 kept.append(modified)
                 downgraded.append(modified)
-            else:
+            else:  # TRUE_POSITIVE
                 kept.append(f)
 
-    tp_count = len(kept)
-    fp_count = len(dropped)
-    dg_count = len(downgraded)
-    console.print(
-        f"[green]\u2714[/green] ai-review: kept {tp_count} TPs, "
-        f"dropped {fp_count} FPs, downgraded {dg_count} for {package}"
-    )
+    return verdicts, kept, dropped, downgraded
 
-    # Save audit trail — primario en reports/<package>/review.json
+
+def _persist_review_results(
+    package: str,
+    path: "Path",
+    data: dict,
+    findings_to_review: list[dict],
+    findings_skip: list[dict],
+    verdicts: list[dict],
+    kept_reviewed: list[dict],
+    dropped: list[dict],
+    downgraded: list[dict],
+    llm_cfg: dict,
+) -> tuple[int, int, int]:
+    """Save review.json and rewrite vuln.json (with backup).
+
+    Returns (tp_count, fp_count, dg_count).
+    tp_count includes both findings_skip and kept_reviewed.
+    """
+    all_kept  = list(findings_skip) + kept_reviewed
+    tp_count  = len(all_kept)
+    fp_count  = len(dropped)
+    dg_count  = len(downgraded)
+
     pkg_reports_dir = _REPORTS_DIR / package
     pkg_reports_dir.mkdir(parents=True, exist_ok=True)
-    review_path = pkg_reports_dir / "review.json"
-    # Legacy copy en decompiled/ para compatibilidad
-    legacy_review_path = _DECOMPILED_DIR / f"vuln_{package}_review.json"
+
     review_payload = {
         "package": package,
         "reviewed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "model": llm_cfg.get("model"),
         "provider": llm_cfg.get("provider"),
-        "total": len(findings),
+        "total": len(findings_to_review),
         "true_positives": tp_count,
         "false_positives": fp_count,
         "downgraded": dg_count,
         "verdicts": verdicts,
     }
     review_json = json.dumps(review_payload, ensure_ascii=False, indent=2)
-    review_path.write_text(review_json, encoding="utf-8")
-    legacy_review_path.write_text(review_json, encoding="utf-8")
+    (pkg_reports_dir / "review.json").write_text(review_json, encoding="utf-8")
+    (_DECOMPILED_DIR / f"vuln_{package}_review.json").write_text(review_json, encoding="utf-8")
 
     if fp_count == 0 and dg_count == 0:
-        return
+        return tp_count, fp_count, dg_count
 
     ts = time.strftime("%Y%m%d_%H%M%S")
-    import shutil as _shutil
-    _shutil.copy2(path, path.with_suffix(f".json.bak.{ts}"))
+    shutil.copy2(path, path.with_suffix(f".json.bak.{ts}"))
+
     new_data = dict(data)
     # FPs se conservan en el JSON con _fp=True para auditoría; el PDF los ignora
     tagged_fps = [{**d, "_fp": True} for d in dropped]
-    new_data["findings"] = kept + tagged_fps
-    new_data["total_findings"] = tp_count  # solo TP + downgrades
-    new_data["ai_reviewed"] = {
-        "at": review_payload["reviewed_at"],
-        "model": llm_cfg.get("model"),
-        "provider": llm_cfg.get("provider"),
-        "dropped": fp_count,
+    new_data["findings"]       = all_kept + tagged_fps
+    new_data["total_findings"] = tp_count
+    new_data["ai_reviewed"]    = {
+        "at":         review_payload["reviewed_at"],
+        "model":      llm_cfg.get("model"),
+        "provider":   llm_cfg.get("provider"),
+        "dropped":    fp_count,
         "downgraded": dg_count,
     }
     new_json = json.dumps(new_data, ensure_ascii=False, indent=2)
-    # Escribir en primario (reports/) y en legacy (decompiled/)
-    primary_vuln = pkg_reports_dir / "vuln.json"
-    primary_vuln.write_text(new_json, encoding="utf-8")
+    (pkg_reports_dir / "vuln.json").write_text(new_json, encoding="utf-8")
     path.write_text(new_json, encoding="utf-8")
-    console.print(f"[dim]  vuln.json rewritten in {pkg_reports_dir} and {path.parent}[/dim]")
 
-    if regen_pdf:
-        try:
-            import sys as _sys
-            _nc = _sys.modules.get("nutcracker") or _sys.modules.get("__main__")
-            cb = getattr(getattr(_nc, "regen_pdf", None), "callback", None)
-            if cb:
-                cb(package=package)
-        except SystemExit:
-            raise
-        except Exception:
-            pass
+    return tp_count, fp_count, dg_count
+
+
+def _regen_pdf(package: str, console=None) -> None:
+    """Attempt to regenerate the PDF for package, optionally printing errors."""
+    try:
+        import sys as _sys
+        _nc = _sys.modules.get("nutcracker") or _sys.modules.get("__main__")
+        cb = getattr(getattr(_nc, "regen_pdf", None), "callback", None)
+        if cb is None:
+            raise RuntimeError("regen-pdf command not callable")
+        cb(package=package)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if console:
+            console.print(
+                f"[yellow]Could not auto-regenerate PDF: {exc}. "
+                f"Run manually:[/yellow] [bold]nutcracker regen-pdf {package}[/bold]"
+            )
+
+
+# ── Auto-run hook (triggered by fire_post_hooks) ──────────────────────────────
+
+def _after_analysis_hook(
+    package: str,
+    result,  # AnalysisResult
+    vuln_scan,  # ScanResult | None
+    config: dict,
+) -> None:
+    """Runs ai-review automatically if enabled in config post_hooks."""
+    enabled_hooks = config.get("post_hooks") or []
+    if "ai-review" not in enabled_hooks:
+        return
+    if vuln_scan is None or not getattr(vuln_scan, "findings", None):
+        return
+    llm_cfg = config.get("llm") or {}
+    if not llm_cfg.get("provider"):
+        return
+
+    from rich.console import Console
+    console = Console()
+    console.print("[dim][ai-review] Auto-running after analysis...[/dim]")
+
+    ai_review_cfg = config.get("ai_review", {}) or {}
+    batch_size    = int(ai_review_cfg.get("batch_size",    _DEFAULT_BATCH_SIZE))
+    context_lines = int(ai_review_cfg.get("context_lines", _DEFAULT_CONTEXT_LINES))
+    do_regen_pdf  = bool(ai_review_cfg.get("regen_pdf", True))
+
+    try:
+        path, data = _load_findings(package)
+    except Exception:  # noqa: BLE001
+        return
+
+    findings = data.get("findings", []) or []
+    if not findings:
+        return
+
+    findings_to_review, findings_skip = _apply_severity_filter(
+        findings, ai_review_cfg.get("review_severities")
+    )
+    console.print(
+        f"[dim][ai-review] {len(findings_to_review)} findings to review "
+        f"(batch={batch_size}"
+        + (f", skipping {len(findings_skip)} low/info)" if findings_skip else ")")
+        + "[/dim]"
+    )
+
+    verdicts, kept_reviewed, dropped, downgraded = _run_review_batches(
+        findings_to_review, package, llm_cfg, batch_size, context_lines,
+        on_batch_start=lambda s, e, t: console.print(
+            f"[dim][ai-review] batch {s}-{e} / {t}...[/dim]"
+        ),
+        on_batch_error=lambda s, exc: console.print(
+            f"[red][ai-review] batch at {s} failed: {exc}[/red]"
+        ),
+    )
+
+    tp_count, fp_count, dg_count = _persist_review_results(
+        package, path, data,
+        findings_to_review, findings_skip,
+        verdicts, kept_reviewed, dropped, downgraded,
+        llm_cfg,
+    )
+    console.print(
+        f"[green]\u2714[/green] ai-review: kept {tp_count} TPs, "
+        f"dropped {fp_count} FPs, downgraded {dg_count} for {package}"
+    )
+    if do_regen_pdf:
+        _regen_pdf(package)
 
 
 # ── CLI registration ─────────────────────────────────────────────────────────
@@ -466,7 +569,7 @@ def register(cli) -> None:
         from nutcracker_core.config import load_config, get as cfg_get
 
         console = Console()
-        config = load_config(config_path)
+        config  = load_config(config_path)
         llm_cfg = cfg_get(config, "llm", default={}) or {}
         if not llm_cfg.get("provider"):
             raise click.ClickException(
@@ -474,117 +577,69 @@ def register(cli) -> None:
                 "llm.provider, llm.model and llm.api_key."
             )
 
+        # CLI flags override config; fall back to config only when the flag
+        # still holds the Click default value.
+        ai_review_cfg = cfg_get(config, "ai_review", default={}) or {}
+        if batch_size == _DEFAULT_BATCH_SIZE:
+            batch_size    = int(ai_review_cfg.get("batch_size",    _DEFAULT_BATCH_SIZE))
+        if context_lines == _DEFAULT_CONTEXT_LINES:
+            context_lines = int(ai_review_cfg.get("context_lines", _DEFAULT_CONTEXT_LINES))
+
         path, data = _load_findings(package)
-        findings = data.get("findings", []) or []
+        findings   = data.get("findings", []) or []
         if not findings:
             console.print(f"[yellow]No findings to review in {path}.[/yellow]")
             return
 
+        findings_to_review, findings_skip = _apply_severity_filter(
+            findings, ai_review_cfg.get("review_severities")
+        )
         console.print(
-            f"[cyan]ai-review[/cyan]  {len(findings)} findings | "
-            f"LLM: {llm_cfg.get('model', '?')} via "
-            f"{llm_cfg.get('provider', '?')} | batch={batch_size}"
+            f"[cyan]ai-review[/cyan]  {len(findings_to_review)} findings | "
+            f"LLM: {llm_cfg.get('model', '?')} via {llm_cfg.get('provider', '?')} | "
+            f"batch={batch_size}"
+            + (f" | skipping {len(findings_skip)} low/info" if findings_skip else "")
         )
 
-        verdicts: list[dict] = []  # parallel to findings; same order
-        kept: list[dict] = []
-        dropped: list[dict] = []
-        downgraded: list[dict] = []
+        # ── Run batches with spinner ─────────────────────────────────────
+        verdicts: list[dict]    = []
+        kept_reviewed: list[dict] = []
+        dropped: list[dict]     = []
+        downgraded: list[dict]  = []
 
         with console.status("[cyan]Reviewing findings...[/cyan]") as status:
-            for start in range(0, len(findings), batch_size):
-                batch = findings[start:start + batch_size]
-                status.update(
-                    f"[cyan]Reviewing[/cyan] "
-                    f"{start + 1}-{start + len(batch)} / {len(findings)}"
-                )
-                user_prompt = _build_user_prompt(batch, package, context_lines)
-                try:
-                    raw = _llm_call(llm_cfg, _SYSTEM_PROMPT, user_prompt)
-                except click.ClickException:
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    console.print(
-                        f"[red]LLM call failed for batch starting at "
-                        f"{start}: {exc}[/red]"
-                    )
-                    # Conservative: keep all findings in this batch
-                    for i, f in enumerate(batch):
-                        verdicts.append({
-                            "id": start + i,
-                            "verdict": "TRUE_POSITIVE",
-                            "reason": f"LLM error: {exc}",
-                        })
-                        kept.append(f)
-                    continue
+            def on_progress(start: int, end: int, total: int) -> None:
+                status.update(f"[cyan]Reviewing[/cyan] {start}-{end} / {total}")
 
-                parsed = _parse_verdicts(raw, len(batch))
-                if parsed is None:
-                    console.print(
-                        f"[yellow]Could not parse LLM response for batch "
-                        f"{start}; keeping all findings in this batch.[/yellow]"
-                    )
-                    for i, f in enumerate(batch):
-                        verdicts.append({
-                            "id": start + i,
-                            "verdict": "TRUE_POSITIVE",
-                            "reason": "LLM response unparseable",
-                        })
-                        kept.append(f)
-                    continue
+            def on_error(start: int, exc) -> None:
+                console.print(f"[red]LLM call failed for batch at {start}: {exc}[/red]")
 
-                # Sort verdicts by id and apply
-                parsed.sort(key=lambda v: v["id"])
-                vmap = {v["id"]: v for v in parsed}
-                for i, f in enumerate(batch):
-                    v = vmap.get(i, {
-                        "verdict": "TRUE_POSITIVE",
-                        "reason": "missing verdict, kept by default",
-                    })
-                    enriched = {
-                        "id": start + i,
-                        "rule_id": f.get("rule_id"),
-                        "file": f.get("file"),
-                        "line": f.get("line"),
-                        "verdict": v["verdict"],
-                        "reason": v.get("reason", ""),
-                    }
-                    if v["verdict"] == "DOWNGRADE":
-                        if v.get("suggested_severity"):
-                            enriched["suggested_severity"] = v["suggested_severity"]
-                        if v.get("suggested_category"):
-                            enriched["suggested_category"] = v["suggested_category"]
-                    verdicts.append(enriched)
-                    if v["verdict"] == "FALSE_POSITIVE":
-                        dropped.append({**f, "_fp_reason": v.get("reason", "")})
-                    elif v["verdict"] == "DOWNGRADE":
-                        modified = dict(f)
-                        if v.get("suggested_severity"):
-                            modified["severity"] = v["suggested_severity"]
-                        if v.get("suggested_category"):
-                            modified["category"] = v["suggested_category"]
-                        modified["_ai_note"] = v.get("reason", "")
-                        kept.append(modified)
-                        downgraded.append(modified)
-                    else:  # TRUE_POSITIVE
-                        kept.append(f)
+            _v, _k, _d, _dg = _run_review_batches(
+                findings_to_review, package, llm_cfg, batch_size, context_lines,
+                on_batch_start=on_progress,
+                on_batch_error=on_error,
+            )
+            verdicts.extend(_v)
+            kept_reviewed.extend(_k)
+            dropped.extend(_d)
+            downgraded.extend(_dg)
 
-        # ── Print summary ────────────────────────────────────────────────
-        tp_count = len(kept)
+        # ── Summary ──────────────────────────────────────────────────────
+        tp_count = len(findings_skip) + len(kept_reviewed)
         fp_count = len(dropped)
         dg_count = len(downgraded)
         console.print()
         console.print(
-            f"[green]✔[/green] Kept {tp_count} true positives  "
-            f"[red]✘[/red] Dropped {fp_count} false positives  "
-            f"[yellow]↓[/yellow] Downgraded {dg_count}"
+            f"[green]\u2714[/green] Kept {tp_count} true positives  "
+            f"[red]\u2718[/red] Dropped {fp_count} false positives  "
+            f"[yellow]\u2193[/yellow] Downgraded {dg_count}"
         )
 
         if dropped:
             table = Table(title="False positives dropped", show_lines=False)
-            table.add_column("rule", style="magenta", no_wrap=True)
-            table.add_column("file:line", style="cyan", overflow="fold")
-            table.add_column("reason", style="dim", overflow="fold")
+            table.add_column("rule",     style="magenta", no_wrap=True)
+            table.add_column("file:line", style="cyan",   overflow="fold")
+            table.add_column("reason",   style="dim",     overflow="fold")
             for d in dropped[:50]:
                 table.add_row(
                     str(d.get("rule_id", "")),
@@ -597,11 +652,11 @@ def register(cli) -> None:
 
         if downgraded:
             table = Table(title="Downgraded findings", show_lines=False)
-            table.add_column("rule", style="magenta", no_wrap=True)
-            table.add_column("file:line", style="cyan", overflow="fold")
-            table.add_column("severity", style="yellow", no_wrap=True)
-            table.add_column("category", style="blue", overflow="fold")
-            table.add_column("reason", style="dim", overflow="fold")
+            table.add_column("rule",      style="magenta", no_wrap=True)
+            table.add_column("file:line", style="cyan",    overflow="fold")
+            table.add_column("severity",  style="yellow",  no_wrap=True)
+            table.add_column("category",  style="blue",    overflow="fold")
+            table.add_column("reason",    style="dim",     overflow="fold")
             for d in downgraded[:50]:
                 table.add_row(
                     str(d.get("rule_id", "")),
@@ -614,23 +669,6 @@ def register(cli) -> None:
             if len(downgraded) > 50:
                 console.print(f"[dim]... and {len(downgraded) - 50} more[/dim]")
 
-        # ── Persist results ──────────────────────────────────────────────
-        pkg_reports_dir = _REPORTS_DIR / package
-        pkg_reports_dir.mkdir(parents=True, exist_ok=True)
-        review_path = pkg_reports_dir / "review.json"
-        legacy_review_path = _DECOMPILED_DIR / f"vuln_{package}_review.json"
-        review_payload = {
-            "package": package,
-            "reviewed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "model": llm_cfg.get("model"),
-            "provider": llm_cfg.get("provider"),
-            "total": len(findings),
-            "true_positives": tp_count,
-            "false_positives": fp_count,
-            "downgraded": dg_count,
-            "verdicts": verdicts,
-        }
-
         if dry_run:
             console.print(
                 f"[yellow]Dry-run: not modifying {path}. "
@@ -638,10 +676,16 @@ def register(cli) -> None:
             )
             return
 
-        review_json = json.dumps(review_payload, ensure_ascii=False, indent=2)
-        review_path.write_text(review_json, encoding="utf-8")
-        legacy_review_path.write_text(review_json, encoding="utf-8")
-        console.print(f"[dim]Audit trail saved to {review_path}[/dim]")
+        # ── Persist results ──────────────────────────────────────────────
+        tp_count, fp_count, dg_count = _persist_review_results(
+            package, path, data,
+            findings_to_review, findings_skip,
+            verdicts, kept_reviewed, dropped, downgraded,
+            llm_cfg,
+        )
+        console.print(
+            f"[dim]Audit trail saved to {_REPORTS_DIR / package / 'review.json'}[/dim]"
+        )
 
         if fp_count == 0 and dg_count == 0:
             console.print(
@@ -650,52 +694,17 @@ def register(cli) -> None:
             )
             return
 
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        backup = path.with_suffix(f".json.bak.{ts}")
-        shutil.copy2(path, backup)
+        backup = path.with_suffix(f".json.bak.{time.strftime('%Y%m%d_%H%M%S')}")
         console.print(f"[dim]Backup saved to {backup}[/dim]")
+        console.print(f"[green]\u2714[/green] vuln.json updated.")
 
-        new_data = dict(data)
-        # FPs se conservan en el JSON con _fp=True para auditoría; el PDF los ignora
-        tagged_fps = [{**d, "_fp": True} for d in dropped]
-        new_data["findings"] = kept + tagged_fps
-        new_data["total_findings"] = tp_count  # solo TP + downgrades
-        new_data["ai_reviewed"] = {
-            "at": review_payload["reviewed_at"],
-            "model": llm_cfg.get("model"),
-            "provider": llm_cfg.get("provider"),
-            "dropped": fp_count,
-            "downgraded": dg_count,
-        }
-        new_json = json.dumps(new_data, ensure_ascii=False, indent=2)
-        # Escribir en primario (reports/) y en legacy (decompiled/)
-        (pkg_reports_dir / "vuln.json").write_text(new_json, encoding="utf-8")
-        path.write_text(new_json, encoding="utf-8")
-        console.print(f"[green]✔[/green] vuln.json updated in {pkg_reports_dir} and {path.parent}.")
-
-        # ── Optionally regenerate the PDF ────────────────────────────────
         if no_regen_pdf:
-            console.print(
-                "[dim]Skipping PDF regeneration (--no-regen-pdf).[/dim]"
-            )
+            console.print("[dim]Skipping PDF regeneration (--no-regen-pdf).[/dim]")
             return
-        try:
-            import sys as _sys
-            _nc = _sys.modules.get("nutcracker") or _sys.modules.get("__main__")
-            cb = getattr(getattr(_nc, "regen_pdf", None), "callback", None)
-            if cb is None:
-                raise RuntimeError("regen-pdf command not callable")
-            console.print("[cyan]Regenerating PDF with filtered findings...[/cyan]")
-            cb(package=package)
-        except SystemExit:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            console.print(
-                f"[yellow]Could not auto-regenerate PDF: {exc}. "
-                f"Run manually:[/yellow] [bold]nutcracker regen-pdf {package}[/bold]"
-            )
+        console.print("[cyan]Regenerating PDF with filtered findings...[/cyan]")
+        _regen_pdf(package, console=console)
 
-    # ── Register post-hook (runs when fire_post_hooks("after_analysis") is called) ──
+    # ── Register post-hook ────────────────────────────────────────────────────
     try:
         from nutcracker_core.plugins import register_post_hook
         register_post_hook("after_analysis", _after_analysis_hook)
