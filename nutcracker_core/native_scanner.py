@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable
 
 from .vuln_scanner import VulnFinding
+from .i18n import t as _t
 
 
 # ── Definición de reglas nativas ──────────────────────────────────────────────
@@ -44,6 +45,21 @@ class _NativeRule:
     # Si True, solo reportar si la cadena tiene entropía Shannon ≥ entropy_threshold
     require_high_entropy: bool = False
     entropy_threshold: float = 3.5
+
+    def i18n_title(self) -> str:
+        key = f"rule_{self.rule_id.lower()}_title"
+        val = _t(key)
+        return val if val != key else self.title
+
+    def i18n_desc(self) -> str:
+        key = f"rule_{self.rule_id.lower()}_desc"
+        val = _t(key)
+        return val if val != key else self.description
+
+    def i18n_rec(self) -> str:
+        key = f"rule_{self.rule_id.lower()}_rec"
+        val = _t(key)
+        return val if val != key else self.recommendation
 
 
 _NATIVE_RULES: list[_NativeRule] = [
@@ -461,14 +477,14 @@ def scan_native_libs(
             matched_rules.add(rule.rule_id)
             findings.append(VulnFinding(
                 rule_id=rule.rule_id,
-                title=rule.title,
+                title=rule.i18n_title(),
                 severity=rule.severity,
                 category=rule.category,
                 file=so_path,
                 line=matched_line,
                 matched_text=matched_text,
-                description=rule.description,
-                recommendation=rule.recommendation,
+                description=rule.i18n_desc(),
+                recommendation=rule.i18n_rec(),
             ))
 
     _cb(f"native_scanner: {len(findings)} hallazgo(s) en librerías nativas")
