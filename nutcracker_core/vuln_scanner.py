@@ -166,7 +166,7 @@ RULES: list[VulnRule] = [
         title="AWS credentials hardcodeadas",
         severity="critical",
         category="M1 - Credenciales",
-        pattern=re.compile(r'(?i)(AKIA|AIPA|ASIA)[0-9A-Z]{16}'),
+        pattern=re.compile(r'\b(AKIA|AIPA|ASIA)[A-Z0-9]{16}\b'),
         description="AWS Access Key ID encontrada en el código.",
         recommendation="Revocar la clave inmediatamente y nunca incluir credenciales AWS en el APK.",
     ),
