@@ -245,11 +245,7 @@ def print_masvs_summary(masvs_report: "MASVSReport") -> None:
 
     grade_color = _GRADE_COLOR.get(masvs_report.grade, "white")
     score_text = Text(justify="center")
-    score_text.append(f"\n  {t('masvs_title')}  |  {t('score_label')}: ", style="bold white")
-    score_text.append(f"{masvs_report.score}/100", style=f"bold {grade_color}")
-    score_text.append(f"  |  {t('grade_label')}: ", style="bold white")
-    score_text.append(masvs_report.grade, style=f"bold {grade_color}")
-    score_text.append(f"  |  {t('coverage_label')}: ", style="bold white")
+    score_text.append(f"\n  {t('masvs_title')}  |  {t('coverage_label')}: ", style="bold white")
     score_text.append(f"{_covered}/{_MASVS_TOTAL} {t('controls')}", style="bold cyan")
     if masvs_report.bypass_confirmed:
         score_text.append(f"  |  ⚡ {t('bypass_confirmed')}", style="bold yellow")
