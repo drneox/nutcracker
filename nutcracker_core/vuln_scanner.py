@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .i18n import t as _t
+
 
 @dataclass
 class VulnFinding:
@@ -27,6 +29,8 @@ class VulnFinding:
     recommendation: str
 
     def relative_path(self, base: Path) -> str:
+        if self.file is None:
+            return "AndroidManifest.xml"
         try:
             return str(self.file.relative_to(base))
         except ValueError:
@@ -50,6 +54,21 @@ class VulnRule:
     # Si el valor entre comillas capturado por el patrón coincide con este regex, ignorar
     # (útil para filtrar valores que son identificadores, no secretos reales)
     ignore_value_regex: re.Pattern | None = None
+
+    def i18n_title(self) -> str:
+        key = f"rule_{self.rule_id.lower()}_title"
+        val = _t(key)
+        return val if val != key else self.title
+
+    def i18n_desc(self) -> str:
+        key = f"rule_{self.rule_id.lower()}_desc"
+        val = _t(key)
+        return val if val != key else self.description
+
+    def i18n_rec(self) -> str:
+        key = f"rule_{self.rule_id.lower()}_rec"
+        val = _t(key)
+        return val if val != key else self.recommendation
 
 
 # ── Reglas de detección ───────────────────────────────────────────────────────
@@ -147,7 +166,7 @@ RULES: list[VulnRule] = [
         title="AWS credentials hardcodeadas",
         severity="critical",
         category="M1 - Credenciales",
-        pattern=re.compile(r'(?i)(AKIA|AIPA|ASIA)[0-9A-Z]{16}'),
+        pattern=re.compile(r'\b(AKIA|AIPA|ASIA)[A-Z0-9]{16}\b'),
         description="AWS Access Key ID encontrada en el código.",
         recommendation="Revocar la clave inmediatamente y nunca incluir credenciales AWS en el APK.",
     ),
@@ -878,14 +897,14 @@ def scan_directory(
                             continue
                     findings.append(VulnFinding(
                         rule_id=rule.rule_id,
-                        title=rule.title,
+                        title=rule.i18n_title(),
                         severity=rule.severity,
                         category=rule.category,
                         file=file_path,
                         line=lineno,
                         matched_text=line.strip()[:120],
-                        description=rule.description,
-                        recommendation=rule.recommendation,
+                        description=rule.i18n_desc(),
+                        recommendation=rule.i18n_rec(),
                     ))
 
     return ScanResult(base_dir=source_dir, findings=findings, files_scanned=files_scanned, scanner_engine="regex")
@@ -1231,27 +1250,27 @@ def scan_manifest_components(source_dir: Path) -> list[VulnFinding]:
         if app_el.get(f"{{{ns}}}usesCleartextTraffic") == "true":
             findings.append(VulnFinding(
                 rule_id="NET001",
-                title="usesCleartextTraffic habilitado",
+                title=_t("rule_net001_manifest_title"),
                 severity="high",
                 category="M3 - Comunicación insegura",
                 file=manifest_path,
                 line=0,
                 matched_text='android:usesCleartextTraffic="true"',
-                description="La app permite tráfico HTTP sin cifrar a cualquier destino.",
-                recommendation="Eliminar usesCleartextTraffic o restringir con un Network Security Config.",
+                description=_t("rule_net001_manifest_desc"),
+                recommendation=_t("rule_net001_manifest_rec"),
             ))
         # ── debuggable ───────────────────────────────────────────────────────
         if app_el.get(f"{{{ns}}}debuggable") == "true":
             findings.append(VulnFinding(
                 rule_id="INFO001",
-                title="android:debuggable=true en producción",
+                title=_t("rule_info001_title"),
                 severity="high",
                 category="M7 - Calidad del código",
                 file=manifest_path,
                 line=0,
                 matched_text='android:debuggable="true"',
-                description="La app tiene depuración habilitada. Permite attach con adb/jdb y extracción de datos.",
-                recommendation="Nunca distribuir con android:debuggable=\"true\". Usar BuildConfig.DEBUG.",
+                description=_t("rule_info001_desc"),
+                recommendation=_t("rule_info001_rec"),
             ))
 
     # ── Componentes exported sin permission ──────────────────────────────────
@@ -1278,24 +1297,19 @@ def scan_manifest_components(source_dir: Path) -> list[VulnFinding]:
                     continue
 
                 if exported == "true" and not permission:
-                    desc = (
-                        f"{tag.capitalize()} `{name}` tiene android:exported=\"true\" sin "
-                        f"android:permission. Cualquier app o comando ADB puede invocarlo directamente."
-                    )
-                    rec = (
-                        f"Añadir android:exported=\"false\" o proteger con "
-                        f"android:permission=\"<custom-signature-permission>\"."
-                    )
+                    _title_prefix = _t(f"rule_{rule_id.lower()}_title_prefix")
+                    _desc = _t("rule_exported_comp_desc", tag=tag.capitalize(), name=name)
+                    _rec = _t("rule_exported_comp_rec")
                     findings.append(VulnFinding(
                         rule_id=rule_id,
-                        title=f"{title}: {name.split('.')[-1]}",
+                        title=f"{_title_prefix}: {name.split('.')[-1]}",
                         severity=severity,
                         category=category,
                         file=manifest_path,
                         line=0,
                         matched_text=f'<{tag} android:name="{name}" android:exported="true">',
-                        description=desc,
-                        recommendation=rec,
+                        description=_desc,
+                        recommendation=_rec,
                     ))
 
     return findings
@@ -1358,14 +1372,14 @@ def _scan_xml_resources_for_secrets(base_dir: Path) -> list[VulnFinding]:
                         seen_keys.add(key)
                         findings.append(VulnFinding(
                             rule_id=rule.rule_id,
-                            title=rule.title,
+                            title=rule.i18n_title(),
                             severity=rule.severity,
                             category=rule.category,
                             file=file_path,
                             line=lineno,
                             matched_text=line.strip()[:120],
-                            description=rule.description,
-                            recommendation=rule.recommendation,
+                            description=rule.i18n_desc(),
+                            recommendation=rule.i18n_rec(),
                         ))
 
     return findings
