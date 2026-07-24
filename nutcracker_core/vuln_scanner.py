@@ -2,73 +2,37 @@
 Scanner de vulnerabilidades sobre código decompilado (Java/Kotlin/Smali).
 
 Analiza los archivos fuente generados por jadx o apktool buscando patrones
-conocidos de vulnerabilidades Android (OWASP Mobile Top 10).
+conocidos de vulnerabilidades Android (OWASP Mobile Top 10): reglas regex +
+motor semgrep. Los scanners de leaks vía herramientas externas (apkleaks,
+gitleaks) viven en leak_scanner.py; los dataclasses compartidos (VulnFinding,
+VulnRule, ScanResult) viven en scan_types.py (Fase 0.3 del plan) — se
+re-exportan aquí para no romper a los consumidores existentes
+(orchestrator.py, reporter.py, pdf_reporter.py, masvs.py, native_scanner.py,
+plugins/aipwn, plugins/aireview).
 """
 
 from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from .i18n import t as _t
+from .scan_types import VulnFinding, VulnRule, ScanResult
+from .leak_scanner import scan_with_apkleaks, scan_with_gitleaks
 
-
-@dataclass
-class VulnFinding:
-    """Una vulnerabilidad encontrada en el código fuente."""
-    rule_id: str
-    title: str
-    severity: str          # critical / high / medium / low / info
-    category: str          # OWASP M-number o categoría propia
-    file: Path
-    line: int
-    matched_text: str
-    description: str
-    recommendation: str
-
-    def relative_path(self, base: Path) -> str:
-        if self.file is None:
-            return "AndroidManifest.xml"
-        try:
-            return str(self.file.relative_to(base))
-        except ValueError:
-            return str(self.file)
-
-
-@dataclass
-class VulnRule:
-    """Regla de detección basada en regex."""
-    rule_id: str
-    title: str
-    severity: str
-    category: str
-    pattern: re.Pattern
-    description: str
-    recommendation: str
-    # Si se especifica, solo aplica a archivos cuyo path contenga este substring
-    file_filter: str | None = None
-    # Líneas a ignorar si contienen alguno de estos strings (reduce falsos positivos)
-    ignore_if_contains: list[str] = field(default_factory=list)
-    # Si el valor entre comillas capturado por el patrón coincide con este regex, ignorar
-    # (útil para filtrar valores que son identificadores, no secretos reales)
-    ignore_value_regex: re.Pattern | None = None
-
-    def i18n_title(self) -> str:
-        key = f"rule_{self.rule_id.lower()}_title"
-        val = _t(key)
-        return val if val != key else self.title
-
-    def i18n_desc(self) -> str:
-        key = f"rule_{self.rule_id.lower()}_desc"
-        val = _t(key)
-        return val if val != key else self.description
-
-    def i18n_rec(self) -> str:
-        key = f"rule_{self.rule_id.lower()}_rec"
-        val = _t(key)
-        return val if val != key else self.recommendation
+__all__ = [
+    "VulnFinding",
+    "VulnRule",
+    "ScanResult",
+    "RULES",
+    "scan_directory",
+    "scan_with_semgrep",
+    "auto_scan",
+    "scan_manifest_components",
+    "scan_with_apkleaks",
+    "scan_with_gitleaks",
+]
 
 
 # ── Reglas de detección ───────────────────────────────────────────────────────
@@ -743,31 +707,6 @@ RULES: list[VulnRule] = [
 
 # ── Scanner ────────────────────────────────────────────────────────────────────
 
-@dataclass
-class ScanResult:
-    base_dir: Path
-    findings: list[VulnFinding]
-    files_scanned: int
-    scanner_engine: str = "regex"  # "semgrep" | "regex" — motor de vulns
-    leak_engine: str = ""          # "apkleaks+gitleaks+native" — motor de leaks
-
-    @property
-    def by_severity(self) -> dict[str, list[VulnFinding]]:
-        order = ["critical", "high", "medium", "low", "info"]
-        result: dict[str, list[VulnFinding]] = {s: [] for s in order}
-        for f in self.findings:
-            result.setdefault(f.severity, []).append(f)
-        return result
-
-    @property
-    def critical_count(self) -> int:
-        return sum(1 for f in self.findings if f.severity == "critical")
-
-    @property
-    def high_count(self) -> int:
-        return sum(1 for f in self.findings if f.severity == "high")
-
-
 def scan_directory(
     source_dir: Path,
     rules: list[VulnRule] | None = None,
@@ -1381,356 +1320,5 @@ def _scan_xml_resources_for_secrets(base_dir: Path) -> list[VulnFinding]:
                             description=rule.i18n_desc(),
                             recommendation=rule.i18n_rec(),
                         ))
-
-    return findings
-
-
-# ── Integración con apkleaks ──────────────────────────────────────────────────
-
-# Mapeo de categoría apkleaks → severidad
-_APKLEAKS_SEVERITY: dict[str, str] = {
-    "RSA_Private_Key": "critical",
-    "PGP_private_key_block": "critical",
-    "SSH_DSA_Private_Key": "critical",
-    "SSH_EC_Private_Key": "critical",
-    "Amazon_AWS_Access_Key_ID": "high",
-    "AWS_API_Key": "high",
-    "GitHub_Access_Token": "high",
-    "Stripe_API_Key": "high",
-    "Stripe_Restricted_API_Key": "high",
-    "PayPal_Braintree_Access_Token": "high",
-    "Heroku_API_Key": "high",
-    "Twilio_API_Key": "high",
-    "Firebase": "high",
-    "Google_API_Key": "high",
-    "Google_Cloud_Platform_Service_Account": "high",
-    "Google_OAuth_Access_Token": "high",
-    "Slack_Token": "high",
-    "Slack_Webhook": "high",
-    "MailChimp_API_Key": "high",
-    "Mailgun_API_Key": "high",
-    "Picatic_API_Key": "high",
-    "Square_Access_Token": "high",
-    "Square_OAuth_Secret": "high",
-    "Facebook_Access_Token": "high",
-    "Facebook_Secret_Key": "high",
-    "Twitter_Secret_Key": "high",
-    "Twitter_Access_Token": "high",
-    "Twitter_OAuth": "high",
-    "Authorization_Basic": "high",
-    "Authorization_Bearer": "high",
-    "JSON_Web_Token": "high",
-    "Password_in_URL": "high",
-    "Basic_Auth_Credentials": "high",
-    "Cloudinary_Basic_Auth": "high",
-    "Artifactory_API_Token": "medium",
-    "Artifactory_Password": "medium",
-    "Generic_API_Key": "medium",
-    "Generic_Secret": "medium",
-    "Amazon_AWS_S3_Bucket": "medium",
-    "Google_Cloud_Platform_OAuth": "medium",
-    "Facebook_ClientID": "low",
-    "Facebook_OAuth": "low",
-    "Twitter_ClientID": "low",
-    "GitHub": "low",
-    "Discord_BOT_Token": "medium",
-    "IP_Address": "info",
-    "Mac_Address": "info",
-    "Mailto": "info",
-    "LinkFinder": "info",
-    "DEFCON_CTF_Flag": "info",
-    "HackerOne_CTF_Flag": "info",
-    "HackTheBox_CTF_Flag": "info",
-    "TryHackMe_CTF_Flag": "info",
-}
-
-
-def scan_with_apkleaks(
-    apk_path: Path,
-    progress_callback=None,
-) -> list[VulnFinding]:
-    """
-    Ejecuta apkleaks sobre el APK original y convierte sus hallazgos a VulnFinding.
-    Requiere apkleaks instalado (pip install apkleaks).
-    Devuelve lista vacía si apkleaks no está disponible o falla.
-    """
-    import json as _json
-    import shutil
-    import subprocess
-    import tempfile
-
-    def _parse_plain_output(raw_text: str) -> dict[str, list[str]]:
-        """Parsea salida estilo texto de apkleaks: [Categoria] y lineas '- valor'."""
-        parsed: dict[str, list[str]] = {}
-        current: str | None = None
-        for line in raw_text.splitlines():
-            s = line.strip()
-            if not s:
-                continue
-            if s.startswith("[") and s.endswith("]") and len(s) > 2:
-                current = s[1:-1].strip()
-                if current:
-                    parsed.setdefault(current, [])
-                continue
-            if current and s.startswith("- "):
-                value = s[2:].strip()
-                if value:
-                    parsed[current].append(value)
-        return parsed
-
-    apkleaks_bin = shutil.which("apkleaks")
-    if not apkleaks_bin:
-        if progress_callback:
-            progress_callback("apkleaks no encontrado — omitiendo scan de secretos con apkleaks")
-        return []
-
-    if progress_callback:
-        progress_callback("Escaneando secretos con apkleaks...")
-
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-        out_path = tmp.name
-
-    try:
-        proc = subprocess.run(
-            [apkleaks_bin, "-f", str(apk_path), "-o", out_path, "--json"],
-            capture_output=True,
-            text=True,
-            timeout=240,
-        )
-        if proc.returncode not in (0, 1):
-            if progress_callback:
-                progress_callback(f"apkleaks terminó con rc={proc.returncode}")
-            return []
-
-        raw = Path(out_path).read_text(encoding="utf-8", errors="replace").strip()
-        if not raw:
-            return []
-
-        data: dict[str, object]
-        try:
-            decoded = _json.loads(raw)
-            if isinstance(decoded, dict):
-                data = decoded
-            else:
-                data = {"results": []}
-        except _json.JSONDecodeError:
-            plain = _parse_plain_output(raw)
-            data = {
-                "results": [
-                    {"name": name, "matches": values}
-                    for name, values in plain.items()
-                ]
-            }
-    except subprocess.TimeoutExpired:
-        if progress_callback:
-            progress_callback("apkleaks timeout (>240s), omitiendo")
-        return []
-    except OSError:
-        return []
-    finally:
-        Path(out_path).unlink(missing_ok=True)
-
-    findings: list[VulnFinding] = []
-    for entry in data.get("results", []):
-        name: str = entry.get("name", "Unknown")
-        matches: list[str] = entry.get("matches", [])
-        severity = _APKLEAKS_SEVERITY.get(name, "medium")
-        # Omitir categorías de solo info (IP, URLs, etc.) — demasiado ruido
-        if severity == "info":
-            continue
-        if name == "LinkFinder":
-            continue
-        for match in matches:
-            # ── Filtro de falsos positivos conocidos de apkleaks ──────────
-            if _is_apkleaks_false_positive(name, match):
-                continue
-            findings.append(VulnFinding(
-                rule_id=f"AL-{name[:20]}",
-                title=name.replace("_", " "),
-                severity=severity,
-                category="M1 - Credenciales",
-                file=apk_path,
-                line=0,
-                matched_text=match[:120],
-                description=f"Secreto o credencial detectada por apkleaks: {name}.",
-                recommendation="Eliminar credenciales del código. Usar variables de entorno o un gestor de secretos.",
-            ))
-
-    if progress_callback:
-        pre_count = sum(len(e.get("matches", [])) for e in data.get("results", []))
-        if pre_count != len(findings):
-            progress_callback(
-                f"apkleaks: {len(findings)} secreto(s) tras filtrar "
-                f"{pre_count - len(findings)} falso(s) positivo(s)"
-            )
-        elif findings:
-            progress_callback(f"apkleaks: {len(findings)} secreto(s) encontrado(s)")
-
-    return findings
-
-
-# ── Filtro de falsos positivos de apkleaks ────────────────────────────────────
-
-# Patrones de valores que apkleaks reporta pero NO son secretos reales
-_APKLEAKS_FP_PATTERNS: list[re.Pattern] = [
-    # "version=X.Y.Z" matcheado como JWT (es metadata de librerías GMS)
-    re.compile(r'^(?:version|common_client|googleid_client|image_client|review_client)=[\d.]+'),
-    # "basic constraint(s)" matcheado como Authorization Basic (es parte de X.509 certs)
-    re.compile(r'^basic\s+constraint'),
-    # Números de versión sueltos que no son tokens
-    re.compile(r'^[\d.]+$'),
-]
-
-# Categorías de apkleaks con alta tasa de FP en APKs Android normales
-_APKLEAKS_NOISY_CATEGORIES: dict[str, re.Pattern] = {
-    # JSON_Web_Token: apkleaks matchea "key=value" de metadata GMS como JWT
-    "JSON_Web_Token": re.compile(
-        r'^(?:version|common_client|googleid_client|image_client|review_client)='
-        r'|^[\w._]+=[\d.]+$'
-    ),
-    # Authorization_Basic: matchea "basic constraint" de certificados X.509
-    "Authorization_Basic": re.compile(
-        r'basic\s+constraint|BasicConstraints'
-    ),
-    # Facebook_Secret_Key: FACEBOOK_SIGNATURE es la firma pública del SDK, no un secreto
-    "Facebook_Secret_Key": re.compile(
-        r'FACEBOOK_SIGNATURE\s*='
-    ),
-}
-
-
-def _is_apkleaks_false_positive(category: str, match_text: str) -> bool:
-    """Devuelve True si el hallazgo de apkleaks es un falso positivo conocido."""
-    text = match_text.strip()
-
-    # Filtros genéricos (aplican a cualquier categoría)
-    for fp_pattern in _APKLEAKS_FP_PATTERNS:
-        if fp_pattern.search(text):
-            return True
-
-    # Filtros por categoría
-    cat_pattern = _APKLEAKS_NOISY_CATEGORIES.get(category)
-    if cat_pattern and cat_pattern.search(text):
-        return True
-
-    return False
-
-
-# ── Gitleaks scanner ──────────────────────────────────────────────────────────
-
-# Reglas de gitleaks cuyo hallazgo se considera critical (claves privadas, AWS, etc.)
-_GITLEAKS_CRITICAL_RULES: set[str] = {
-    "private-key",
-    "aws-access-token",
-    "aws-secret-access-key",
-    "github-pat",
-    "github-fine-grained-pat",
-    "gitlab-pat",
-    "stripe-access-token",
-    "twilio-api-key",
-    "generic-api-key",
-}
-
-
-def scan_with_gitleaks(
-    source_dir: Path,
-    progress_callback=None,
-) -> list[VulnFinding]:
-    """
-    Ejecuta gitleaks sobre un directorio de código decompilado y convierte
-    sus hallazgos a VulnFinding.
-    Requiere gitleaks instalado (brew install gitleaks).
-    Devuelve lista vacía si gitleaks no está disponible o falla.
-    """
-    import json as _json
-    import shutil
-    import subprocess
-    import tempfile
-
-    gitleaks_bin = shutil.which("gitleaks")
-    if not gitleaks_bin:
-        if progress_callback:
-            progress_callback("gitleaks no encontrado — omitiendo scan")
-        return []
-
-    if progress_callback:
-        progress_callback("Escaneando secretos con gitleaks...")
-
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-        out_path = tmp.name
-
-    try:
-        proc = subprocess.run(
-            [
-                gitleaks_bin, "detect",
-                "--no-git",
-                "--no-banner",
-                "-s", str(source_dir),
-                "-f", "json",
-                "-r", out_path,
-                "--log-level", "error",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        # rc=0 → sin hallazgos, rc=1 → hallazgos encontrados, ≥2 → error
-        if proc.returncode >= 2:
-            if progress_callback:
-                progress_callback(f"gitleaks terminó con rc={proc.returncode}")
-            return []
-
-        raw = Path(out_path).read_text(encoding="utf-8", errors="replace").strip()
-        if not raw:
-            return []
-
-        try:
-            items = _json.loads(raw)
-        except _json.JSONDecodeError:
-            if progress_callback:
-                progress_callback("gitleaks: JSON inválido")
-            return []
-
-        if not isinstance(items, list):
-            return []
-
-    except subprocess.TimeoutExpired:
-        if progress_callback:
-            progress_callback("gitleaks timeout (>300s), omitiendo")
-        return []
-    except OSError:
-        return []
-    finally:
-        Path(out_path).unlink(missing_ok=True)
-
-    findings: list[VulnFinding] = []
-    for item in items:
-        rule_id = item.get("RuleID", "unknown")
-        description = item.get("Description", rule_id)
-        secret = item.get("Secret", item.get("Match", ""))
-        file_path = item.get("File", "")
-        start_line = item.get("StartLine", 0)
-        entropy = item.get("Entropy", 0.0)
-
-        severity = "critical" if rule_id in _GITLEAKS_CRITICAL_RULES else "high"
-
-        desc_text = f"{description}"
-        if entropy:
-            desc_text += f" (entropy: {entropy:.2f})"
-
-        findings.append(VulnFinding(
-            rule_id=f"GL-{rule_id}",
-            title=description,
-            severity=severity,
-            category="M1 - Credenciales",
-            file=Path(file_path),
-            line=start_line,
-            matched_text=secret[:120] if secret else "",
-            description=desc_text,
-            recommendation="Eliminar credenciales del código. Usar variables de entorno o un gestor de secretos.",
-        ))
-
-    if progress_callback:
-        progress_callback(f"gitleaks: {len(findings)} secreto(s) encontrado(s)")
 
     return findings

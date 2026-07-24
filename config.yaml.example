@@ -1,3 +1,6 @@
+# Values can reference environment variables with "${VAR_NAME}", e.g.:
+#   aas_token: '${GOOGLE_PLAY_AAS_TOKEN}'
+# Useful to keep real secrets out of config.yaml (which is still gitignored).
 google_play:
   email: ''
   aas_token: ''
@@ -141,3 +144,10 @@ auto:
 batch:
   list_file: ''           # path to the list file (optional if passed as CLI argument)
   stop_on_error: false    # stop batch processing if an app fails
+
+# ── Persistence (SQLite) ──────────────────────────────────────────────────────
+# Every analysis is also recorded in a local SQLite DB (runs/findings/artifacts),
+# in addition to the existing reports/<pkg>/*.json and PDF (non-destructive).
+store:
+  enabled: true          # set false to skip SQLite persistence entirely
+  db_path: ''            # empty = ./nutcracker.db at the project root
