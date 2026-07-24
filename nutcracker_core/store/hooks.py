@@ -9,6 +9,7 @@ mismo bus de post-hooks que usan los plugins (``after_analysis``).
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,17 @@ def _persist_after_analysis(
                 repository.record_artifact(conn, run_id, artifact_type, str(path))
 
         repository.touch_app_run(conn, package)
+
+        # Fase 1 (cola): si este análisis corrió como job de queue/engine.py, el
+        # subproceso hijo trae NUTCRACKER_QUEUE_JOB_ID en su entorno — enlazamos
+        # el job con el run real para que el motor pueda leer package/verdict de
+        # vuelta sin adivinarlos antes de que termine el análisis.
+        job_id = os.environ.get("NUTCRACKER_QUEUE_JOB_ID")
+        if job_id:
+            try:
+                repository.link_job_run(conn, int(job_id), run_id, package)
+            except Exception as exc:  # noqa: BLE001
+                _log.debug("link_job_run falló para job %s: %s", job_id, exc)
     finally:
         conn.close()
 

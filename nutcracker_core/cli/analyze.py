@@ -39,11 +39,21 @@ from . import cli
     metavar="SERIAL",
     help="ADB device serial for --launch (default: first available).",
 )
-def analyze(apk_path: str, config_path: str, report: str | None, launch: bool, serial: str | None) -> None:
+@click.option(
+    "--static-only",
+    is_flag=True,
+    default=False,
+    help="Force jadx-only decompilation and skip Frida/device runtime steps "
+         "(used by queued/scheduled batch runs; see `nutcracker queue`/`serve`).",
+)
+def analyze(apk_path: str, config_path: str, report: str | None, launch: bool, serial: str | None,
+            static_only: bool) -> None:
     """Analyze a local APK for anti-root protections."""
     orch._LAUNCH_APP = launch
     orch._LAUNCH_SERIAL = serial
     config = load_config(config_path)
+    if static_only:
+        orch.apply_static_only_override(config)
     orch._CFG = config
     orch._init_i18n(config)
     save_json_cfg = bool(

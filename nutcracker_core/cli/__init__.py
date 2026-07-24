@@ -140,6 +140,9 @@ from . import launch as _launch  # noqa: E402,F401
 from . import setup_token as _setup_token  # noqa: E402,F401
 from . import batch as _batch  # noqa: E402,F401
 from . import regen_pdf as _regen_pdf  # noqa: E402,F401
+from . import queue_cmd as _queue_cmd  # noqa: E402,F401  — Fase 1: `nutcracker queue add|ls`
+from . import schedule_cmd as _schedule_cmd  # noqa: E402,F401  — Fase 1: `nutcracker schedule set|ls`
+from . import serve as _serve  # noqa: E402,F401  — Fase 1: `nutcracker serve` (daemon cola+scheduler)
 
 install_persistence()
 load_plugins(cli)

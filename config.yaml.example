@@ -151,3 +151,19 @@ batch:
 store:
   enabled: true          # set false to skip SQLite persistence entirely
   db_path: ''            # empty = ./nutcracker.db at the project root
+
+# ── Queue (mass execution — plan.md Fase 1) ────────────────────────────────────
+# `nutcracker queue add`/`nutcracker serve`: static jobs (decompile/scan/OSINT)
+# run in parallel; dynamic jobs (Frida/ADB on a physical device) are always
+# serialized per device serial, regardless of dynamic_workers.
+queue:
+  static_workers: 4      # parallel static analyses at once
+  dynamic_workers: 2      # concurrent *devices* for dynamic jobs (never same serial)
+
+# ── Scheduler (periodic reviews — plan.md Fase 1.2) ────────────────────────────
+# `nutcracker serve` re-queues every app whose next_due_at has passed, and
+# reschedules it after each run using its own `schedule` entry (or this default).
+scheduler:
+  enabled: true
+  poll_interval_minutes: 60      # how often the daemon checks for due apps
+  default_interval_days: 30      # ≥1 review/month per app unless overridden

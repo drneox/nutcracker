@@ -24,6 +24,9 @@ logs/
 .semgrep/
 frida_scripts/
 config.yaml
+nutcracker.db
+nutcracker.db-wal
+nutcracker.db-shm
 
 # AI / IDE tool files
 .code-review-graph/

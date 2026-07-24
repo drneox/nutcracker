@@ -20,3 +20,6 @@ frida-dexdump>=2.0.1
 
 # Utilidades HTTP
 requests>=2.31.0
+
+# Cola y scheduler (Fase 1: ejecución masiva + revisiones periódicas)
+apscheduler>=3.10

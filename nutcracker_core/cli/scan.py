@@ -56,8 +56,15 @@ from . import cli
     metavar="ARCHIVO",
     help="Path to save the JSON report.",
 )
+@click.option(
+    "--static-only",
+    is_flag=True,
+    default=False,
+    help="Force jadx-only decompilation and skip Frida/device runtime steps "
+         "(used by queued/scheduled batch runs; see `nutcracker queue`/`serve`).",
+)
 def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
-         keep_apk: bool, report: str | None) -> None:
+         keep_apk: bool, report: str | None, static_only: bool) -> None:
     """
     Download an APK and analyze it for anti-root protections.
 
@@ -67,6 +74,8 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
       - Direct URL to an .apk file (https://example.com/app.apk)
     """
     config = load_config(config_path)
+    if static_only:
+        orch.apply_static_only_override(config)
     orch._CFG = config
     orch._init_i18n(config)
     output_dir = output_dir or cfg_get(config, "downloader", "output_dir") or "./downloads"

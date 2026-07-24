@@ -10,15 +10,42 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "nutcracker.db"
 
-# Migraciones futuras: {version_destino: [statements]}. La versión 1 se aplica
-# directamente desde schema.sql (ver _apply_schema).
-_MIGRATIONS: dict[int, list[str]] = {}
+# Migraciones incrementales: {version_destino: [statements]}. La versión 1 se aplica
+# directamente desde schema.sql (ver _apply_schema). Todas usan "IF NOT EXISTS" para
+# ser idempotentes tanto en bases nuevas (0→1→2 en la misma conexión) como existentes.
+_MIGRATIONS: dict[int, list[str]] = {
+    # Fase 1 del plan: tabla de jobs de la cola (nutcracker_core/queue/).
+    # Desacoplada de `runs`: `runs` registra el resultado real de un análisis
+    # (lo escribe store/hooks.py al terminar); `queue_jobs` registra el ciclo de
+    # vida de un encolado (queued→running→done/error) y se enlaza al `run_id`
+    # real vía NUTCRACKER_QUEUE_JOB_ID (ver store/hooks.py y queue/engine.py).
+    2: [
+        """
+        CREATE TABLE IF NOT EXISTS queue_jobs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            target          TEXT NOT NULL,
+            kind            TEXT NOT NULL DEFAULT 'static',   -- static | dynamic
+            status          TEXT NOT NULL DEFAULT 'queued',   -- queued | running | done | error
+            serial          TEXT,               -- serial ADB (solo jobs dinámicos)
+            priority        INTEGER NOT NULL DEFAULT 0,
+            package         TEXT,               -- se completa cuando el job termina
+            run_id          INTEGER REFERENCES runs(id),
+            error           TEXT,
+            created_at      TEXT NOT NULL,
+            started_at      TEXT,
+            finished_at     TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_queue_jobs_status ON queue_jobs(status)",
+        "CREATE INDEX IF NOT EXISTS idx_queue_jobs_package ON queue_jobs(package)",
+    ],
+}
 
 
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
@@ -31,6 +58,11 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # La cola (Fase 1) puede tener varios procesos (engine + subprocesos hijos)
+    # escribiendo en la misma base casi a la vez; con WAL esto es seguro pero
+    # puede haber contención breve — sqlite3 reintenta en vez de fallar con
+    # "database is locked" mientras esté dentro de este margen.
+    conn.execute("PRAGMA busy_timeout=10000")
     migrate(conn)
     return conn
 

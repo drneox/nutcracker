@@ -197,3 +197,67 @@ def get_schedule(conn: sqlite3.Connection, package: str) -> sqlite3.Row | None:
 
 def list_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM schedule ORDER BY package").fetchall()
+
+
+# ── queue_jobs (Fase 1: cola paralela/secuencial) ──────────────────────────────
+
+def enqueue_job(conn: sqlite3.Connection, target: str, kind: str = "static",
+                 serial: str | None = None, priority: int = 0) -> int:
+    """Inserta un job en estado 'queued' y retorna su id."""
+    cur = conn.execute(
+        """
+        INSERT INTO queue_jobs (target, kind, serial, priority, status, created_at)
+        VALUES (?, ?, ?, ?, 'queued', ?)
+        """,
+        (target, kind, serial, priority, _utcnow()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def update_job_status(conn: sqlite3.Connection, job_id: int, status: str,
+                       error: str | None = None) -> None:
+    """Transiciona el estado de un job. Marca started_at/finished_at automáticamente."""
+    now = _utcnow()
+    started_at = now if status == "running" else None
+    finished_at = now if status in ("done", "error") else None
+    conn.execute(
+        """
+        UPDATE queue_jobs SET
+            status = ?,
+            error = COALESCE(?, error),
+            started_at = COALESCE(?, started_at),
+            finished_at = COALESCE(?, finished_at)
+        WHERE id = ?
+        """,
+        (status, error, started_at, finished_at, job_id),
+    )
+    conn.commit()
+
+
+def link_job_run(conn: sqlite3.Connection, job_id: int, run_id: int, package: str) -> None:
+    """Vincula un queue_job con el `run` real que produjo. El propio subproceso del
+    job llama a esto desde store/hooks.py (vía NUTCRACKER_QUEUE_JOB_ID), porque el
+    package real solo se conoce una vez terminado el análisis (descarga/parseo del
+    APK), no al momento de encolar."""
+    conn.execute(
+        "UPDATE queue_jobs SET run_id = ?, package = ? WHERE id = ?",
+        (run_id, package, job_id),
+    )
+    conn.commit()
+
+
+def get_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM queue_jobs WHERE id = ?", (job_id,)).fetchone()
+
+
+def list_jobs(conn: sqlite3.Connection, status: str | None = None,
+              limit: int = 100) -> list[sqlite3.Row]:
+    if status:
+        return conn.execute(
+            "SELECT * FROM queue_jobs WHERE status = ? ORDER BY id DESC LIMIT ?",
+            (status, limit),
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM queue_jobs ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()

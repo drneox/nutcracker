@@ -69,6 +69,51 @@ _LAUNCH_APP: bool = False  # --launch: lanzar app con bypass script tras el aná
 _LAUNCH_SERIAL: str | None = None  # --serial para --launch
 
 
+def apply_static_only_override(config: dict) -> None:
+    """Fuerza decompilación jadx y evita el flujo runtime/dispositivo para esta
+    ejecución, sin tocar config.yaml en disco (usado por `--static-only` en
+    `analyze`/`scan`). Pensado para jobs encolados o del scheduler (Fase 1 del
+    plan): una revisión masiva/periódica no debe competir por el teléfono físico,
+    que es un recurso compartido y escaso."""
+    pipelines = config.setdefault("pipelines", {})
+    protected = pipelines.setdefault("protected", {})
+    protected["decompilation"] = "jadx"
+    protected.setdefault("fallback_jadx", True)
+
+
+def build_job_cmd(
+    target: str,
+    *,
+    is_local_apk: bool,
+    config_path: str = "config.yaml",
+    static_only: bool = True,
+    launch: bool = False,
+    serial: str | None = None,
+) -> list[str]:
+    """Construye el argv para ejecutar un job de análisis como subproceso aislado.
+
+    Usado por nutcracker_core/queue/engine.py (Fase 1 del plan). Cada job corre en
+    su propio proceso Python en vez de llamar a `_run_analysis` en el mismo
+    proceso: este módulo mantiene estado mutuo a nivel de módulo (`_CFG`,
+    `_MANIFEST_ANALYSIS`, `_OSINT_RESULT`, ...) que no es seguro entre análisis
+    concurrentes de APKs distintas. El aislamiento por proceso evita ese riesgo
+    sin reescribir el orquestador, y de paso da paralelismo real (sin GIL).
+    """
+    entry = str(Path(__file__).resolve().parent.parent / "nutcracker.py")
+    cmd = [sys.executable, entry]
+    if is_local_apk:
+        cmd += ["analyze", target, "--config", config_path]
+        if launch:
+            cmd.append("--launch")
+            if serial:
+                cmd += ["--serial", serial]
+    else:
+        cmd += ["scan", target, "--config", config_path, "--keep-apk"]
+    if static_only:
+        cmd.append("--static-only")
+    return cmd
+
+
 def _init_i18n(config: dict) -> None:
     """Initialize the i18n module from the loaded config."""
     language = str(cfg_get(config, "language", default="en")).strip().lower()
