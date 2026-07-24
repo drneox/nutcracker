@@ -72,6 +72,12 @@ class QueueEngine:
         self._pending: list[Job] = []
         self._device_locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        # Hook opcional (Fase 3, dashboard): si se asigna, cada línea de stdout
+        # del subproceso de un job se publica aquí en vivo, línea a línea,
+        # en vez de esperar a que el job termine. None (default) preserva el
+        # camino original — subprocess.run() bloqueante, sin cambios de
+        # comportamiento para quien no lo use (CLI, scheduler, tests de Fase 1).
+        self.on_line: Callable[[int, str], None] | None = None
 
     # ── Encolado ─────────────────────────────────────────────────────────────
 
@@ -176,7 +182,10 @@ class QueueEngine:
         env["NUTCRACKER_QUEUE_JOB_ID"] = str(job.db_id)
 
         _log.info("job #%s: %s", job.db_id, " ".join(cmd))
-        proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        if self.on_line is not None:
+            proc = self._run_streaming(job.db_id, cmd, env)
+        else:
+            proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
         ok = proc.returncode == 0
         tail = (proc.stderr or proc.stdout or "").strip()[-2000:]
         error = "" if ok else tail
@@ -196,6 +205,22 @@ class QueueEngine:
 
         return JobOutcome(job=job, ok=ok, returncode=proc.returncode, error=error,
                            run_id=run_id, package=package)
+
+    def _run_streaming(self, job_id: int, cmd: list[str], env: dict) -> subprocess.CompletedProcess:
+        """Como subprocess.run(), pero publica cada línea de salida a
+        self.on_line(job_id, line) en cuanto se produce (stdout+stderr
+        combinados, orden real de aparición) en vez de solo al terminar."""
+        proc = subprocess.Popen(
+            cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+        lines: list[str] = []
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            lines.append(line)
+            self.on_line(job_id, line.rstrip("\n"))  # type: ignore[misc]
+        proc.wait()
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(lines), stderr="")
 
     def _run_dynamic(self, job: Job) -> JobOutcome:
         serial = job.serial or "default"

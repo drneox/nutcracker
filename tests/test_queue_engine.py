@@ -253,6 +253,51 @@ def test_drain_does_not_rerun_jobs_already_pending_in_memory(monkeypatch, tmp_pa
     assert run_count["n"] == 1
 
 
+# ── Streaming en vivo (Fase 3: dashboard) ───────────────────────────────────
+
+def test_on_line_streams_output_and_does_not_affect_outcome(monkeypatch, tmp_path, engine):
+    """engine.on_line (usado por el plugin dashboard para WS en vivo) debe
+    recibir cada línea a medida que se produce, sin cambiar el resultado final
+    del job frente al camino no-streaming (subprocess.run)."""
+
+    class _FakePopen:
+        def __init__(self, cmd, env=None, stdout=None, stderr=None, text=None, bufsize=None):
+            self.stdout = iter(["primera línea\n", "segunda línea\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.Popen", _FakePopen)
+
+    received: list[tuple[int, str]] = []
+    engine.on_line = lambda job_id, line: received.append((job_id, line))
+
+    job = engine.submit(str(_touch_apk(tmp_path, "stream.apk")), kind="static")
+    outcomes = engine.drain()
+
+    assert outcomes[0].ok is True
+    assert received == [(job.db_id, "primera línea"), (job.db_id, "segunda línea")]
+
+
+def test_without_on_line_uses_subprocess_run_unchanged(monkeypatch, tmp_path, engine):
+    """Sin on_line asignado (default), debe seguir usando subprocess.run tal
+    cual (camino de Fase 1, ya probado) — Popen no debe ni importarse/llamarse."""
+
+    def _fail_if_called(*a, **kw):
+        raise AssertionError("Popen no debería llamarse cuando on_line es None")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.Popen", _fail_if_called)
+    monkeypatch.setattr(
+        "nutcracker_core.queue.engine.subprocess.run",
+        lambda cmd, env=None, capture_output=True, text=True: subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+
+    engine.submit(str(_touch_apk(tmp_path, "nostream.apk")), kind="static")
+    outcomes = engine.drain()
+    assert outcomes[0].ok is True
+
+
 def test_enqueue_due_apps_only_queues_overdue_packages(tmp_path, engine):
     import datetime
 
