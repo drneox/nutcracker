@@ -454,6 +454,10 @@ def _print_verdict(result, vuln_scan) -> None:
 
     runtime_bypass = any(k in method.lower() for k in ("frida", "fart", "gadget"))
     was_bypassed = protected and runtime_bypass and dex_count > 0
+    # ROADMAP "Differentiate runtime bypass vs DEX extraction": aipwn puede
+    # confirmar un bypass (report_success) sin haber volcado DEX — verdicto
+    # dinámico independiente de was_bypassed (que exige dex_count > 0).
+    aipwn_bypass_only = protected and bool(getattr(result, "aipwn_bypass_confirmed", False)) and not was_bypassed
 
     if not protected:
         color  = "red"
@@ -465,6 +469,11 @@ def _print_verdict(result, vuln_scan) -> None:
         icon   = "⚡"
         title  = t("cli_protection_broken_banner")
         detail = t("cli_bypassed_detail", method=method, dex_count=dex_count)
+    elif aipwn_bypass_only:
+        color  = "yellow"
+        icon   = "⚡"
+        title  = t("cli_bypass_confirmed_banner")
+        detail = t("cli_bypass_confirmed_detail")
     else:
         color  = "green"
         icon   = "✔"

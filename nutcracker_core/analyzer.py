@@ -156,6 +156,14 @@ class AnalysisResult:
         # Campo opcional: rellena nutcracker.py si se hizo decompilación con frida
         # Formato: {"method": "frida-dexdump" | "FART" | None, "dex_count": int, "source_dir": str}
         self.decompilation_info: "dict | None" = None
+        # ROADMAP "Differentiate runtime bypass vs DEX extraction in reports":
+        # True cuando el plugin aipwn confirmó un bypass runtime (report_success
+        # del FridaAgent) SIN que necesariamente se haya volcado DEX en memoria
+        # (protection_broken exige dex_count > 0, lo cual es engañoso — apps con
+        # anti-root nativo agresivo pueden matar el proceso antes de que los
+        # hooks FART corran, aun con el bypass confirmado). Lo rellena
+        # plugins/aipwn/__init__.py tras un run exitoso; ver build_masvs_report().
+        self.aipwn_bypass_confirmed: bool = False
 
     @property
     def protected(self) -> bool:
@@ -202,6 +210,7 @@ class AnalysisResult:
             "elapsed_seconds": self.elapsed_seconds,
             "anti_root_protected": self.protected,
             "protection_broken": self.protection_broken,
+            "aipwn_bypass_confirmed": self.aipwn_bypass_confirmed,
             "confidence": self.confidence,
             "high_strength_detections": self.high_strength_count,
             "detections": [r.to_dict() for r in self.results],
@@ -226,6 +235,7 @@ class AnalysisResult:
             elapsed_seconds=data.get("elapsed_seconds"),
         )
         obj.decompilation_info = data.get("decompilation_info")
+        obj.aipwn_bypass_confirmed = bool(data.get("aipwn_bypass_confirmed", False))
         return obj
 
 

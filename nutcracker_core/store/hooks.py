@@ -134,11 +134,13 @@ def _verdict_from_result(result: Any) -> str:
 
 def _to_finding_record(finding: Any, vuln_scan: Any) -> repository.FindingRecord:
     try:
-        from ..masvs import RULE_TO_MASVS
+        from ..masvs import RULE_TO_MASVS, RULE_TO_MASWE, RULE_TO_CWE
 
         masvs_ids = RULE_TO_MASVS.get(finding.rule_id, [])
+        maswe_ids = RULE_TO_MASWE.get(finding.rule_id, [])
+        cwe_ids = RULE_TO_CWE.get(finding.rule_id, [])
     except Exception:  # noqa: BLE001
-        masvs_ids = []
+        masvs_ids, maswe_ids, cwe_ids = [], [], []
 
     file_str = ""
     try:
@@ -152,6 +154,8 @@ def _to_finding_record(finding: Any, vuln_scan: Any) -> repository.FindingRecord
         severity=getattr(finding, "severity", ""),
         category=getattr(finding, "category", ""),
         masvs=masvs_ids,
+        maswe=maswe_ids,
+        cwe=cwe_ids,
         file=file_str,
         line=getattr(finding, "line", 0) or 0,
     )

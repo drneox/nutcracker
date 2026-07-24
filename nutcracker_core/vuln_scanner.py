@@ -1154,6 +1154,18 @@ def auto_scan(
     return result
 
 
+# Reglas sintetizadas desde AndroidManifest.xml (no son VulnRule con regex:
+# se generan directamente en scan_manifest_components a partir de atributos
+# XML). A nivel de módulo para que checks/static/adapter.py (Fase 2.2 del
+# plan) las exponga en el registry unificado sin duplicar esta tabla.
+EXPORTED_COMPONENT_RULES: dict[str, tuple[str, str, str, str]] = {
+    "activity":  ("COMP006", "Activity exported sin permission",   "critical", "M6 - Componentes inseguros"),
+    "service":   ("COMP007", "Service exported sin permission",    "high",     "M6 - Componentes inseguros"),
+    "receiver":  ("COMP004", "BroadcastReceiver exported sin permission", "high", "M6 - Componentes inseguros"),
+    "provider":  ("COMP008", "ContentProvider exported sin permission",   "critical", "M6 - Componentes inseguros"),
+}
+
+
 def scan_manifest_components(source_dir: Path) -> list[VulnFinding]:
     """
     Parsea AndroidManifest.xml buscando:
@@ -1213,15 +1225,8 @@ def scan_manifest_components(source_dir: Path) -> list[VulnFinding]:
             ))
 
     # ── Componentes exported sin permission ──────────────────────────────────
-    component_tags = {
-        "activity":  ("COMP006", "Activity exported sin permission",   "critical", "M6 - Componentes inseguros"),
-        "service":   ("COMP007", "Service exported sin permission",    "high",     "M6 - Componentes inseguros"),
-        "receiver":  ("COMP004", "BroadcastReceiver exported sin permission", "high", "M6 - Componentes inseguros"),
-        "provider":  ("COMP008", "ContentProvider exported sin permission",   "critical", "M6 - Componentes inseguros"),
-    }
-
     if app_el is not None:
-        for tag, (rule_id, title, severity, category) in component_tags.items():
+        for tag, (rule_id, title, severity, category) in EXPORTED_COMPONENT_RULES.items():
             for el in app_el.findall(tag):
                 exported = el.get(f"{{{ns}}}exported")
                 permission = el.get(f"{{{ns}}}permission")
