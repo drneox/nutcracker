@@ -48,13 +48,36 @@ def queue() -> None:
 @click.option("--aipwn", is_flag=True, default=False,
               help="Job del agente de bypass aipwn (Frida+LLM). TARGET es un package id "
                    "ya analizado previamente, no una ruta/URL de APK.")
-@click.option("--serial", default=None, help="Serial ADB para job dinámico/aipwn.")
+@click.option("--then-aipwn", "then_aipwn", is_flag=True, default=False,
+              help="Encadena un job aipwn tras cada job estático que termine OK -- "
+                   "para procesar en cola un list_file completo (análisis estático + "
+                   "bypass aipwn para cada package, en orden). No combinar con "
+                   "--dynamic/--aipwn (implica un job estático como base).")
+@click.option(
+    "--source", "-s",
+    default=None,
+    type=click.Choice(["apk-pure", "google-play", "device"], case_sensitive=False),
+    help="Fuente del .apk para jobs estáticos con TARGET=package id o list_file de "
+         "package ids. \"device\" extrae el .apk ya instalado en el dispositivo "
+         "--serial (adb pull) en vez de descargarlo de una store -- aplica a TODAS "
+         "las entradas del list_file por igual (flag global, no por línea).",
+)
+@click.option("--serial", default=None, help="Serial ADB para job dinámico/aipwn/--source device.")
 @click.option("--run", "run_now", is_flag=True, default=False,
               help="Ejecutar la cola inmediatamente tras encolar (bloqueante).")
-def queue_add(target: str, config_path: str, dynamic: bool, aipwn: bool,
-              serial: str | None, run_now: bool) -> None:
+def queue_add(target: str, config_path: str, dynamic: bool, aipwn: bool, then_aipwn: bool,
+              source: str | None, serial: str | None, run_now: bool) -> None:
     """Encola TARGET: ruta a .apk local, URL, package id, o un list_file con una
-    entrada por línea (mismo formato que `nutcracker batch`)."""
+    entrada por línea (mismo formato que `nutcracker batch`).
+
+    Con --then-aipwn y un list_file de package ids, cada uno recibe primero un
+    análisis estático y, si termina OK, un job aipwn encadenado a continuación
+    -- útil para programar en cola varios escaneos + bypass desde un .txt.
+    """
+    if then_aipwn and (dynamic or aipwn):
+        console.print("[red]✘[/red] --then-aipwn no se combina con --dynamic/--aipwn.")
+        raise SystemExit(1)
+
     engine = _build_engine(config_path)
     targets = _read_targets(target)
     kind = "aipwn" if aipwn else ("dynamic" if dynamic else "static")
@@ -62,22 +85,35 @@ def queue_add(target: str, config_path: str, dynamic: bool, aipwn: bool,
     jobs = []
     for t in targets:
         try:
-            jobs.append(engine.submit(t, kind=kind, serial=serial))
+            jobs.append(engine.submit(t, kind=kind, serial=serial, source=source))
         except ValueError as exc:
             console.print(f"[red]✘[/red] {t}: {exc}")
 
     console.print(f"[green]✔[/green] {len(jobs)} job(s) encolado(s) ({kind}).")
 
-    if run_now and jobs:
-        def _on_result(o):  # noqa: ANN001
-            icon = "✔" if o.ok else "✘"
-            color = "green" if o.ok else "red"
-            extra = f"  package={o.package}" if o.package else ""
-            console.print(f"  [{color}]{icon}[/{color}] {o.job.target}{extra}")
+    if not (run_now and jobs):
+        return
 
-        outcomes = engine.drain(on_result=_on_result)
-        n_ok = sum(1 for o in outcomes if o.ok)
-        console.print(f"\n[bold]Resumen:[/bold] {n_ok}/{len(outcomes)} OK")
+    pending_aipwn: list[str] = []
+
+    def _on_result(o):  # noqa: ANN001
+        icon = "✔" if o.ok else "✘"
+        color = "green" if o.ok else "red"
+        extra = f"  package={o.package}" if o.package else ""
+        console.print(f"  [{color}]{icon}[/{color}] {o.job.target}{extra}")
+        if then_aipwn and o.job.kind == "static" and o.ok and o.package:
+            pending_aipwn.append(o.package)
+
+    outcomes = engine.drain(on_result=_on_result)
+
+    if pending_aipwn:
+        console.print(f"\n[bold]→[/bold] encadenando aipwn para {len(pending_aipwn)} package(s)...")
+        for pkg in pending_aipwn:
+            engine.submit(pkg, kind="aipwn", serial=serial)
+        outcomes += engine.drain(on_result=_on_result)
+
+    n_ok = sum(1 for o in outcomes if o.ok)
+    console.print(f"\n[bold]Resumen:[/bold] {n_ok}/{len(outcomes)} OK")
 
 
 @queue.command("ls")

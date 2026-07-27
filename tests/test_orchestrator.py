@@ -181,6 +181,39 @@ def test_build_job_cmd_aipwn_without_serial_omits_flag():
     assert cmd[-1] == "com.example.tapjacking"
 
 
+# ── build_job_cmd: source="device" (batch estático+aipwn desde archivo) ────
+
+def test_build_job_cmd_scan_with_device_source_adds_source_and_serial_flags():
+    cmd = orch.build_job_cmd(
+        "com.example.app", is_local_apk=False, static_only=True,
+        source="device", serial="ZY22GPM27J",
+    )
+    assert "scan" in cmd
+    assert "--source" in cmd
+    assert cmd[cmd.index("--source") + 1] == "device"
+    assert "--serial" in cmd
+    assert cmd[cmd.index("--serial") + 1] == "ZY22GPM27J"
+
+
+def test_build_job_cmd_scan_with_device_source_without_serial_omits_serial_flag():
+    cmd = orch.build_job_cmd("com.example.app", is_local_apk=False, source="device")
+    assert "--source" in cmd and "device" in cmd
+    assert "--serial" not in cmd
+
+
+def test_build_job_cmd_scan_without_source_omits_source_flag():
+    cmd = orch.build_job_cmd("com.example.app", is_local_apk=False)
+    assert "--source" not in cmd
+
+
+def test_build_job_cmd_local_apk_ignores_source():
+    """source solo aplica al branch `scan` (target=package id); analyze
+    (target ya es un .apk local) no lo usa -- no debe colarse en el cmd."""
+    cmd = orch.build_job_cmd("/tmp/app.apk", is_local_apk=True, source="device", serial="X")
+    assert "--source" not in cmd
+    assert "analyze" in cmd and "scan" not in cmd
+
+
 # ── _run_analysis: NUTCRACKER_APK_SOURCE (fix reportado en vivo, 2026-07-27) ─
 # El dashboard asumía que "re-analizar" siempre podía re-descargar la app por
 # package id -- fallaba para apps analizadas desde un .apk local nunca

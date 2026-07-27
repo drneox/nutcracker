@@ -102,6 +102,7 @@ def build_job_cmd(
     dynamic_checks: bool = False,
     serial: str | None = None,
     aipwn: bool = False,
+    source: str | None = None,
 ) -> list[str]:
     """Construye el argv para ejecutar un job de análisis como subproceso aislado.
 
@@ -125,6 +126,14 @@ def build_job_cmd(
     ``aipwn`` no acepta ``--config`` (siempre lee ``config.yaml`` por defecto),
     así que ``config_path``/``static_only``/``dynamic_checks`` se ignoran en
     este modo.
+
+    ``source="device"`` (job de tipo scan, ``target`` es un package id): en vez
+    de descargar de Google Play/APKPure, ``scan`` extrae el .apk ya instalado
+    en el dispositivo ``serial`` vía ``adb pull`` — ver
+    ``downloader.DeviceInstalledDownloader``. Útil para apps de prueba propias
+    no publicadas en ninguna store (mismo caso que motivó el fix de
+    "re-analizar" — pero resuelto desde el origen para apps nunca antes
+    analizadas localmente, no solo las que ya tienen un run previo).
     """
     entry = str(Path(__file__).resolve().parent.parent / "nutcracker.py")
     cmd = [sys.executable, entry]
@@ -141,6 +150,10 @@ def build_job_cmd(
                 cmd += ["--serial", serial]
     else:
         cmd += ["scan", target, "--config", config_path, "--keep-apk"]
+        if source:
+            cmd += ["--source", source]
+            if source == "device" and serial:
+                cmd += ["--serial", serial]
     if static_only:
         cmd.append("--static-only")
     return cmd

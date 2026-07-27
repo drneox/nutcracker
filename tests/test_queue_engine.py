@@ -554,6 +554,54 @@ def test_job_with_package_id_reuses_local_apk(monkeypatch, tmp_path, engine):
     assert "scan" not in cmd
 
 
+def test_job_with_source_device_builds_scan_with_source_and_serial(monkeypatch, engine):
+    """batch estático+aipwn con --source device (Fase de encolado desde .txt)."""
+    seen_cmds = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.app", kind="static", serial="ZY22GPM27J", source="device")
+    outcomes = engine.drain()
+
+    assert len(outcomes) == 1 and outcomes[0].ok
+    cmd = seen_cmds[0]
+    assert "scan" in cmd
+    assert "--source" in cmd and "device" in cmd
+    assert "--serial" in cmd and "ZY22GPM27J" in cmd
+
+
+def test_job_with_explicit_source_skips_local_apk_reuse_heuristic(monkeypatch, tmp_path, engine):
+    """FIX: si el usuario pide explícitamente --source device, no debe
+    silenciarse con un APK viejo que quedó en downloads/ de un intento previo
+    con otra fuente (google-play/apk-pure) -- job.source manda."""
+    pkg = "com.example.stale"
+    dl_dir = tmp_path / "downloads" / pkg
+    dl_dir.mkdir(parents=True)
+    (dl_dir / f"{pkg}.apk").write_bytes(b"PK\x03\x04")
+
+    monkeypatch.chdir(tmp_path)
+
+    seen_cmds = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit(pkg, kind="static", source="device", serial="X")
+    outcomes = engine.drain()
+
+    assert len(outcomes) == 1 and outcomes[0].ok
+    cmd = seen_cmds[0]
+    assert "scan" in cmd and "analyze" not in cmd
+    assert "--source" in cmd and "device" in cmd
+
+
 def test_job_with_package_id_falls_back_to_scan_when_no_local_apk(monkeypatch, tmp_path, engine):
     """Si no hay APK local reusable, el job cae al camino original:
     `scan <package>` (descarga)."""

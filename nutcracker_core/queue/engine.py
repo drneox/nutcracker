@@ -179,8 +179,13 @@ class QueueEngine:
     # ── Encolado ─────────────────────────────────────────────────────────────
 
     def submit(self, target: str, kind: str = "static", serial: str | None = None,
-               priority: int = 0) -> Job:
-        """Encola un job (persistido en SQLite como 'queued' de inmediato)."""
+               priority: int = 0, source: str | None = None) -> Job:
+        """Encola un job (persistido en SQLite como 'queued' de inmediato).
+
+        ``source`` solo aplica a jobs "static" con ``target`` = package id:
+        ``"device"`` extrae el .apk ya instalado en ``serial`` vía adb en vez
+        de descargarlo de una store (ver ``downloader.DeviceInstalledDownloader`,
+        ``orchestrator.build_job_cmd``)."""
         is_local = _is_local_apk(target)
         if kind == "dynamic" and not is_local:
             raise ValueError(
@@ -188,7 +193,8 @@ class QueueEngine:
                 "Descárgalo primero (nutcracker scan) o usa el plugin aipwn para "
                 "flujos dinámicos con descarga automática."
             )
-        job = Job(target=target, kind=kind, is_local_apk=is_local, serial=serial, priority=priority)
+        job = Job(target=target, kind=kind, is_local_apk=is_local, serial=serial,
+                   priority=priority, source=source)
         conn = db.connect(self.db_path)
         try:
             job.db_id = repository.enqueue_job(conn, target=target, kind=kind,
@@ -272,9 +278,12 @@ class QueueEngine:
         # antes de construir el comando. Esto evita que el dashboard fuerce
         # una nueva descarga (que falla si no hay credenciales o la app no
         # está disponible) cuando el APK ya existe localmente.
+        # job.source (p.ej. "device") es un pedido explícito del usuario sobre
+        # de dónde debe salir el .apk -- no lo pises con un APK viejo que
+        # pueda existir en downloads/ de un intento anterior con otra fuente.
         effective_target = job.target
         effective_is_local = job.is_local_apk
-        if not effective_is_local and job.kind != "aipwn":
+        if not effective_is_local and job.kind != "aipwn" and not job.source:
             resolved = _resolve_local_apk(job.target)
             if resolved:
                 _log.info("job #%s: reusing local APK %s for package %s",
@@ -290,6 +299,7 @@ class QueueEngine:
             dynamic_checks=(job.kind == "dynamic"),
             serial=job.serial,
             aipwn=(job.kind == "aipwn"),
+            source=job.source,
         )
         env = dict(os.environ)
         env["NUTCRACKER_QUEUE_JOB_ID"] = str(job.db_id)

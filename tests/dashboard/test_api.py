@@ -123,6 +123,103 @@ def test_queue_add_rejects_dynamic_without_local_apk(client):
     assert r.status_code == 400
 
 
+# ── /api/queue/batch (batch estático+aipwn desde un .txt subido en el frontend) ─
+
+def _wait_for_drain(engine, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while getattr(engine, "_dashboard_draining", False) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not getattr(engine, "_dashboard_draining", False), "el drenado de fondo no terminó a tiempo"
+
+
+def test_queue_batch_rejects_empty_target_list(client):
+    r = client.post("/api/queue/batch", json={"targets": []})
+    assert r.status_code == 400
+
+
+def test_queue_batch_ignores_blank_lines_and_comments(client, engine):
+    r = client.post("/api/queue/batch", json={
+        "targets": ["com.app.one", "", "  # comentario", "com.app.two"],
+        "then_aipwn": False,
+    })
+    assert r.status_code == 200
+    assert r.json()["queued"] == 2
+    _wait_for_drain(engine)
+
+
+def test_queue_batch_chains_aipwn_after_each_successful_static_job(monkeypatch, client, engine):
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        if "scan" in cmd:
+            job_id = int(env["NUTCRACKER_QUEUE_JOB_ID"])
+            pkg = cmd[cmd.index("scan") + 1]
+            conn = db.connect(engine.db_path)
+            try:
+                run_id = repository.insert_run(conn, pkg, kind="static", status="done")
+                repository.link_job_run(conn, job_id, run_id, pkg)
+            finally:
+                conn.close()
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    r = client.post("/api/queue/batch", json={
+        "targets": ["com.app.one", "com.app.two"], "then_aipwn": True,
+    })
+    assert r.status_code == 200
+    assert r.json()["queued"] == 2
+
+    _wait_for_drain(engine)
+
+    jobs = client.get("/api/queue").json()
+    kinds = sorted(j["kind"] for j in jobs)
+    assert kinds == ["aipwn", "aipwn", "static", "static"]
+    aipwn_targets = {j["target"] for j in jobs if j["kind"] == "aipwn"}
+    assert aipwn_targets == {"com.app.one", "com.app.two"}
+
+
+def test_queue_batch_does_not_chain_after_failed_static_job(monkeypatch, client, engine):
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    r = client.post("/api/queue/batch", json={"targets": ["com.app.broken"], "then_aipwn": True})
+    assert r.status_code == 200
+
+    _wait_for_drain(engine)
+
+    jobs = client.get("/api/queue").json()
+    assert all(j["kind"] != "aipwn" for j in jobs)
+
+
+def test_queue_batch_propagates_source_and_serial_to_every_submit(monkeypatch, client, engine):
+    calls = []
+    real_submit = engine.submit
+
+    def spy_submit(target, kind="static", serial=None, priority=0, source=None):
+        calls.append({"target": target, "kind": kind, "serial": serial, "source": source})
+        return real_submit(target, kind=kind, serial=serial, priority=priority, source=source)
+
+    monkeypatch.setattr(engine, "submit", spy_submit)
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    r = client.post("/api/queue/batch", json={
+        "targets": ["com.app.one", "com.app.two"],
+        "source": "device", "serial": "ZY22GPM27J", "then_aipwn": False,
+    })
+    assert r.status_code == 200
+
+    _wait_for_drain(engine)
+
+    assert len(calls) == 2
+    assert all(c["source"] == "device" for c in calls)
+    assert all(c["serial"] == "ZY22GPM27J" for c in calls)
+
+
 def test_device_endpoint_reports_no_devices_without_adb(monkeypatch, client):
     monkeypatch.setattr(
         "nutcracker_core.plugins.dashboard.device.subprocess.run",

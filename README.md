@@ -315,6 +315,16 @@ python nutcracker.py queue add com.example.app --run
 # Enqueue a dynamic job (requires a local .apk and a connected device):
 python nutcracker.py queue add downloads/app.apk --dynamic --serial emulator-5554 --run
 
+# Batch a .txt file of package ids: static analysis for every line, chaining an
+# aipwn bypass run after each one that finishes OK (list_file: one package id
+# per line, blank lines/#comments ignored, same format as `batch`):
+python nutcracker.py queue add packages.txt --then-aipwn --serial emulator-5554 --run
+
+# Same, but pull each .apk from the app already installed on the device
+# instead of downloading it from a store (--source device is a single global
+# flag for the whole file, not per line):
+python nutcracker.py queue add packages.txt --then-aipwn --source device --serial emulator-5554 --run
+
 # List recent jobs:
 python nutcracker.py queue ls
 python nutcracker.py queue ls --status error --limit 50
@@ -634,6 +644,11 @@ It shows:
   findings table (rule, severity, MASVS/MASWE/CWE, location) for the latest run.
 - **Analysis queue** — enqueue a target (path/URL/package id/list file) and watch it run,
   including `aipwn` runs (see below).
+- **Batch from a .txt file** — upload a `.txt` of package ids (one per line, `#comments` ignored)
+  from the queue panel: every package gets a static analysis and, once it finishes OK, a chained
+  `aipwn` run right after (same semantics as `queue add <file> --then-aipwn` below). A single
+  dropdown picks the `.apk` source for the whole file — the store (default) or the app already
+  installed on the connected device (`adb pull`, no download at all).
 - **Live logs** — real job output streamed line-by-line over WebSocket as it happens.
 - **Device** — real live video via your own [scrcpy](https://github.com/Genymobile/scrcpy)
   installation (see below), with automatic fallback to a polling screenshot

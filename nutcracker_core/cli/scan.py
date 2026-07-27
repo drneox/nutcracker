@@ -36,8 +36,15 @@ from . import cli
 @click.option(
     "--source", "-s",
     default=None,
-    type=click.Choice(["apk-pure", "google-play"], case_sensitive=False),
-    help="Download source. Default: google-play if credentials in config, else apk-pure.",
+    type=click.Choice(["apk-pure", "google-play", "device"], case_sensitive=False),
+    help="Download source. \"device\" pulls the .apk already installed on a connected "
+         "device via adb (see --serial) instead of downloading from any store. "
+         "Default: google-play if credentials in config, else apk-pure.",
+)
+@click.option(
+    "--serial",
+    default=None,
+    help="ADB serial of the device to pull the .apk from (only used with --source device).",
 )
 @click.option(
     "--output-dir", "-o",
@@ -63,8 +70,9 @@ from . import cli
     help="Force jadx-only decompilation and skip Frida/device runtime steps "
          "(used by queued/scheduled batch runs; see `nutcracker queue`/`serve`).",
 )
-def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
-         keep_apk: bool, report: str | None, static_only: bool) -> None:
+def scan(url: str, config_path: str, source: str | None, serial: str | None,
+         output_dir: str | None, keep_apk: bool, report: str | None,
+         static_only: bool) -> None:
     """
     Download an APK and analyze it for anti-root protections.
 
@@ -72,6 +80,10 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
       - Google Play URL (https://play.google.com/store/apps/details?id=...)
       - Package ID directly (com.example.app)
       - Direct URL to an .apk file (https://example.com/app.apk)
+
+    With --source device, URL must be a package ID already installed on the
+    device given by --serial (or the sole connected device) -- the .apk is
+    pulled via adb, nothing is downloaded from any store.
     """
     config = load_config(config_path)
     if static_only:
@@ -181,6 +193,7 @@ def scan(url: str, config_path: str, source: str | None, output_dir: str | None,
                     output_dir=output_dir,
                     token_resolver=_token_resolver,
                     on_start=_on_start_label,
+                    serial=serial,
                 )
 
         if _from_cache:
