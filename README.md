@@ -60,9 +60,11 @@ All results are consolidated into a technical PDF report ready for reporting.
 - Optional OSINT module: subdomains via crt.sh, public leaks on GitHub/Postman/FOFA/Shodan/Wayback, false-positive filter and optional web searches via DuckDuckGo
 - **AI Review** (`ai-review`): LLM-powered false positive filter — reviews each finding, tags FPs with `_fp: true` (preserved in JSON for audit), downgrades low-confidence findings severity; auto-regenerates PDF
 - AndroidManifest.xml analysis: dangerous permissions, exported components, `network security config` and insecure configurations
-- MASVS v2 compliance scoring: 24-control evaluation with numeric pass/fail count (e.g. `10/24 controls`)
+- MASVS v2.1 compliance scoring, backed by a deterministic check registry mapped to **MASVS + MASWE + CWE** (see [OWASP MAS Alignment](#owasp-mas-alignment-masvs--maswe--cwe))
 - Complete PDF report: cover page, MASVS compliance, protections, misconfigurations, OSINT, leaks, and SAST vulnerabilities
-- Batch mode to scan multiple apps in sequence
+- Batch mode to scan multiple apps, backed by a **job queue** with configurable static parallelism and per-device serialization for dynamic jobs (see [Mass Execution](#mass-execution-queue--scheduler))
+- Built-in **scheduler** that re-queues every app for periodic re-review (default ≥1/month), driven by `nutcracker serve`
+- Local **web dashboard** (`nutcracker dashboard`): apps overview, live job logs, device screenshot, MASVS trend per app, and an inline schedule editor — SQLite-backed, no external services (see [Web Dashboard](#web-dashboard))
 - Modules controllable via feature flags in `config.yaml`
 - `decompilation: jadx` pipeline option forces static-only analysis — disables Frida/emulator even when DexGuard is detected
 
@@ -141,6 +143,15 @@ cd nutcracker
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Every command in this README also works as `python nutcracker.py <command>` (script mode, no
+install needed). Alternatively, install it as a package to get a `nutcracker` console command:
+
+```bash
+pip install -e .              # editable install; entry point: nutcracker = nutcracker_core.cli:cli
+pip install -e ".[dashboard]" # + fastapi/uvicorn for `nutcracker dashboard`
+nutcracker --help
 ```
 
 ### Python Dependencies (requirements.txt)
@@ -287,6 +298,61 @@ The command:
 
 ---
 
+## Mass Execution: Queue & Scheduler
+
+`batch` (and every job submitted through `queue add`) runs on a shared job queue instead of an
+in-process loop: **static** analyses (decompile, SAST, OSINT) run in parallel across
+`queue.static_workers` threads, while **dynamic** analyses (Frida/ADB on a physical device) are
+always serialized per device serial — two dynamic jobs never touch the same phone at once, even
+if `queue.dynamic_workers > 1` (that setting controls parallelism *across different* devices).
+Every job runs as an isolated subprocess (the same `analyze`/`scan` CLI path), so a crash in one
+target can never corrupt another's in-process state.
+
+```bash
+# Enqueue a single target (path, URL, package id) and run the queue immediately:
+python nutcracker.py queue add com.example.app --run
+
+# Enqueue a dynamic job (requires a local .apk and a connected device):
+python nutcracker.py queue add downloads/app.apk --dynamic --serial emulator-5554 --run
+
+# List recent jobs:
+python nutcracker.py queue ls
+python nutcracker.py queue ls --status error --limit 50
+
+# Schedule a periodic review (default: every 30 days, i.e. ≥1/month):
+python nutcracker.py schedule set com.example.app --every 30
+python nutcracker.py schedule ls
+python nutcracker.py schedule set com.example.app --disable
+
+# Long-running daemon: re-queues every app whose schedule is due, on a poll
+# interval (config.yaml → scheduler.poll_interval_minutes, default 60min).
+python nutcracker.py serve
+```
+
+Any app that goes through `batch`, `queue add`, or `analyze`/`scan` is auto-scheduled for
+periodic re-review — the "≥1 review/month" guarantee applies without extra setup, using
+`scheduler.default_interval_days` (default `30`) unless overridden per app via `schedule set`.
+
+Configure parallelism and cadence in `config.yaml`:
+
+```yaml
+queue:
+  static_workers: 4          # parallel static analyses at once
+  dynamic_workers: 2         # concurrent *devices* for dynamic jobs (never same serial)
+
+scheduler:
+  enabled: true
+  poll_interval_minutes: 60  # how often `serve` checks for due apps
+  default_interval_days: 30  # ≥1 review/month per app unless overridden
+```
+
+State (queued/running/done/error, per-app schedule, run history and findings) is persisted to a
+local SQLite database (`store.db_path` in `config.yaml`, default `./nutcracker.db`) — this is
+what both `serve` and the dashboard read from; it does not replace the existing JSON/PDF reports
+in `reports/<pkg>/`, it complements them.
+
+---
+
 ## Configuration (`config.yaml` / `config.yaml.example`)
 
 Use [config.yaml.example](config.yaml.example) as the source of truth.
@@ -382,6 +448,23 @@ auto:
 batch:
   list_file: ""                # Optional list file for batch mode
   stop_on_error: false
+
+store:                          # SQLite persistence (queue/scheduler/dashboard state)
+  enabled: true                 # set false to skip SQLite entirely
+  db_path: ""                   # empty = ./nutcracker.db at the project root
+
+queue:                          # see "Mass Execution: Queue & Scheduler"
+  static_workers: 4
+  dynamic_workers: 2
+
+scheduler:                      # see "Mass Execution: Queue & Scheduler"
+  enabled: true
+  poll_interval_minutes: 60
+  default_interval_days: 30
+
+dashboard:                      # see "Web Dashboard" — only used by `nutcracker dashboard`
+  bind: "127.0.0.1"
+  port: 8765
 ```
 
 ---
@@ -499,6 +582,110 @@ When the app doesn't start with `monkey` (native-level anti-tampering, emulator 
 
 ---
 
+## OWASP MAS Alignment (MASVS + MASWE + CWE)
+
+Every finding-producing rule (regex, semgrep, native-lib heuristics, manifest analysis, and a
+handful of deterministic on-device checks) is registered as a `Check` in
+`nutcracker_core/checks/` and mapped to the official OWASP taxonomy: a **MASVS v2.1** control, the
+relevant **MASWE** weakness id(s) (`MASWE-XXXX`), and a **CWE** id where one genuinely applies.
+There is no in-process framework separate from the existing scanners — `checks/static/adapter.py`
+wraps the existing rule registries (`vuln_scanner`, `native_scanner`, detectors, manifest
+analysis) so every rule gets taxonomy metadata without being rewritten.
+
+```bash
+# Regenerate the coverage matrix from the check registry (source of truth, not hand-edited):
+python tools/gen_owasp_coverage.py    # writes docs/owasp-mas-coverage.md
+```
+
+Current coverage (regenerated, not aspirational): **18/24 MASVS v2.1 controls** have at least one
+check, across **68 checks** (66 static, 2 dynamic — ADB-only, no LLM), referencing **33/119 MASWE**
+weaknesses. The 6 uncovered controls (`MASVS-AUTH-1`, `AUTH-3`, `CODE-2`, `CODE-3`, `PRIVACY-3`,
+`PRIVACY-4`) are documented as **deliberately out of scope**, not missing work: they require live
+backend behavior, business-logic understanding, or a real CVE database — none of which can be
+verified deterministically by analyzing an APK alone. See
+[docs/owasp-mas-coverage.md](docs/owasp-mas-coverage.md) for the full per-control breakdown.
+
+Dynamic checks (`checks/dynamic/`) run headless over ADB against a connected device/emulator —
+no Frida REPL, no manual interaction — via:
+
+```bash
+python nutcracker.py analyze downloads/app.apk --dynamic-checks --serial emulator-5554
+```
+
+---
+
+## Web Dashboard
+
+`nutcracker dashboard` starts a local web UI (FastAPI + WebSocket, self-contained — no CDN
+dependencies, dark/light theme aware) backed by the same SQLite store and job queue used by
+`serve`/`batch`/`queue add`:
+
+```bash
+python nutcracker.py dashboard
+# → http://127.0.0.1:8765
+
+python nutcracker.py dashboard --port 8080 --host 0.0.0.0   # expose on the LAN
+python nutcracker.py dashboard --no-scheduler                # if `nutcracker serve` already runs elsewhere
+```
+
+It shows:
+- **Apps overview** — verdict, MASVS score/grade, next scheduled review; click a row for a
+  detail view with the MASVS score trend over time, the MASVS controls affected, and the full
+  findings table (rule, severity, MASVS/MASWE/CWE, location) for the latest run.
+- **Analysis queue** — enqueue a target (path/URL/package id/list file) and watch it run,
+  including `aipwn` runs (see below).
+- **Live logs** — real job output streamed line-by-line over WebSocket as it happens.
+- **Device** — real live video via your own [scrcpy](https://github.com/Genymobile/scrcpy)
+  installation (see below), with automatic fallback to a polling screenshot
+  (`adb exec-out screencap`) if scrcpy isn't configured or the stream drops mid-session.
+- **Agent / Chat** — the real system prompt of the `aipwn` bypass agent (if installed), and a
+  WebSocket chat channel that a running `aipwn` job actually consumes (see below).
+- **Inline schedule editor** — change an app's review interval without touching the CLI.
+
+The dashboard is itself a plugin (`nutcracker_core/plugins/dashboard/`) — it only *reads* the
+store and *drives* the queue through their public APIs, following the same core/plugin boundary
+as every other plugin in this project.
+
+### Live device video (scrcpy)
+
+The dashboard does not reimplement the scrcpy wire protocol — it drives your own
+[scrcpy](https://github.com/Genymobile/scrcpy) client binary (any recent version; validated
+against 3.1) headlessly (`scrcpy --no-window --record=<temp>.mkv`) and re-reads the growing
+recording with PyAV to serve the latest frame as `multipart/x-mixed-replace`, which any browser
+renders natively in an `<img>` — no CDN, no WebRTC/H.264-in-JS. Point nutcracker at your own
+scrcpy install:
+
+```yaml
+dashboard:
+  scrcpy_path: '/path/to/scrcpy'                 # Linux/macOS
+  # scrcpy_path: '/mnt/c/.../scrcpy.exe'         # Windows scrcpy, from WSL
+```
+
+Leave it empty to search `scrcpy`/`scrcpy.exe` on `PATH`. Without a working scrcpy, the "Device"
+tab falls back to the screenshot-polling view automatically — nothing breaks either way. Install
+PyAV in the dashboard environment (`pip install .[dashboard]` already includes it, or
+`pip install av` manually).
+
+### `aipwn` in the queue + chat wiring
+
+`aipwn` (the LLM-powered bypass agent) can run as a queue job like any other target — its live
+reasoning ("Nutcracker thinking", each tool call) streams to the same live-logs WebSocket as
+`analyze`/`scan` jobs, and it shares the per-device lock with dynamic jobs (never runs
+concurrently with another job on the same phone):
+
+```bash
+python nutcracker.py queue add com.example.app --aipwn --serial emulator-5554 --run
+```
+
+The dashboard's chat (`/ws/chat/{package}`) is genuinely consumed by a running `aipwn` job: every
+operator message is also written to a small pull-based mailbox
+(`GET /api/chat/{package}/pending`); the agent polls it once per ReAct iteration (before calling
+the LLM) and injects any pending message as a real conversation turn — no dashboard running means
+no polling and zero overhead, this is entirely opt-in via the `NUTCRACKER_DASHBOARD_URL`
+environment variable the queue sets for the job's subprocess.
+
+---
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for pending tasks: OSINT improvements, iOS/IPA support and partial migration to Go.
@@ -523,6 +710,7 @@ git clone https://github.com/<user>/<plugin-repo> nutcracker_core/plugins/<name>
 |---|---|---|
 | `aipwn` | `nutcracker aipwn <package>` | Autonomous LLM-powered Frida bypass agent |
 | `aireview` | `nutcracker ai-review <package>` | LLM-powered false positive filter |
+| `dashboard` | `nutcracker dashboard` | Local web dashboard over the queue + SQLite store (see [Web Dashboard](#web-dashboard)) |
 
 > **`aipwn` native library analysis** — The agent can disassemble and patch `.so` files
 > (native RASP checks). This requires a cross-compiler `objdump` for ARM64:
@@ -672,42 +860,72 @@ def register(cli: click.Group) -> None:
 
 ```
 nutcracker/
-├── nutcracker.py                   # Main CLI (click)
+├── nutcracker.py                   # Thin entrypoint shim → nutcracker_core.cli.cli
 ├── config.yaml                     # Local configuration
 ├── config.yaml.example             # Configuration template
 ├── setup.sh                        # Quick install script
 ├── requirements.txt                # Python dependencies
 ├── docker-compose.yml              # Docker environment for hybrid execution
 ├── Dockerfile                      # Project base image
-├── docs/assets/                    # Logo and README assets
+├── docs/
+│   ├── assets/                     # Logo and README assets
+│   └── owasp-mas-coverage.md       # Generated MASVS×MASWE coverage matrix (tools/gen_owasp_coverage.py)
 ├── downloads/                      # Downloaded APKs
 ├── decompiled/                     # Code decompiled by jadx / frida-dexdump
 ├── frida_scripts/                  # Generated Frida bypass scripts
 ├── reports/                        # Generated PDFs and JSON reports
+├── nutcracker.db                   # SQLite store (queue/scheduler/dashboard state, gitignored)
 ├── semgrep_rules_android/          # OWASP MASTG rules
-├── tools/                          # Auxiliary utilities
+├── tools/                          # Auxiliary utilities (incl. gen_owasp_coverage.py)
 └── nutcracker_core/
     ├── __init__.py                 # Main package
     ├── analyzer.py                 # Main static analysis (androguard)
     ├── apk_tools.py                # APK manipulation and installation utilities
-    ├── config.py                   # config.yaml loading and access
+    ├── config.py                   # config.yaml loading and access (supports ${ENV_VAR})
     ├── device.py                   # Devices, SDK, Frida and adb utilities
     ├── downloader.py               # Download APKs (Google Play / APKPure / direct URL)
     ├── decompiler.py               # jadx interface
     ├── deobfuscator.py             # FART flow for physical device
     ├── frida_bypass.py             # Frida scripts (bypass, FART)
     ├── manifest_analyzer.py        # AndroidManifest.xml and insecure configuration analysis
-    ├── masvs.py                    # MASVS v2 compliance scoring (24 controls, numeric pass/fail)
+    ├── masvs.py                    # MASVS v2.1 taxonomy: controls, RULE_TO_MASVS/MASWE/CWE
+    ├── orchestrator.py             # Shared orchestration used by CLI, queue jobs and dashboard
     ├── osint.py                    # Subdomains, public leaks, Wayback and optional web searches
     ├── pdf_reporter.py             # PDF report generation (fpdf2)
     ├── pipeline.py                 # End-to-end analysis pipeline
     ├── reporter.py                 # JSON reports and console output
     ├── runtime.py                  # Dynamic analysis orchestration
+    ├── scan_types.py               # Shared finding/scan dataclasses
+    ├── scheduler.py                # APScheduler-based periodic re-review (used by `serve`/dashboard)
     ├── string_extractor.py         # APK string extraction
-    ├── vuln_scanner.py             # Semgrep + regex + apkleaks + gitleaks
+    ├── vuln_scanner.py             # Regex + semgrep vulnerability rules
+    ├── leak_scanner.py             # apkleaks + gitleaks secret scanning
+    ├── native_scanner.py           # Native (.so) library heuristics
+    ├── cli/                        # Click commands (one module per command)
+    │   ├── __init__.py             # Root click.Group + plugin loading + banner
+    │   ├── scan.py / analyze.py / launch.py / batch.py
+    │   ├── queue_cmd.py            # `queue add`/`queue ls`
+    │   ├── schedule_cmd.py         # `schedule set`/`schedule ls`
+    │   ├── serve.py                # `serve` daemon (queue + scheduler, no UI)
+    │   ├── setup_token.py / regen_pdf.py
+    ├── store/                      # SQLite persistence (Fase 0)
+    │   ├── db.py                   # Connection + WAL mode + versioned migrations
+    │   ├── repository.py           # Typed CRUD (apps, runs, findings, schedule, queue_jobs)
+    │   ├── hooks.py                # after_analysis post-hook → double, non-destructive write
+    │   └── schema.sql
+    ├── queue/                      # Job queue engine (Fase 1)
+    │   ├── engine.py                # Static thread pool + per-device lock for dynamic jobs
+    │   └── job.py
+    ├── checks/                     # OWASP MAS-aligned deterministic check registry (Fase 2)
+    │   ├── base.py                 # Check / CheckMeta / CheckFinding
+    │   ├── registry.py             # register_static / register_dynamic / load_all
+    │   ├── static/adapter.py       # Wraps vuln_scanner/native_scanner/detectors/manifest as Checks
+    │   └── dynamic/                # Headless ADB-only checks (debuggable, cleartext traffic, ...)
     ├── plugins/
     │   ├── __init__.py             # Plugin loader + post-hook registry
     │   ├── aireview/               # ai-review plugin: LLM-powered false positive filter
+    │   ├── aipwn/                  # Autonomous LLM-powered Frida bypass agent
+    │   └── dashboard/              # Web dashboard (Fase 3) — FastAPI + WS + self-contained SPA
     └── detectors/
         ├── __init__.py             # Detectors subpackage export
         ├── appdome.py              # Appdome detector

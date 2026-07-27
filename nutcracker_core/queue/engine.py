@@ -25,6 +25,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import re
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,6 +56,50 @@ def _is_local_apk(target: str) -> bool:
     return Path(target).exists() and target.lower().endswith(".apk")
 
 
+# Marcadores usados por _extract_error_summary para reconocer líneas que
+# probablemente son la causa raíz real de un fallo.
+_ERROR_MARKERS = ("error", "failed", "traceback", "exception", "no route to host",
+                   "permission denied", "timed out", "timeout", "refused")
+
+# Defensa en profundidad: aunque _run_job fuerza NO_COLOR=1 en el subproceso,
+# una herramienta de terceros (semgrep, androguard, ...) podría ignorar esa
+# convención y forzar color igual (p.ej. flags propios tipo --color=always).
+# Sin esto, esos códigos ANSI crudos terminan como texto literal en el panel
+# de logs en vivo del dashboard (visto en vivo: el banner ASCII-art coloreado
+# de nutcracker se volcaba como un bloque de texto ilegible en el navegador).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+def _extract_error_summary(output: str, max_len: int = 2000) -> str:
+    """Extrae un resumen útil del output de un job fallido.
+
+    FIX (prueba con dispositivo físico real, 2026-07-24): un simple
+    output[-max_len:] pierde la causa raíz real cuando el proceso sigue
+    imprimiendo (tablas de hallazgos, banners) después del error — se vio en
+    vivo con un fallo de conexión Frida ("No route to host") tapado por una
+    tabla de vulnerabilidades posterior, dejando en `error` solo un fragmento
+    ilegible de esa tabla. Prioriza líneas que parecen errores reales, y
+    completa con el tail normal como contexto.
+    """
+    output = output.strip()
+    if not output:
+        return ""
+    lines = output.splitlines()
+    flagged = list(dict.fromkeys(
+        line.strip() for line in lines if any(m in line.lower() for m in _ERROR_MARKERS)
+    ))
+    tail = output[-max_len:]
+    if not flagged:
+        return tail
+    flagged_text = "\n".join(flagged)[: max_len // 2]
+    remaining = max_len - len(flagged_text) - len("\n---\n")
+    return f"{flagged_text}\n---\n{tail[-remaining:]}"
+
+
 class QueueEngine:
     """Encola y ejecuta jobs de análisis de APKs."""
 
@@ -78,6 +123,12 @@ class QueueEngine:
         # camino original — subprocess.run() bloqueante, sin cambios de
         # comportamiento para quien no lo use (CLI, scheduler, tests de Fase 1).
         self.on_line: Callable[[int, str], None] | None = None
+        # Variables de entorno extra (Fase 3, dashboard) fusionadas en el env
+        # de cada subproceso de job -- p.ej. NUTCRACKER_DASHBOARD_URL, que el
+        # agente aipwn usa para el polling del mailbox de chat (ver
+        # plugins/dashboard/__init__.py y plugins/aipwn/frida_agent.py). Vacío
+        # (default) preserva el env tal cual para quien no lo use.
+        self.extra_env: dict[str, str] = {}
 
     # ── Encolado ─────────────────────────────────────────────────────────────
 
@@ -175,11 +226,21 @@ class QueueEngine:
             is_local_apk=job.is_local_apk,
             config_path=self.config_path,
             static_only=(job.kind == "static"),
-            launch=(job.kind == "dynamic"),
+            dynamic_checks=(job.kind == "dynamic"),
             serial=job.serial,
+            aipwn=(job.kind == "aipwn"),
         )
         env = dict(os.environ)
         env["NUTCRACKER_QUEUE_JOB_ID"] = str(job.db_id)
+        # El job corre desapegado de cualquier terminal (stdout va a un pipe que
+        # termina en el panel de logs del dashboard). Si el proceso padre heredó
+        # FORCE_COLOR/COLORTERM (p.ej. terminal de VS Code), rich igual emite
+        # ANSI truecolor real hacia el pipe -- NO_COLOR es lo único que rich
+        # respeta por encima de FORCE_COLOR, y evita volcar códigos de color
+        # crudos como texto en el navegador.
+        env["NO_COLOR"] = "1"
+        env.pop("FORCE_COLOR", None)
+        env.update(self.extra_env)
 
         _log.info("job #%s: %s", job.db_id, " ".join(cmd))
         if self.on_line is not None:
@@ -187,8 +248,7 @@ class QueueEngine:
         else:
             proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
         ok = proc.returncode == 0
-        tail = (proc.stderr or proc.stdout or "").strip()[-2000:]
-        error = "" if ok else tail
+        error = "" if ok else _extract_error_summary(_strip_ansi(proc.stderr or proc.stdout or ""))
 
         conn = db.connect(self.db_path)
         try:
@@ -216,9 +276,9 @@ class QueueEngine:
         )
         lines: list[str] = []
         assert proc.stdout is not None
-        for line in proc.stdout:
-            lines.append(line)
-            self.on_line(job_id, line.rstrip("\n"))  # type: ignore[misc]
+        for raw_line in proc.stdout:
+            lines.append(raw_line)
+            self.on_line(job_id, _strip_ansi(raw_line.rstrip("\n")))  # type: ignore[misc]
         proc.wait()
         return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(lines), stderr="")
 
@@ -233,7 +293,9 @@ class QueueEngine:
         resultados. Bloqueante: vuelve cuando no queda ningún job por correr."""
         self._load_queued_from_db()
         static_jobs = [j for j in self._pending if j.kind == "static"]
-        dynamic_jobs = [j for j in self._pending if j.kind == "dynamic"]
+        # "aipwn" corre exclusivo sobre el mismo dispositivo físico que los
+        # checks dinámicos (Frida) -- comparte el lock por serial con "dynamic".
+        dynamic_jobs = [j for j in self._pending if j.kind in ("dynamic", "aipwn")]
         self._pending = []
 
         outcomes: list[JobOutcome] = []

@@ -101,8 +101,22 @@ def _load_detector_checks() -> None:
         register_static(_AdaptedCheck(_detector_meta(det.name, det.strength)))
 
 
+def _load_manifest_analyzer_checks() -> None:
+    """Checks detectados por manifest_analyzer.py que no pasan por vuln_scanner
+    (producen `Misconfiguration`, no `VulnFinding` — no tienen un rule_id real
+    de origen). Representados aquí con un id sintético solo para que el
+    registry/docs/owasp-mas-coverage.md reflejen cobertura que YA existe en el
+    código, en vez de mostrarla como un gap (cierre de cobertura, 2026-07-25).
+    """
+    from ..registry import register_static
+
+    register_static(_AdaptedCheck(_rule_meta(
+        "MANIFEST-LOW-TARGET-SDK", "targetSdkVersion desactualizado", "medium", "manifest_analyzer",
+    )))
+
+
 def load_all() -> None:
-    """Puebla el registry con los ~50 checks estáticos existentes.
+    """Puebla el registry con los checks estáticos existentes.
 
     No es idempotente por sí sola (llamarla dos veces duplica entradas); la
     idempotencia real vive en checks.load_registry(), que solo la invoca si
@@ -111,3 +125,4 @@ def load_all() -> None:
     _load_vuln_scanner_checks()
     _load_native_scanner_checks()
     _load_detector_checks()
+    _load_manifest_analyzer_checks()

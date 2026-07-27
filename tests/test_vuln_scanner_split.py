@@ -83,3 +83,75 @@ def test_scan_with_gitleaks_returns_empty_without_binary(tmp_path, monkeypatch):
     findings = vuln_scanner.scan_with_gitleaks(tmp_path)
 
     assert findings == []
+
+
+# ── Reglas nuevas: cierre de cobertura OWASP MAS (2026-07-25) ────────────────
+
+def test_crypto007_detects_key_derived_directly_from_password(tmp_path):
+    java_file = tmp_path / "Crypto.java"
+    java_file.write_text(
+        'public class Crypto {\n'
+        '    SecretKeySpec key = new SecretKeySpec(userPassword.getBytes(), "AES");\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    result = vuln_scanner.scan_directory(tmp_path)
+    assert "CRYPTO007" in {f.rule_id for f in result.findings}
+
+
+def test_crypto007_ignores_key_from_secure_source(tmp_path):
+    java_file = tmp_path / "Crypto.java"
+    java_file.write_text(
+        'public class Crypto {\n'
+        '    SecretKeySpec key = new SecretKeySpec(derivedKeyBytes, "AES");\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    result = vuln_scanner.scan_directory(tmp_path)
+    assert "CRYPTO007" not in {f.rule_id for f in result.findings}
+
+
+def test_auth002_detects_deprecated_fingerprint_manager(tmp_path):
+    java_file = tmp_path / "Auth.java"
+    java_file.write_text(
+        'import android.hardware.fingerprint.FingerprintManager;\n'
+        'public class Auth {}\n',
+        encoding="utf-8",
+    )
+    result = vuln_scanner.scan_directory(tmp_path)
+    assert "AUTH002" in {f.rule_id for f in result.findings}
+
+
+def test_auth002_ignores_biometric_prompt(tmp_path):
+    java_file = tmp_path / "Auth.java"
+    java_file.write_text(
+        'import androidx.biometric.BiometricPrompt;\n'
+        'public class Auth {}\n',
+        encoding="utf-8",
+    )
+    result = vuln_scanner.scan_directory(tmp_path)
+    assert "AUTH002" not in {f.rule_id for f in result.findings}
+
+
+def test_privacy001_detects_imei_tracking(tmp_path):
+    java_file = tmp_path / "Device.java"
+    java_file.write_text(
+        'public class Device {\n'
+        '    String id = telephonyManager.getImei();\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    result = vuln_scanner.scan_directory(tmp_path)
+    assert "PRIVACY001" in {f.rule_id for f in result.findings}
+
+
+def test_privacy001_ignores_unrelated_getters(tmp_path):
+    java_file = tmp_path / "Device.java"
+    java_file.write_text(
+        'public class Device {\n'
+        '    String id = UUID.randomUUID().toString();\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    result = vuln_scanner.scan_directory(tmp_path)
+    assert "PRIVACY001" not in {f.rule_id for f in result.findings}

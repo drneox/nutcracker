@@ -3,6 +3,8 @@ adb_run inyectado, sin necesitar un dispositivo real conectado."""
 
 from __future__ import annotations
 
+import sys
+
 from nutcracker_core.checks.dynamic.cleartext_traffic import CleartextTrafficDynamicCheck
 from nutcracker_core.checks.dynamic.context import DynamicCheckContext
 from nutcracker_core.checks.dynamic.debuggable import DebuggableDynamicCheck
@@ -96,3 +98,29 @@ def test_default_adb_runner_used_when_none_injected():
     (default_adb_runner) en vez de quedar None — evita AttributeError en uso real."""
     ctx = DynamicCheckContext(package="com.example.app")
     assert callable(ctx.adb_run)
+
+
+def test_default_adb_runner_combines_stderr_with_stdout():
+    """FIX (prueba con dispositivo físico real, 2026-07-24): comandos como
+    `run-as` escriben su mensaje real de error a stderr (p.ej. 'run-as:
+    package not debuggable: <pkg>'); capturar solo stdout lo perdía
+    silenciosamente, dejando detail/logs sin información útil."""
+    from nutcracker_core.checks.dynamic.context import default_adb_runner
+
+    # adb_bin apunta a un script de prueba que simula stdout+stderr reales,
+    # en vez de necesitar un `adb` de verdad.
+    runner = default_adb_runner(serial=None, adb_bin=sys.executable)
+    out = runner([
+        "-c",
+        "import sys; sys.stdout.write('linea-stdout\\n'); "
+        "sys.stderr.write('linea-stderr\\n')",
+    ])
+    assert "linea-stdout" in out
+    assert "linea-stderr" in out
+
+
+def test_default_adb_runner_returns_empty_string_on_missing_binary():
+    from nutcracker_core.checks.dynamic.context import default_adb_runner
+
+    runner = default_adb_runner(serial=None, adb_bin="/no/existe/adb-binario-inventado")
+    assert runner(["shell", "id"]) == ""

@@ -18,7 +18,14 @@ def default_adb_runner(serial: str | None, adb_bin: str = "adb", timeout: int = 
     def _run(args: list[str]) -> str:
         cmd = [adb_bin] + (["-s", serial] if serial else []) + args
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            # FIX (prueba con dispositivo físico real, 2026-07-24): capturar
+            # solo stdout descartaba el mensaje real de comandos como `run-as`
+            # (p.ej. "run-as: package not debuggable: <pkg>"), que adb escribe
+            # a stderr — quedaba en detail/logs solo un string vacío en vez
+            # del diagnóstico útil. stderr=STDOUT los combina en orden real.
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout,
+            )
             return result.stdout
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return ""

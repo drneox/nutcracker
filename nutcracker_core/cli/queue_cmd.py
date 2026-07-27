@@ -45,15 +45,19 @@ def queue() -> None:
 @click.option("--config", "-c", "config_path", default="config.yaml", show_default=True)
 @click.option("--dynamic", is_flag=True, default=False,
               help="Job dinámico (Frida/ADB sobre dispositivo). Requiere .apk local.")
-@click.option("--serial", default=None, help="Serial ADB para job dinámico.")
+@click.option("--aipwn", is_flag=True, default=False,
+              help="Job del agente de bypass aipwn (Frida+LLM). TARGET es un package id "
+                   "ya analizado previamente, no una ruta/URL de APK.")
+@click.option("--serial", default=None, help="Serial ADB para job dinámico/aipwn.")
 @click.option("--run", "run_now", is_flag=True, default=False,
               help="Ejecutar la cola inmediatamente tras encolar (bloqueante).")
-def queue_add(target: str, config_path: str, dynamic: bool, serial: str | None, run_now: bool) -> None:
+def queue_add(target: str, config_path: str, dynamic: bool, aipwn: bool,
+              serial: str | None, run_now: bool) -> None:
     """Encola TARGET: ruta a .apk local, URL, package id, o un list_file con una
     entrada por línea (mismo formato que `nutcracker batch`)."""
     engine = _build_engine(config_path)
     targets = _read_targets(target)
-    kind = "dynamic" if dynamic else "static"
+    kind = "aipwn" if aipwn else ("dynamic" if dynamic else "static")
 
     jobs = []
     for t in targets:

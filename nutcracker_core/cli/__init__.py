@@ -123,7 +123,7 @@ def _print_banner() -> None:
 # ── Grupo de comandos ──────────────────────────────────────────────────────────
 
 @click.group(invoke_without_command=True)
-@click.version_option("0.1.0", prog_name="nutcracker")
+@click.version_option(_VERSION, prog_name="nutcracker")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """nutcracker: detects anti-root protections in Android applications (APK)."""

@@ -60,3 +60,17 @@ def test_chat_ws_echoes_message_to_subscribers(client):
         assert msg["kind"] == "chat"
         assert msg["data"]["from"] == "operator"
         assert msg["data"]["text"] == "hola agente"
+
+
+def test_chat_ws_also_writes_to_mailbox_for_aipwn_polling(client):
+    """Fase 3 follow-up: además de hacer eco por WS, el mensaje debe quedar
+    disponible para que un job aipwn (subproceso, no cliente WS) lo recoja
+    vía GET /api/chat/{package}/pending -- ver chat_mailbox.py."""
+    from nutcracker_core.plugins.dashboard import chat_mailbox
+    chat_mailbox._pending.clear()
+
+    with client.websocket_connect("/ws/chat/com.example.app") as ws:
+        ws.send_text("toma un screenshot")
+        ws.receive_json()  # esperar el eco antes de leer el mailbox (evita carrera)
+
+    assert chat_mailbox.drain("com.example.app") == ["toma un screenshot"]

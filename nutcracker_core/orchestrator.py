@@ -31,9 +31,12 @@ from nutcracker_core.deobfuscator import (
     decompile_dumps,
 )
 from nutcracker_core.device import (
+    download_frida_server,
     find_sdk_tools,
+    frida_arch_for_device,
     get_frida_version,
     list_avds,
+    setup_frida_server,
 )
 from nutcracker_core.frida_bypass import (
     fart_run_instructions,
@@ -67,6 +70,15 @@ _MANIFEST_ANALYSIS = None  # ManifestAnalysisResult del último scan
 _OSINT_RESULT = None       # OsintResult del último scan
 _LAUNCH_APP: bool = False  # --launch: lanzar app con bypass script tras el análisis
 _LAUNCH_SERIAL: str | None = None  # --serial para --launch
+# --dynamic-checks: corre los checks dinámicos de Fase 2 (ADB puro, sin Frida,
+# sin REPL interactivo) tras el análisis estático — ver _run_dynamic_checks_for().
+# Introducido junto al fix de --launch (2026-07-24, prueba con dispositivo físico
+# real): --launch reemplaza el proceso Python con un REPL de frida interactivo,
+# pensado para un humano en terminal — un job automatizado de la cola (Fase 1)
+# que lo invocaba se quedaría esperando input que nunca llega. Los jobs
+# dinámicos de la cola usan este flag en vez de --launch.
+_RUN_DYNAMIC_CHECKS: bool = False
+_DYNAMIC_CHECKS_SERIAL: str | None = None
 
 
 def apply_static_only_override(config: dict) -> None:
@@ -87,8 +99,9 @@ def build_job_cmd(
     is_local_apk: bool,
     config_path: str = "config.yaml",
     static_only: bool = True,
-    launch: bool = False,
+    dynamic_checks: bool = False,
     serial: str | None = None,
+    aipwn: bool = False,
 ) -> list[str]:
     """Construye el argv para ejecutar un job de análisis como subproceso aislado.
 
@@ -98,13 +111,32 @@ def build_job_cmd(
     `_MANIFEST_ANALYSIS`, `_OSINT_RESULT`, ...) que no es seguro entre análisis
     concurrentes de APKs distintas. El aislamiento por proceso evita ese riesgo
     sin reescribir el orquestador, y de paso da paralelismo real (sin GIL).
+
+    Los jobs dinámicos usan ``--dynamic-checks`` (checks/dynamic/ de Fase 2, ADB
+    puro) en vez de ``--launch``: ``--launch`` reemplaza el proceso con un REPL
+    de frida interactivo pensado para un humano en terminal — un job automatizado
+    de la cola que lo usara se quedaría esperando input que nunca llega
+    (encontrado en prueba con dispositivo físico real, 2026-07-24; ver plan.md).
+
+    ``aipwn=True`` (Fase 3, wiring del dashboard con el agente de bypass) corre
+    ``nutcracker aipwn <target>`` en vez de analyze/scan — ``target`` es un
+    package id, no una ruta/URL de APK (aipwn requiere que ya exista un
+    análisis previo del package, igual que en uso manual por CLI). El comando
+    ``aipwn`` no acepta ``--config`` (siempre lee ``config.yaml`` por defecto),
+    así que ``config_path``/``static_only``/``dynamic_checks`` se ignoran en
+    este modo.
     """
     entry = str(Path(__file__).resolve().parent.parent / "nutcracker.py")
     cmd = [sys.executable, entry]
+    if aipwn:
+        cmd += ["aipwn", target]
+        if serial:
+            cmd += ["--serial", serial]
+        return cmd
     if is_local_apk:
         cmd += ["analyze", target, "--config", config_path]
-        if launch:
-            cmd.append("--launch")
+        if dynamic_checks:
+            cmd.append("--dynamic-checks")
             if serial:
                 cmd += ["--serial", serial]
     else:
@@ -112,6 +144,34 @@ def build_job_cmd(
     if static_only:
         cmd.append("--static-only")
     return cmd
+
+
+def _run_dynamic_checks_for(result, serial: str | None) -> None:
+    """Corre los checks dinámicos de Fase 2 (ADB puro, sin Frida) contra
+    ``result.package`` en el dispositivo ``serial`` e imprime los hallazgos.
+
+    A diferencia de --launch, nunca cede el proceso a un REPL interactivo:
+    apto para automatización headless (jobs de la cola, Fase 1).
+    """
+    from .checks import dynamic_checks, load_registry
+    from .checks.dynamic.context import DynamicCheckContext
+
+    load_registry()
+    checks = dynamic_checks()
+    if not checks:
+        return
+
+    console.print(f"\n[bold cyan]Checks dinámicos[/bold cyan] ({len(checks)}) — serial={serial or '(auto)'}")
+    ctx = DynamicCheckContext(package=result.package, serial=serial)
+    for check in checks:
+        try:
+            findings = check.run(ctx)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"  [red]✘[/red] {check.meta.id}: error ejecutando el check — {exc}")
+            continue
+        for finding in findings:
+            icon = "[yellow]⚠[/yellow]" if finding.detected else "[dim]–[/dim]"
+            console.print(f"  {icon} {finding.check_id}  {finding.detail}")
 
 
 def _init_i18n(config: dict) -> None:
@@ -179,14 +239,50 @@ def _launch_frida_bypass(
     adb_args = [adb] + (["-s", serial] if serial else [])
 
     console.print(f"[dim]  {t('cli_restarting_frida')}[/dim]")
-    subprocess.run(adb_args + ["shell", "killall frida-server 2>/dev/null; true"], capture_output=True)
-    subprocess.run(adb_args + ["root"], capture_output=True)
-    _time.sleep(2)
-    subprocess.run(
-        adb_args + ["shell", "nohup /data/local/tmp/frida-server > /dev/null 2>&1 &"],
-        capture_output=True,
-    )
-    _time.sleep(2)
+    # FIX (prueba con dispositivo físico real, 2026-07-24): antes reiniciaba
+    # frida-server con un simple "nohup .../frida-server &" — sin -l 0.0.0.0
+    # (nunca escuchaba en red, solo en 127.0.0.1: --launch con frida_host
+    # configurado no podía conectar aunque el ruteo de red funcionara), sin
+    # respetar strategies.frida_server_version (riesgo de mismatch de versión
+    # con la librería Python), y sin el "unset LD_PRELOAD" que setup_frida_server
+    # sí hace — necesario en devices con Magisk Zygisk/LSPosed (hma_oss_zygisk,
+    # zygisksu, etc., que setean LD_PRELOAD y rompen el attach/spawn de Frida).
+    # Reusa el mismo mecanismo robusto que ya usa el flujo FART (pipeline.py).
+    if serial:
+        try:
+            tools = find_sdk_tools()
+            tools.setdefault("adb", adb)
+            cfg_ver = str(cfg_get(_CFG, "strategies", "frida_server_version") or "").strip()
+            frida_ver = cfg_ver or get_frida_version()
+            if frida_ver:
+                arch = frida_arch_for_device(serial, tools)
+                server_bin = download_frida_server(frida_ver, arch)
+                setup_frida_server(
+                    serial, tools, server_bin,
+                    listen_all=bool(frida_host),
+                    force_restart=True,
+                )
+            else:
+                console.print(f"[yellow]⚠[/yellow]  {t('pipe_frida_not_found')}")
+        except Exception as exc:  # noqa: BLE001
+            console.print(
+                f"[yellow]⚠[/yellow]  No se pudo reiniciar frida-server automáticamente "
+                f"({exc}); intentando con el binario que ya esté en el device."
+            )
+    else:
+        # Sin --serial explícito (un único device/emulador conectado): no hay
+        # forma fiable de resolverle arquitectura/tools a setup_frida_server,
+        # así que se conserva el restart simple de antes como fallback — sin
+        # -l 0.0.0.0 (frida_host sin --serial es un caso raro) pero al menos
+        # asegura que frida-server esté corriendo para -U.
+        subprocess.run(adb_args + ["shell", "killall frida-server 2>/dev/null; true"], capture_output=True)
+        subprocess.run(adb_args + ["root"], capture_output=True)
+        _time.sleep(2)
+        subprocess.run(
+            adb_args + ["shell", "nohup /data/local/tmp/frida-server > /dev/null 2>&1 &"],
+            capture_output=True,
+        )
+        _time.sleep(2)
     subprocess.run(adb_args + ["shell", f"am force-stop {package}"], capture_output=True)
     _time.sleep(1)
 
@@ -198,7 +294,18 @@ def _launch_frida_bypass(
         frida_cmd = [frida_bin, "-U", "-f", package, "-l", str(script_path)]
 
     console.print(f"[green]▶[/green]  [bold cyan]{' '.join(frida_cmd)}[/bold cyan]")
-    os.execvp(frida_cmd[0], frida_cmd)
+    # FIX (encontrado en prueba con dispositivo físico real, 2026-07-24): antes
+    # usaba os.execvp(), que REEMPLAZA el proceso Python actual por el de frida.
+    # Esto hacía que todo el código posterior a _post_analysis_flow() en
+    # _run_analysis() (save_analysis_json, PDF, reporte MASVS, post-hooks de
+    # persistencia SQLite) nunca se ejecutara — el análisis estático, ya
+    # completo en ese punto, se perdía sin dejar rastro en disco ni en la BD,
+    # sin importar si frida lograba conectar o no. subprocess.run() preserva
+    # el mismo comportamiento interactivo (hereda stdin/stdout/stderr, así que
+    # un humano en terminal sigue viendo el REPL de frida en vivo) pero, a
+    # diferencia de execvp, retorna cuando frida termina — permitiendo que el
+    # resto del pipeline complete su trabajo de guardado.
+    subprocess.run(frida_cmd)
 
 
 def _auto(key: str) -> "bool | None":
@@ -406,6 +513,17 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
             vuln_scan=vuln_scan,
             config=_CFG,
         )
+
+        # ── Checks dinámicos (--dynamic-checks) ─────────────────────────────
+        # Corre después de guardar todo lo estático a propósito: si algo falla
+        # acá (dispositivo desconectado, ADB sin permisos, etc.) el análisis
+        # estático ya quedó persistido — nunca se pierde por un paso opcional
+        # posterior (ver fix de --launch/execvp más arriba en este archivo).
+        if _RUN_DYNAMIC_CHECKS:
+            try:
+                _run_dynamic_checks_for(result, _DYNAMIC_CHECKS_SERIAL)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]{t('cli_error_unexpected')}[/red] {exc}")
 
     if not keep_apk and apk_path and apk_path.exists():
         apk_path.unlink()

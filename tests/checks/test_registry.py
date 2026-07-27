@@ -37,7 +37,10 @@ def test_static_adapter_wraps_all_existing_rules():
     # COMP004 colisiona a propósito entre RULES y EXPORTED_COMPONENT_RULES
     # (dos hallazgos distintos comparten id preexistente) — el adaptador solo
     # lo registra una vez, vía RULES.
-    manifest_synth_ids = {rid for rid, *_ in EXPORTED_COMPONENT_RULES.values()} | {"INFO001"}
+    manifest_synth_ids = (
+        {rid for rid, *_ in EXPORTED_COMPONENT_RULES.values()}
+        | {"INFO001", "MANIFEST-LOW-TARGET-SDK"}
+    )
     expected = (
         {r.rule_id for r in RULES}
         | {r.rule_id for r in _NATIVE_RULES}

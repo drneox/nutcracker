@@ -139,6 +139,51 @@ def test_device_screenshot_503_when_unavailable(monkeypatch, client):
     assert r.status_code == 503
 
 
+def test_device_video_status_unavailable_without_scrcpy(monkeypatch, client):
+    monkeypatch.setattr(
+        "nutcracker_core.plugins.dashboard.scrcpy_video.shutil.which", lambda *a, **kw: None,
+    )
+    r = client.get("/api/device/video/status")
+    assert r.status_code == 200
+    assert r.json() == {"available": False, "scrcpy_bin": None}
+
+
+def test_device_video_status_available_when_scrcpy_on_path(monkeypatch, client):
+    monkeypatch.setattr(
+        "nutcracker_core.plugins.dashboard.scrcpy_video.shutil.which",
+        lambda name, **kw: "/usr/bin/scrcpy" if name == "scrcpy" else None,
+    )
+    r = client.get("/api/device/video/status")
+    assert r.status_code == 200
+    assert r.json() == {"available": True, "scrcpy_bin": "/usr/bin/scrcpy"}
+
+
+def test_device_video_503_when_scrcpy_unavailable(monkeypatch, client):
+    monkeypatch.setattr(
+        "nutcracker_core.plugins.dashboard.scrcpy_video.shutil.which", lambda *a, **kw: None,
+    )
+    r = client.get("/api/device/video")
+    assert r.status_code == 503
+
+
+def test_chat_pending_empty_by_default(client):
+    r = client.get("/api/chat/com.example.app/pending")
+    assert r.status_code == 200
+    assert r.json() == {"messages": []}
+
+
+def test_chat_pending_drains_mailbox(client):
+    from nutcracker_core.plugins.dashboard import chat_mailbox
+    chat_mailbox.add("com.example.app", "hola desde el operador")
+
+    r = client.get("/api/chat/com.example.app/pending")
+    assert r.json() == {"messages": ["hola desde el operador"]}
+
+    # Segunda lectura -- ya se drenó, debe venir vacío.
+    r2 = client.get("/api/chat/com.example.app/pending")
+    assert r2.json() == {"messages": []}
+
+
 def test_agent_prompt_response_shape(client):
     # No forzamos el import a fallar (aipwn puede o no estar instalado en el
     # entorno de test) — solo verificamos la forma de la respuesta en ambos casos.

@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from nutcracker_core.queue.engine import QueueEngine
+from nutcracker_core.queue.engine import QueueEngine, _extract_error_summary, _strip_ansi
 from nutcracker_core.store import db, repository
 
 
@@ -108,6 +108,52 @@ def test_dynamic_jobs_same_serial_never_overlap(monkeypatch, tmp_path, engine):
 
     (s1, e1), (s2, e2) = sorted(intervals)
     assert e1 <= s2, "dos jobs dinámicos con el mismo serial se solaparon (el lock por device falló)"
+
+
+def test_aipwn_jobs_share_device_lock_with_dynamic_jobs(monkeypatch, tmp_path, engine):
+    """aipwn (agente de bypass) usa el mismo dispositivo físico que los checks
+    dinámicos -- deben serializarse entre sí por serial, igual que dos jobs
+    'dynamic' entre sí (Fase 3: wiring del agente en la cola)."""
+    intervals: list[tuple[float, float]] = []
+    lock = threading.Lock()
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        start = time.monotonic()
+        time.sleep(0.2)
+        end = time.monotonic()
+        with lock:
+            intervals.append((start, end))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit(str(_touch_apk(tmp_path, "dyn.apk")), kind="dynamic", serial="SAME-SERIAL")
+    engine.submit("com.example.app", kind="aipwn", serial="SAME-SERIAL")
+
+    outcomes = engine.drain()
+    assert len(outcomes) == 2 and all(o.ok for o in outcomes)
+
+    (s1, e1), (s2, e2) = sorted(intervals)
+    assert e1 <= s2, "un job aipwn y uno dinámico con el mismo serial se solaparon"
+
+
+def test_aipwn_job_builds_aipwn_command(monkeypatch, engine):
+    seen_cmds = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.tapjacking", kind="aipwn", serial="ZY22GPM27J")
+    outcomes = engine.drain()
+
+    assert len(outcomes) == 1 and outcomes[0].ok
+    cmd = seen_cmds[0]
+    assert "aipwn" in cmd
+    assert "com.example.tapjacking" in cmd
+    assert "--serial" in cmd and "ZY22GPM27J" in cmd
 
 
 def test_dynamic_jobs_different_serials_run_in_parallel(monkeypatch, tmp_path, engine):
@@ -316,3 +362,96 @@ def test_enqueue_due_apps_only_queues_overdue_packages(tmp_path, engine):
     assert n == 1
     assert len(engine._pending) == 1
     assert engine._pending[0].target == "com.overdue.app"
+
+
+# ── _extract_error_summary (fix encontrado en prueba con dispositivo real) ──
+
+def test_extract_error_summary_surfaces_error_line_buried_by_later_output():
+    """Reproduce el bug real: 'Failed to spawn: ... No route to host' seguido
+    de una tabla larga de hallazgos — un tail[-2000:] ciego lo perdía."""
+    noise = "\n".join(f"│ tabla de hallazgos línea {i:03d} sin relación │" for i in range(200))
+    output = (
+        "Failed to spawn: unable to connect to remote frida-server: "
+        "Could not connect to 192.168.1.4: No route to host\n" + noise
+    )
+    summary = _extract_error_summary(output, max_len=500)
+    assert "No route to host" in summary
+
+
+def test_extract_error_summary_falls_back_to_tail_without_error_markers():
+    output = "línea 1\nlínea 2\nlínea 3 sin nada especial"
+    assert _extract_error_summary(output) == output
+
+
+def test_extract_error_summary_empty_output():
+    assert _extract_error_summary("") == ""
+
+
+def test_extract_error_summary_respects_max_len():
+    output = "Error: algo salió mal\n" + ("x" * 5000)
+    summary = _extract_error_summary(output, max_len=500)
+    assert len(summary) <= 500 + len("\n---\n")  # margen del separador
+
+
+# ── ANSI/color (fix encontrado en el dashboard: banner coloreado de rich ──
+# volcado como texto crudo en el panel de logs cuando el entorno padre tiene
+# FORCE_COLOR/COLORTERM, p.ej. terminal integrada de VS Code) ───────────────
+
+def test_strip_ansi_removes_color_codes_but_keeps_text():
+    raw = "\x1b[38;2;68;68;68m▄\x1b[0m normal \x1b[31mrojo\x1b[0m"
+    assert _strip_ansi(raw) == "▄ normal rojo"
+
+
+def test_strip_ansi_removes_osc8_hyperlinks():
+    raw = "\x1b]8;;https://nutcracker.sh\x1b\\nutcracker.sh\x1b]8;;\x1b\\"
+    assert _strip_ansi(raw) == "nutcracker.sh"
+
+
+def test_strip_ansi_noop_on_plain_text():
+    assert _strip_ansi("sin nada especial\nsegunda línea") == "sin nada especial\nsegunda línea"
+
+
+def test_run_job_forces_no_color_and_clears_force_color(monkeypatch, tmp_path, engine):
+    """El subproceso de un job nunca escribe a una terminal real (su stdout
+    termina en un pipe leído por el motor de la cola) — si el proceso padre
+    heredó FORCE_COLOR/COLORTERM=truecolor, rich igual emitiría ANSI real
+    hacia ese pipe. NO_COLOR es lo único que rich respeta por encima de
+    FORCE_COLOR, así que _run_job debe forzarlo y limpiar FORCE_COLOR."""
+    seen_env = {}
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_env.update(env or {})
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("COLORTERM", "truecolor")
+
+    engine.submit(str(_touch_apk(tmp_path, "color.apk")), kind="static")
+    outcomes = engine.drain()
+
+    assert outcomes[0].ok is True
+    assert seen_env.get("NO_COLOR") == "1"
+    assert "FORCE_COLOR" not in seen_env
+    # COLORTERM por sí solo no fuerza is_terminal en rich sin isatty(); no hace
+    # falta limpiarlo, pero NO_COLOR ya manda por encima de cualquier combinación.
+
+
+def test_run_streaming_strips_ansi_before_publishing_lines(monkeypatch, tmp_path, engine):
+    class _FakePopen:
+        def __init__(self, cmd, env=None, stdout=None, stderr=None, text=None, bufsize=None):
+            self.stdout = iter(["\x1b[31mlínea con color\x1b[0m\n", "línea normal\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.Popen", _FakePopen)
+
+    received: list[str] = []
+    engine.on_line = lambda job_id, line: received.append(line)
+
+    engine.submit(str(_touch_apk(tmp_path, "streamcolor.apk")), kind="static")
+    engine.drain()
+
+    assert received == ["línea con color", "línea normal"]

@@ -270,6 +270,15 @@ RULE_TO_MASVS: dict[str, list[str]] = {
     "NAT006":    ["MASVS-RESILIENCE-1"],
     "NAT007":    ["MASVS-NETWORK-1", "MASVS-NETWORK-2"],
     "NAT008":    ["MASVS-CRYPTO-1"],
+    # ── Nuevas reglas: cierre de gap de cobertura OWASP MAS (2026-07-25) ──────
+    "CRYPTO007": ["MASVS-CRYPTO-2"],   # clave derivada de password sin KDF
+    "AUTH002":   ["MASVS-AUTH-2"],     # FingerprintManager deprecado
+    "PRIVACY001": ["MASVS-PRIVACY-2"], # identificador de hardware para tracking
+    # Sintético (Fase 2.5): representa en el registry el check ya existente en
+    # manifest_analyzer.py (low_target_sdk), no un VulnRule real — ver
+    # checks/static/adapter.py. No aparece en hallazgos persistidos (los
+    # Misconfiguration de manifest_analyzer no pasan por store/hooks.py hoy).
+    "MANIFEST-LOW-TARGET-SDK": ["MASVS-CODE-1"],
 }
 
 # MASWE: solo se listan las reglas donde hay una debilidad MASWE con
@@ -322,6 +331,10 @@ RULE_TO_MASWE: dict[str, list[str]] = {
     "NAT005":    ["MASWE-0052"],
     "NAT007":    ["MASWE-0047"],
     "NAT008":    ["MASWE-0020", "MASWE-0021"],
+    "CRYPTO007": ["MASWE-0010"],   # Improper Cryptographic Key Derivation
+    "AUTH002":   ["MASWE-0032"],   # Platform-provided Authentication APIs Not Used
+    "PRIVACY001": ["MASWE-0110"],  # Use of Unique Identifiers for User Tracking
+    "MANIFEST-LOW-TARGET-SDK": ["MASWE-0078"],  # Latest Platform Version Not Targeted
 }
 
 # CWE: solo los well-established, sin ambigüedad (misma prudencia que MASWE).
@@ -371,6 +384,13 @@ RULE_TO_CWE: dict[str, list[str]] = {
     "NAT004":    ["CWE-798"],
     "NAT005":    ["CWE-295"],
     "NAT008":    ["CWE-327"],
+    "CRYPTO007": ["CWE-916"],   # Use of Password Hash With Insufficient Computational Effort
+    "AUTH002":   ["CWE-477"],   # Use of Obsolete Function
+    "PRIVACY001": ["CWE-359"],  # Exposure of Private Personal Information to an Unauthorized Actor
+    # MANIFEST-LOW-TARGET-SDK sin CWE: "no targetear la última versión de
+    # plataforma" no tiene un CWE específico razonable (distinto de CODE-3/SCA,
+    # que sí lo tendría vía CWE-1104) — se deja sin forzar, mismo criterio que
+    # el resto de reglas sin match claro (ver nota de Fase 2 sobre prudencia).
 }
 
 # ── Peso base de cada categoría ───────────────────────────────────────────────

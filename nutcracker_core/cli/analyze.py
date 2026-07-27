@@ -37,7 +37,7 @@ from . import cli
     "--serial", "-s",
     default=None,
     metavar="SERIAL",
-    help="ADB device serial for --launch (default: first available).",
+    help="ADB device serial for --launch / --dynamic-checks (default: first available).",
 )
 @click.option(
     "--static-only",
@@ -46,11 +46,21 @@ from . import cli
     help="Force jadx-only decompilation and skip Frida/device runtime steps "
          "(used by queued/scheduled batch runs; see `nutcracker queue`/`serve`).",
 )
+@click.option(
+    "--dynamic-checks",
+    is_flag=True,
+    default=False,
+    help="After static analysis, run headless dynamic checks against --serial "
+         "(ADB-based, no Frida REPL — safe for automation; used by queued dynamic "
+         "jobs). Unlike --launch, never hands the process to an interactive shell.",
+)
 def analyze(apk_path: str, config_path: str, report: str | None, launch: bool, serial: str | None,
-            static_only: bool) -> None:
+            static_only: bool, dynamic_checks: bool) -> None:
     """Analyze a local APK for anti-root protections."""
     orch._LAUNCH_APP = launch
     orch._LAUNCH_SERIAL = serial
+    orch._RUN_DYNAMIC_CHECKS = dynamic_checks
+    orch._DYNAMIC_CHECKS_SERIAL = serial
     config = load_config(config_path)
     if static_only:
         orch.apply_static_only_override(config)

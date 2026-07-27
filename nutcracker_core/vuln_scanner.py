@@ -702,6 +702,59 @@ RULES: list[VulnRule] = [
         recommendation="Seguir el principio de mínimo privilegio: solicitar solo los permisos "
                        "imprescindibles y justificar cada uno en la ficha de Play Store.",
     ),
+
+    # ── M5: Gestión de claves (MASVS-CRYPTO-2) ────────────────────────────────
+    VulnRule(
+        rule_id="CRYPTO007",
+        title="Clave criptográfica derivada directamente de un password/PIN",
+        severity="high",
+        category="M5 - Criptografía débil",
+        pattern=re.compile(
+            r'new\s+SecretKeySpec\s*\(\s*\w*(?:password|passwd|pin|secret)\w*\.getBytes\s*\(',
+            re.IGNORECASE,
+        ),
+        description="La clave simétrica se construye directamente desde los bytes de un "
+                    "password/PIN (SecretKeySpec), sin una función de derivación de claves "
+                    "(KDF). Quien conoce el password reconstruye la clave trivialmente.",
+        recommendation="Derivar la clave con SecretKeyFactory (p.ej. PBKDF2WithHmacSHA256) "
+                       "usando un salt aleatorio e iteraciones suficientes, no los bytes "
+                       "crudos del password.",
+        ignore_if_contains=["test", "mock", "example"],
+    ),
+
+    # ── M4: Autenticación local (MASVS-AUTH-2) ────────────────────────────────
+    VulnRule(
+        rule_id="AUTH002",
+        title="FingerprintManager deprecado en vez de BiometricPrompt",
+        severity="medium",
+        category="M4 - Autenticación insegura",
+        pattern=re.compile(r'android\.hardware\.fingerprint\.FingerprintManager'),
+        description="Uso de la API FingerprintManager (deprecada desde Android 9/API 28). "
+                    "No soporta biometría distinta a huella (rostro, iris) ni la lógica de "
+                    "presentación unificada, y su manejo de CryptoObject es más propenso a "
+                    "errores de implementación.",
+        recommendation="Migrar a androidx.biometric.BiometricPrompt, que además permite "
+                       "vincular la autenticación a una clave del Android Keystore de forma "
+                       "estándar.",
+    ),
+
+    # ── M9: Privacidad (MASVS-PRIVACY-2) ──────────────────────────────────────
+    VulnRule(
+        rule_id="PRIVACY001",
+        title="Identificador de hardware usado para tracking",
+        severity="medium",
+        category="Privacidad",
+        pattern=re.compile(
+            r'\.(?:getDeviceId|getImei|getMeid|getSimSerialNumber|getSubscriberId)\s*\('
+        ),
+        description="Lectura de un identificador de hardware persistente (IMEI/MEID, serial "
+                    "de SIM, IMSI) vía TelephonyManager. Estos identificadores no se pueden "
+                    "resetear por el usuario y permiten trackearlo de forma permanente entre "
+                    "instalaciones/factory resets.",
+        recommendation="Usar un identificador propio, regenerable y específico de la instalación "
+                       "(p.ej. un UUID generado al primer arranque), o el Advertising ID "
+                       "respetando la preferencia de 'Limit Ad Tracking' del usuario.",
+    ),
 ]
 
 
