@@ -14,7 +14,12 @@ import time
 
 import pytest
 
-from nutcracker_core.queue.engine import QueueEngine, _extract_error_summary, _strip_ansi
+from nutcracker_core.queue.engine import (
+    QueueEngine,
+    _extract_error_summary,
+    _resolve_local_apk,
+    _strip_ansi,
+)
 from nutcracker_core.store import db, repository
 
 
@@ -455,3 +460,119 @@ def test_run_streaming_strips_ansi_before_publishing_lines(monkeypatch, tmp_path
     engine.drain()
 
     assert received == ["línea con color", "línea normal"]
+
+
+# ── _resolve_local_apk (fix: dashboard no reutilizaba APK descargado) ───────
+
+def test_resolve_local_apk_finds_package_named_apk(tmp_path, monkeypatch):
+    """downloads/<package>/<package>.apk (formato apkeep >= 0.18)."""
+    pkg = "com.example.app"
+    dl_dir = tmp_path / "downloads" / pkg
+    dl_dir.mkdir(parents=True)
+    apk = dl_dir / f"{pkg}.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    monkeypatch.chdir(tmp_path)
+    import os; result = _resolve_local_apk(pkg); assert result is not None and os.path.basename(result) == f"{pkg}.apk"
+
+
+def test_resolve_local_apk_finds_base_apk(tmp_path, monkeypatch):
+    """downloads/<package>/base.apk (formato App Bundle clásico)."""
+    pkg = "com.example.bundle"
+    dl_dir = tmp_path / "downloads" / pkg
+    dl_dir.mkdir(parents=True)
+    apk = dl_dir / "base.apk"
+    apk.write_bytes(b"PK\x03\x04")
+    # Splits presentes — no deben elegirse
+    (dl_dir / "split_config.arm64_v8a.apk").write_bytes(b"PK\x03\x04")
+
+    monkeypatch.chdir(tmp_path)
+    import os; result = _resolve_local_apk(pkg); assert result is not None and os.path.basename(result) == "base.apk"
+
+
+def test_resolve_local_apk_skips_split_and_config_apks(tmp_path, monkeypatch):
+    """Si solo hay splits/configs en downloads/<package>/ (sin base ni
+    package.apk), la heurística no debe elegirlos — retorna None."""
+    pkg = "com.example.splitsonly"
+    dl_dir = tmp_path / "downloads" / pkg
+    dl_dir.mkdir(parents=True)
+    (dl_dir / "split_config.arm64_v8a.apk").write_bytes(b"PK\x03\x04")
+    (dl_dir / "split_config.xxhdpi.apk").write_bytes(b"PK\x03\x04")
+
+    monkeypatch.chdir(tmp_path)
+    assert _resolve_local_apk(pkg) is None
+
+
+def test_resolve_local_apk_returns_none_when_no_downloads_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert _resolve_local_apk("com.example.notdownloaded") is None
+
+
+def test_resolve_local_apk_returns_target_for_existing_apk_path(tmp_path):
+    """Si target ya es una ruta a un .apk existente, lo devuelve tal cual."""
+    apk = tmp_path / "manual.apk"
+    apk.write_bytes(b"PK\x03\x04")
+    assert _resolve_local_apk(str(apk)) == str(apk)
+
+
+def test_resolve_local_apk_rejects_non_package_strings():
+    """Strings que no son package IDs ni rutas .apk válidas → None."""
+    assert _resolve_local_apk("notapackage") is None
+    assert _resolve_local_apk("/path/does/not/exist.apk") is None
+    assert _resolve_local_apk("") is None
+
+
+def test_job_with_package_id_reuses_local_apk(monkeypatch, tmp_path, engine):
+    """FIX 2026-07-27: un job encolado desde el dashboard con un package ID
+    (no una ruta .apk) debe resolver downloads/<package>/<package>.apk y
+    construir `analyze <path>` (local) en vez de `scan <package>` (que
+    fuerza descarga y falla si no hay credenciales)."""
+    pkg = "com.example.app"
+    dl_dir = tmp_path / "downloads" / pkg
+    dl_dir.mkdir(parents=True)
+    apk = dl_dir / f"{pkg}.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    monkeypatch.chdir(tmp_path)
+
+    seen_cmds = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit(pkg, kind="static")
+    outcomes = engine.drain()
+
+    assert len(outcomes) == 1 and outcomes[0].ok
+    cmd = seen_cmds[0]
+    # Debe ir por analyze (local), no scan (descarga)
+    assert "analyze" in cmd
+    import os; assert any(os.path.basename(c) == f"{pkg}.apk" for c in cmd)
+    assert "scan" not in cmd
+
+
+def test_job_with_package_id_falls_back_to_scan_when_no_local_apk(monkeypatch, tmp_path, engine):
+    """Si no hay APK local reusable, el job cae al camino original:
+    `scan <package>` (descarga)."""
+    pkg = "com.example.neverdownloaded"
+
+    monkeypatch.chdir(tmp_path)
+
+    seen_cmds = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit(pkg, kind="static")
+    outcomes = engine.drain()
+
+    assert len(outcomes) == 1 and outcomes[0].ok
+    cmd = seen_cmds[0]
+    assert "scan" in cmd
+    assert pkg in cmd

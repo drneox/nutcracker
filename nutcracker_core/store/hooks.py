@@ -55,6 +55,19 @@ def _persist_after_analysis(
     try:
         run_id = repository.insert_run(conn, package, kind="full", status="running")
 
+        # FIX (reportado en vivo, 2026-07-27): registrar de dónde salió el
+        # .apk analizado -- sin esto, "re-analizar" en el dashboard siempre
+        # asumía que la app se podía volver a *descargar* por package id,
+        # fallando para apps analizadas desde un .apk local que nunca estuvo
+        # publicado en ninguna store. orchestrator._run_analysis deja la ruta
+        # en NUTCRACKER_APK_SOURCE (solo si el archivo sobrevive al análisis,
+        # ver ahí) -- misma técnica de env var que NUTCRACKER_QUEUE_JOB_ID,
+        # necesaria porque esta función comparte firma con otros post-hooks
+        # (aireview) que no aceptan kwargs extra en fire_post_hooks.
+        apk_source = os.environ.get("NUTCRACKER_APK_SOURCE")
+        if apk_source:
+            repository.upsert_app(conn, package, source=f"local:{apk_source}")
+
         masvs_report = None
         try:
             from ..masvs import build_masvs_report

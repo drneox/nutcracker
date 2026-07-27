@@ -503,6 +503,23 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
             _generate_pdf(result, vuln_scan,
                           vuln_scan_enabled=_feature_enabled("sast_scan", default=True))
 
+        # FIX (reportado en vivo por el usuario, 2026-07-27): el dashboard
+        # asumía que "re-analizar" siempre podía volver a *descargar* la app
+        # por su package id (scan), pero una app analizada desde un .apk local
+        # (analyze <path>, o un job local vía la cola) puede no estar
+        # publicada en ninguna store -- el intento de re-descarga fallaba con
+        # "APK no encontrada en 'downloads' tras la descarga" para apps que
+        # nunca vinieron de ahí en primer lugar. store/hooks.py no puede
+        # recibir apk_path directo (la firma de after_analysis es compartida
+        # con otros post-hooks sin **kwargs, ver comentario abajo) -- se pasa
+        # por env var, mismo patrón que NUTCRACKER_QUEUE_JOB_ID. Solo se fija
+        # si el archivo va a seguir existiendo tras esta función (keep_apk) --
+        # si se va a borrar, no hay nada reutilizable que ofrecer.
+        if keep_apk and apk_path and apk_path.exists():
+            os.environ["NUTCRACKER_APK_SOURCE"] = str(apk_path.resolve())
+        else:
+            os.environ.pop("NUTCRACKER_APK_SOURCE", None)
+
         # ── Post-hooks de plugins ──────────────────────────────────────────
         # Firma estable (package, result, vuln_scan, config): otros plugins (p.ej. aireview)
         # ya registran hooks con esta firma exacta y no aceptan **kwargs adicionales.

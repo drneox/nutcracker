@@ -97,6 +97,48 @@ def test_persist_after_analysis_writes_run_findings_and_artifacts(db_path, tmp_p
         conn.close()
 
 
+def test_persist_after_analysis_records_local_apk_source(db_path, tmp_path, monkeypatch):
+    """FIX (reportado en vivo, 2026-07-27): sin esto, "re-analizar" en el
+    dashboard siempre reintentaba *descargar* la app por package id, lo cual
+    falla para apps analizadas desde un .apk local que nunca estuvo publicado
+    en ninguna store. orchestrator._run_analysis deja la ruta real en
+    NUTCRACKER_APK_SOURCE cuando el archivo sobrevive al análisis (keep_apk)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NUTCRACKER_APK_SOURCE", "/home/user/downloads/nutbank.apk")
+    result = _mock_result(protected=True)
+    _write_fake_artifacts(result.package)
+    config = {"store": {"db_path": str(db_path)}}
+
+    _persist_after_analysis(package=result.package, result=result, vuln_scan=None, config=config)
+
+    conn = db.connect(str(db_path))
+    try:
+        app = repository.get_app(conn, result.package)
+        assert app["source"] == "local:/home/user/downloads/nutbank.apk"
+    finally:
+        conn.close()
+
+
+def test_persist_after_analysis_leaves_source_null_without_env_var(db_path, tmp_path, monkeypatch):
+    """Camino existente (analizado por scan/descarga, o sin fuente local
+    persistente): sin NUTCRACKER_APK_SOURCE en el entorno, source queda como
+    estaba (None para una app nueva) -- no se inventa un valor."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("NUTCRACKER_APK_SOURCE", raising=False)
+    result = _mock_result(protected=True)
+    _write_fake_artifacts(result.package)
+    config = {"store": {"db_path": str(db_path)}}
+
+    _persist_after_analysis(package=result.package, result=result, vuln_scan=None, config=config)
+
+    conn = db.connect(str(db_path))
+    try:
+        app = repository.get_app(conn, result.package)
+        assert app["source"] is None
+    finally:
+        conn.close()
+
+
 def test_persist_after_analysis_respects_store_disabled(db_path, tmp_path):
     result = _mock_result(protected=False)
     config = {"store": {"db_path": str(db_path), "enabled": False}}

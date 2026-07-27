@@ -56,6 +56,52 @@ def _is_local_apk(target: str) -> bool:
     return Path(target).exists() and target.lower().endswith(".apk")
 
 
+def _resolve_local_apk(target: str) -> str | None:
+    """Si ``target`` es un package ID con un APK ya descargado en
+    ``downloads/<package>/``, devuelve la ruta al APK base (reutilizando la
+    misma heurística que ``downloader._find_downloaded_apk``).
+
+    Esto permite que un job encolado desde el dashboard con un package ID
+    (no una ruta de archivo) reutilice un APK descargado previamente en vez
+    de forzar una nueva descarga que puede fallar (credenciales, región,
+    app retirada de Google Play, etc.).
+
+    Retorna ``None`` si no hay APK local reusable.
+    """
+    # Caso 1: target ya es una ruta a un .apk existente → ya es local
+    if _is_local_apk(target):
+        return target
+
+    # Caso 2: target no parece un package ID → no hay nada que resolver
+    if "/" in target or "\\" in target or target.lower().endswith(".apk"):
+        return None
+    # Debe verse como un package ID (ej. com.example.app)
+    if not target or "." not in target:
+        return None
+
+    downloads_dir = Path("downloads") / target
+    if not downloads_dir.is_dir():
+        return None
+
+    # APK con nombre del paquete (formato apkeep >= 0.18)
+    pkg_apk = downloads_dir / f"{target}.apk"
+    if pkg_apk.exists():
+        return str(pkg_apk)
+
+    # base.apk (formato App Bundle clásico)
+    base_apk = downloads_dir / "base.apk"
+    if base_apk.exists():
+        return str(base_apk)
+
+    # Cualquier .apk que NO sea split/config (heurística)
+    for apk in sorted(downloads_dir.glob("*.apk"), key=os.path.getmtime, reverse=True):
+        name_lower = apk.name.lower()
+        if "config." not in name_lower and "split_" not in name_lower:
+            return str(apk)
+
+    return None
+
+
 # Marcadores usados por _extract_error_summary para reconocer líneas que
 # probablemente son la causa raíz real de un fallo.
 _ERROR_MARKERS = ("error", "failed", "traceback", "exception", "no route to host",
@@ -221,9 +267,24 @@ class QueueEngine:
         finally:
             conn.close()
 
+        # FIX (2026-07-27): si el target es un package ID (no una ruta .apk),
+        # intenta resolverlo a un APK ya descargado en downloads/<package>/
+        # antes de construir el comando. Esto evita que el dashboard fuerce
+        # una nueva descarga (que falla si no hay credenciales o la app no
+        # está disponible) cuando el APK ya existe localmente.
+        effective_target = job.target
+        effective_is_local = job.is_local_apk
+        if not effective_is_local and job.kind != "aipwn":
+            resolved = _resolve_local_apk(job.target)
+            if resolved:
+                _log.info("job #%s: reusing local APK %s for package %s",
+                          job.db_id, resolved, job.target)
+                effective_target = resolved
+                effective_is_local = True
+
         cmd = orch.build_job_cmd(
-            job.target,
-            is_local_apk=job.is_local_apk,
+            effective_target,
+            is_local_apk=effective_is_local,
             config_path=self.config_path,
             static_only=(job.kind == "static"),
             dynamic_checks=(job.kind == "dynamic"),

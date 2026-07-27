@@ -5,6 +5,8 @@ interactivo de Frida en vez de un modo headless."""
 
 from __future__ import annotations
 
+import os
+
 from nutcracker_core import orchestrator as orch
 
 
@@ -177,6 +179,67 @@ def test_build_job_cmd_aipwn_without_serial_omits_flag():
     cmd = orch.build_job_cmd("com.example.tapjacking", is_local_apk=False, aipwn=True)
     assert "--serial" not in cmd
     assert cmd[-1] == "com.example.tapjacking"
+
+
+# ── _run_analysis: NUTCRACKER_APK_SOURCE (fix reportado en vivo, 2026-07-27) ─
+# El dashboard asumía que "re-analizar" siempre podía re-descargar la app por
+# package id -- fallaba para apps analizadas desde un .apk local nunca
+# publicado en ninguna store. _run_analysis debe dejar la ruta real en esta
+# env var solo cuando el archivo sobrevive al análisis (keep_apk=True).
+
+class _FakeAnalyzer:
+    def __init__(self, progress_callback=None, engine=None):
+        pass
+
+    def analyze(self, apk_path):
+        result = type("FakeResult", (), {})()
+        result.package = "com.example.fake"
+        result.protected = False
+        result.protection_broken = False
+        result.elapsed_seconds = 0.0
+        return result
+
+
+def _mock_run_analysis_deps(monkeypatch):
+    monkeypatch.setattr(orch, "APKAnalyzer", _FakeAnalyzer)
+    monkeypatch.setattr(orch, "print_report", lambda result: None)
+    monkeypatch.setattr(orch, "_post_analysis_flow", lambda result, apk_path: None)
+    monkeypatch.setattr(orch, "save_analysis_json", lambda *a, **kw: None)
+    monkeypatch.setattr(orch, "print_masvs_summary", lambda *a, **kw: None)
+    monkeypatch.setattr(orch, "_print_verdict", lambda *a, **kw: None)
+    monkeypatch.setattr(orch, "_print_elapsed", lambda *a, **kw: None)
+    monkeypatch.setattr(orch, "_generate_pdf", lambda *a, **kw: None)
+    monkeypatch.setattr(orch, "_RUN_DYNAMIC_CHECKS", False)
+
+    seen_hook_calls = []
+    monkeypatch.setattr(orch, "fire_post_hooks", lambda event, **kw: seen_hook_calls.append((event, kw)))
+    return seen_hook_calls
+
+
+def test_run_analysis_sets_apk_source_env_when_keep_apk_true(monkeypatch, tmp_path):
+    _mock_run_analysis_deps(monkeypatch)
+    monkeypatch.delenv("NUTCRACKER_APK_SOURCE", raising=False)
+
+    apk_path = tmp_path / "nutbank.apk"
+    apk_path.write_bytes(b"PK\x03\x04")
+
+    orch._run_analysis(apk_path, report_path=None, keep_apk=True, gen_pdf=False)
+
+    assert os.environ.get("NUTCRACKER_APK_SOURCE") == str(apk_path.resolve())
+    assert apk_path.exists(), "keep_apk=True no debe borrar el archivo"
+
+
+def test_run_analysis_clears_apk_source_env_when_keep_apk_false(monkeypatch, tmp_path):
+    _mock_run_analysis_deps(monkeypatch)
+    monkeypatch.setenv("NUTCRACKER_APK_SOURCE", "/stale/path/from/a/previous/run.apk")
+
+    apk_path = tmp_path / "downloaded.apk"
+    apk_path.write_bytes(b"PK\x03\x04")
+
+    orch._run_analysis(apk_path, report_path=None, keep_apk=False, gen_pdf=False)
+
+    assert "NUTCRACKER_APK_SOURCE" not in os.environ
+    assert not apk_path.exists(), "keep_apk=False debe borrar el archivo como antes"
 
 
 # ── _run_dynamic_checks_for: headless, nunca cede el proceso ────────────────
