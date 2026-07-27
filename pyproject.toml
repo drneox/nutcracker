@@ -26,7 +26,7 @@ dependencies = [
 # `nutcracker dashboard` — installed automatically on first use if missing
 # (same auto-install-on-import pattern as every other plugin), listed here
 # too so `pip install .[dashboard]` works for a non-interactive setup.
-dashboard = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "av>=11.0"]
+dashboard = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
 dev = ["pytest>=8.0.0"]
 
 [project.scripts]

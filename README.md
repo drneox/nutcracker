@@ -64,7 +64,7 @@ All results are consolidated into a technical PDF report ready for reporting.
 - Complete PDF report: cover page, MASVS compliance, protections, misconfigurations, OSINT, leaks, and SAST vulnerabilities
 - Batch mode to scan multiple apps, backed by a **job queue** with configurable static parallelism and per-device serialization for dynamic jobs (see [Mass Execution](#mass-execution-queue--scheduler))
 - Built-in **scheduler** that re-queues every app for periodic re-review (default ≥1/month), driven by `nutcracker serve`
-- Local **web dashboard** (`nutcracker dashboard`): apps overview, live job logs, device screenshot, MASVS trend per app, and an inline schedule editor — SQLite-backed, no external services (see [Web Dashboard](#web-dashboard))
+- Local **web dashboard** (`nutcracker dashboard`): apps overview, live job logs, fluid WebUSB device video, MASVS trend per app, and an inline schedule editor — SQLite-backed, no external services (see [Web Dashboard](#web-dashboard))
 - Modules controllable via feature flags in `config.yaml`
 - `decompilation: jadx` pipeline option forces static-only analysis — disables Frida/emulator even when DexGuard is detected
 
@@ -650,9 +650,8 @@ It shows:
   dropdown picks the `.apk` source for the whole file — the store (default) or the app already
   installed on the connected device (`adb pull`, no download at all).
 - **Live logs** — real job output streamed line-by-line over WebSocket as it happens.
-- **Device** — real live video via your own [scrcpy](https://github.com/Genymobile/scrcpy)
-  installation (see below), with automatic fallback to a polling screenshot
-  (`adb exec-out screencap`) if scrcpy isn't configured or the stream drops mid-session.
+- **Device** — fluid live video via WebUSB + WebCodecs, opt-in (see below). No fallback: without
+  WebUSB support the tab just shows why (unsupported browser, or the bundle isn't built yet).
 - **Agent / Chat** — the real system prompt of the `aipwn` bypass agent (if installed), and a
   WebSocket chat channel that a running `aipwn` job actually consumes (see below).
 - **Inline schedule editor** — change an app's review interval without touching the CLI.
@@ -661,34 +660,13 @@ The dashboard is itself a plugin (`nutcracker_core/plugins/dashboard/`) — it o
 store and *drives* the queue through their public APIs, following the same core/plugin boundary
 as every other plugin in this project.
 
-### Live device video (scrcpy)
-
-The dashboard does not reimplement the scrcpy wire protocol — it drives your own
-[scrcpy](https://github.com/Genymobile/scrcpy) client binary (any recent version; validated
-against 3.1) headlessly (`scrcpy --no-window --record=<temp>.mkv`) and re-reads the growing
-recording with PyAV to serve the latest frame as `multipart/x-mixed-replace`, which any browser
-renders natively in an `<img>` — no CDN, no WebRTC/H.264-in-JS. Point nutcracker at your own
-scrcpy install:
-
-```yaml
-dashboard:
-  scrcpy_path: '/path/to/scrcpy'                 # Linux/macOS
-  # scrcpy_path: '/mnt/c/.../scrcpy.exe'         # Windows scrcpy, from WSL
-```
-
-Leave it empty to search `scrcpy`/`scrcpy.exe` on `PATH`. Without a working scrcpy, the "Device"
-tab falls back to the screenshot-polling view automatically — nothing breaks either way. Install
-PyAV in the dashboard environment (`pip install .[dashboard]` already includes it, or
-`pip install av` manually).
-
 ### Fluid device video (WebUSB + WebCodecs)
 
-The file-based approach above is real video, but capped at ~1-2fps by its own architecture
-(rereading a growing recording file). For genuinely fluid video (15-30fps, like
-[app.webadb.com](https://app.webadb.com)), the dashboard also ships an opt-in **WebUSB** mode:
-the *browser itself* speaks the ADB/scrcpy protocol directly over USB — no server-side process at
-all for this path — and decodes raw H.264 natively via the WebCodecs API. It's the project's first
-JS subproject (`nutcracker_core/plugins/dashboard/webusb/`, TypeScript + Vite, built on
+For genuinely fluid video (15-30fps, like [app.webadb.com](https://app.webadb.com)), the dashboard
+ships an opt-in **WebUSB** mode: the *browser itself* speaks the ADB/scrcpy protocol directly over
+USB — no server-side process at all for this path — and decodes raw H.264 natively via the
+WebCodecs API. It's the project's first JS subproject
+(`nutcracker_core/plugins/dashboard/webusb/`, TypeScript + Vite, built on
 [Tango](https://github.com/yume-chan/ya-webadb)):
 
 ```bash
@@ -700,9 +678,10 @@ This produces a self-contained bundle (the real `scrcpy-server` binary ends up e
 as a data URI — no separate `.bin` file to manage) served by the dashboard. A "🔌 USB directo
 (fluido)" button appears in the Device tab automatically once the bundle exists and the browser
 supports it — real constraints apply: **Chromium only** (no Firefox/Safari, WebUSB isn't
-implemented there), the phone must be on **USB on the same machine as the browser** (unlike the
-scrcpy-based mode, this can't reach a remote/networked device), and it needs a secure context
-(fine on `localhost`, not on a plain-HTTP LAN address). See
+implemented there), the phone must be on **USB on the same machine as the browser** (can't reach a
+remote/networked device), and it needs a secure context (fine on `localhost`, not on a plain-HTTP
+LAN address). Without a supported browser or a built bundle, the Device tab explains why instead
+of silently falling back to anything else. See
 [webusb/README.md](nutcracker_core/plugins/dashboard/webusb/README.md) for the full picture.
 
 ### `aipwn` in the queue + chat wiring

@@ -174,12 +174,6 @@ scheduler:
 dashboard:
   bind: '127.0.0.1'
   port: 8765
-  # Ruta al binario cliente de scrcpy (https://github.com/Genymobile/scrcpy)
-  # para video en vivo real del dispositivo en la pestaña "Dispositivo".
-  # nutcracker NO reimplementa el protocolo scrcpy ni vendorea el binario —
-  # usa tu propia instalación. Vacío = busca "scrcpy"/"scrcpy.exe" en PATH;
-  # si no se encuentra, la pestaña cae automáticamente al polling de
-  # screenshots existente (ver plan.md). Ejemplo en WSL apuntando a una
-  # instalación de scrcpy en Windows:
-  # scrcpy_path: '/mnt/c/Users/<usuario>/scrcpy-win64-v3.1/scrcpy.exe'
-  scrcpy_path: ''
+  # Video en vivo del dispositivo: pestaña "Dispositivo" -> "🔌 USB directo
+  # (fluido)" (WebUSB + WebCodecs, ver nutcracker_core/plugins/dashboard/webusb/).
+  # Sin eso, cae al polling de screenshots (adb exec-out screencap).

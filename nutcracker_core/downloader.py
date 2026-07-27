@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -260,6 +261,61 @@ class APKPureDownloader:
 
 # ── Google Play (requiere AAS token) ─────────────────────────────────────────
 
+_NETWORK_SERIAL_RE = re.compile(r"^[\w.\-]+:\d+$")
+
+
+# Fragmentos de stderr/stdout que indican una falla *transitoria* del daemon
+# adb (no del device/paquete) -- vistos en uso real justo al conectar WebUSB
+# (el navegador reclamando el USB parece desestabilizar momentáneamente
+# adb.exe en Windows): "could not read ok from ADB Server", "failed to start
+# daemon", "cannot connect to daemon", "daemon not running". Reintentar tras
+# una pausa corta resuelve esto casi siempre -- confirmado en uso real que el
+# daemon se recupera solo en 1-2s.
+_DAEMON_TRANSIENT_MARKERS = (
+    "cannot connect to daemon",
+    "failed to start daemon",
+    "could not read ok from adb server",
+    "daemon not running",
+)
+
+
+def _is_daemon_transient_error(output: str) -> bool:
+    low = output.lower()
+    return any(marker in low for marker in _DAEMON_TRANSIENT_MARKERS)
+
+
+def _ensure_network_serial_connected(serial: str, adb_bin: str = "adb", attempts: int = 3) -> None:
+    """Si ``serial`` tiene forma "host:puerto" (adb-over-wifi, tras ``adb
+    tcpip <puerto>`` en el propio teléfono), asegura la conexión antes de
+    usarlo -- ``adb connect`` es idempotente (no falla si ya está conectado).
+
+    Necesario porque esa conexión vive en el servidor adb local y NO sobrevive
+    un reinicio del daemon (crash, ``adb kill-server``, sleep/wake de la PC) --
+    a diferencia de ``adb tcpip`` en el teléfono, que sí persiste hasta que el
+    teléfono se reinicia. Sin esto, cualquier reinicio del daemon deja el
+    serial de red "perdido" hasta que alguien corra ``adb connect`` a mano de
+    nuevo (encontrado en uso real: "adb.exe: device '<ip>:5555' not found"
+    tras un reinicio silencioso del daemon en medio de un batch job).
+
+    Reintenta ante fallas transitorias del daemon (ver
+    ``_DAEMON_TRANSIENT_MARKERS`` -- encontrado en uso real justo al conectar
+    WebUSB) en vez de rendirse en el primer intento."""
+    if not _NETWORK_SERIAL_RE.match(serial):
+        return
+    for attempt in range(attempts):
+        try:
+            proc = subprocess.run(
+                [adb_bin, "connect", serial], capture_output=True, text=True, timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return  # el pm path/pull de abajo va a fallar con un error claro igual
+        output = (proc.stdout or "") + (proc.stderr or "")
+        if not _is_daemon_transient_error(output):
+            return  # conectado, o un error real (device no encontrado, etc.) -- no es transitorio
+        if attempt < attempts - 1:
+            time.sleep(1.5)
+
+
 class DeviceInstalledDownloader:
     """
     Extrae el .apk ya instalado en un dispositivo/emulador conectado, sin
@@ -289,11 +345,29 @@ class DeviceInstalledDownloader:
         cmd += list(args)
         return cmd
 
+    def _run_adb(self, args: list[str], timeout: int, attempts: int = 3) -> subprocess.CompletedProcess:
+        """``subprocess.run`` con reintentos ante fallas transitorias del
+        daemon adb (ver ``_DAEMON_TRANSIENT_MARKERS``) -- un solo intento
+        alcanza casi siempre, pero conectar WebUSB en el dashboard puede
+        desestabilizar momentáneamente adb.exe (visto en uso real), y sin
+        reintentos eso tira abajo el job entero por un problema que se
+        resuelve solo en 1-2s."""
+        last: "subprocess.CompletedProcess | None" = None
+        for attempt in range(attempts):
+            last = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+            output = (last.stdout or "") + (last.stderr or "")
+            if not _is_daemon_transient_error(output):
+                return last
+            if attempt < attempts - 1:
+                time.sleep(1.5)
+        return last  # último intento, aunque siga siendo el error transitorio
+
     def download(self, package_id: str) -> Path:
+        if self.serial:
+            _ensure_network_serial_connected(self.serial, self.adb_bin)
         try:
-            result = subprocess.run(
-                self._adb_cmd("shell", "pm", "path", package_id),
-                capture_output=True, text=True, timeout=15,
+            result = self._run_adb(
+                self._adb_cmd("shell", "pm", "path", package_id), timeout=15,
             )
         except FileNotFoundError as exc:
             raise APKDownloadError("adb no está instalado o no está en el PATH.") from exc
@@ -321,9 +395,8 @@ class DeviceInstalledDownloader:
         for remote_path in remote_paths:
             remote_name = Path(remote_path).name  # base.apk, split_config.arm64_v8a.apk, ...
             local_path = package_dir / remote_name
-            pull = subprocess.run(
-                self._adb_cmd("pull", remote_path, str(local_path)),
-                capture_output=True, text=True, timeout=180,
+            pull = self._run_adb(
+                self._adb_cmd("pull", remote_path, str(local_path)), timeout=180,
             )
             if pull.returncode != 0 or not local_path.exists():
                 raise APKDownloadError(

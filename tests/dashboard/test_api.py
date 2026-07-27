@@ -52,6 +52,20 @@ def test_summary_empty_db(client):
     assert r.json() == {"apps": 0, "runs": 0, "findings": 0, "active_jobs": 0}
 
 
+def test_default_serial_null_when_not_configured(client):
+    r = client.get("/api/config/default-serial")
+    assert r.status_code == 200
+    assert r.json() == {"serial": None}
+
+
+def test_default_serial_reflects_configured_value(db_path, engine):
+    app = create_app(db_path=db_path, engine=engine, default_serial="172.20.10.6:5555")
+    client_with_serial = TestClient(app)
+    r = client_with_serial.get("/api/config/default-serial")
+    assert r.status_code == 200
+    assert r.json() == {"serial": "172.20.10.6:5555"}
+
+
 def test_apps_and_runs_reflect_seeded_data(db_path, client):
     _seed_app_with_run(db_path)
 
@@ -220,47 +234,6 @@ def test_queue_batch_propagates_source_and_serial_to_every_submit(monkeypatch, c
     assert all(c["serial"] == "ZY22GPM27J" for c in calls)
 
 
-def test_device_endpoint_reports_no_devices_without_adb(monkeypatch, client):
-    monkeypatch.setattr(
-        "nutcracker_core.plugins.dashboard.device.subprocess.run",
-        lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()),
-    )
-    r = client.get("/api/device")
-    assert r.status_code == 200
-    assert r.json() == {"serials": []}
-
-
-def test_device_screenshot_503_when_unavailable(monkeypatch, client):
-    monkeypatch.setattr("nutcracker_core.plugins.dashboard.device.screenshot_png", lambda serial=None: None)
-    r = client.get("/api/device/screenshot")
-    assert r.status_code == 503
-
-
-def test_device_video_status_unavailable_without_scrcpy(monkeypatch, client):
-    monkeypatch.setattr(
-        "nutcracker_core.plugins.dashboard.scrcpy_video.shutil.which", lambda *a, **kw: None,
-    )
-    r = client.get("/api/device/video/status")
-    assert r.status_code == 200
-    assert r.json() == {"available": False, "scrcpy_bin": None}
-
-
-def test_device_video_status_available_when_scrcpy_on_path(monkeypatch, client):
-    monkeypatch.setattr(
-        "nutcracker_core.plugins.dashboard.scrcpy_video.shutil.which",
-        lambda name, **kw: "/usr/bin/scrcpy" if name == "scrcpy" else None,
-    )
-    r = client.get("/api/device/video/status")
-    assert r.status_code == 200
-    assert r.json() == {"available": True, "scrcpy_bin": "/usr/bin/scrcpy"}
-
-
-def test_device_video_503_when_scrcpy_unavailable(monkeypatch, client):
-    monkeypatch.setattr(
-        "nutcracker_core.plugins.dashboard.scrcpy_video.shutil.which", lambda *a, **kw: None,
-    )
-    r = client.get("/api/device/video")
-    assert r.status_code == 503
 
 
 def test_chat_pending_empty_by_default(client):
