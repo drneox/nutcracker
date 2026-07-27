@@ -666,6 +666,30 @@ tab falls back to the screenshot-polling view automatically — nothing breaks e
 PyAV in the dashboard environment (`pip install .[dashboard]` already includes it, or
 `pip install av` manually).
 
+### Fluid device video (WebUSB + WebCodecs)
+
+The file-based approach above is real video, but capped at ~1-2fps by its own architecture
+(rereading a growing recording file). For genuinely fluid video (15-30fps, like
+[app.webadb.com](https://app.webadb.com)), the dashboard also ships an opt-in **WebUSB** mode:
+the *browser itself* speaks the ADB/scrcpy protocol directly over USB — no server-side process at
+all for this path — and decodes raw H.264 natively via the WebCodecs API. It's the project's first
+JS subproject (`nutcracker_core/plugins/dashboard/webusb/`, TypeScript + Vite, built on
+[Tango](https://github.com/yume-chan/ya-webadb)):
+
+```bash
+cd nutcracker_core/plugins/dashboard/webusb
+npm install && npm run build
+```
+
+This produces a self-contained bundle (the real `scrcpy-server` binary ends up embedded inside it
+as a data URI — no separate `.bin` file to manage) served by the dashboard. A "🔌 USB directo
+(fluido)" button appears in the Device tab automatically once the bundle exists and the browser
+supports it — real constraints apply: **Chromium only** (no Firefox/Safari, WebUSB isn't
+implemented there), the phone must be on **USB on the same machine as the browser** (unlike the
+scrcpy-based mode, this can't reach a remote/networked device), and it needs a secure context
+(fine on `localhost`, not on a plain-HTTP LAN address). See
+[webusb/README.md](nutcracker_core/plugins/dashboard/webusb/README.md) for the full picture.
+
 ### `aipwn` in the queue + chat wiring
 
 `aipwn` (the LLM-powered bypass agent) can run as a queue job like any other target — its live
