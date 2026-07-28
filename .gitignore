@@ -24,6 +24,9 @@ logs/
 .semgrep/
 frida_scripts/
 config.yaml
+test.yaml
+config*.yaml
+!config.yaml.example
 nutcracker.db
 nutcracker.db-wal
 nutcracker.db-shm
