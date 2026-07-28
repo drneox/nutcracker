@@ -138,7 +138,14 @@ def build_job_cmd(
     entry = str(Path(__file__).resolve().parent.parent / "nutcracker.py")
     cmd = [sys.executable, entry]
     if aipwn:
-        cmd += ["aipwn", target]
+        # FIX (reportado en vivo, 2026-07-27): sin --report, run_aipwn() genera
+        # el ExploitReport en memoria (PoCs confirmados/no confirmados, con
+        # evidencia y screenshots) pero plugins/aipwn/__init__.py solo lo
+        # vuelca a disco (exploit_report_<pkg>.json/.pdf) si este flag está
+        # presente -- un job de cola/dashboard corría el exploit agent entero
+        # y tiraba el resultado: el único rastro que sobrevivía era el .txt de
+        # log crudo en logs/, nada reutilizable ni visible desde el dashboard.
+        cmd += ["aipwn", target, "--report"]
         if serial:
             cmd += ["--serial", serial]
         return cmd
@@ -1188,7 +1195,12 @@ def _do_decompile(apk_path: Path, package: str) -> Path | None:
             transient=True,
         ) as progress:
             progress.add_task(t("cli_decompiling_pkg", package=package), total=None)
-            dest = decompile(apk_path, output_dir)
+            # dest_name=package (no apk_path.stem): apkeep guarda el APK base de
+            # un App Bundle literalmente como "base.apk" para cualquier paquete,
+            # así que sin esto jobs estáticos concurrentes de apps distintas
+            # decompilarían todas hacia el mismo "decompiled/base/" y se pisarían
+            # entre sí (visto en vivo, 2026-07-28 -- ver decompiler.decompile()).
+            dest = decompile(apk_path, output_dir, dest_name=package)
 
         console.print(f"[green]✔[/green] {t('cli_source_code_at')} [bold]{dest}[/bold]")
 
@@ -1390,6 +1402,7 @@ def _do_vuln_scan(
                 scanner_engine="none",
             )
 
+        _inject_manifest_component_findings(scan_result)
         print_vuln_report(scan_result, source_dir)
         pkg_name = package_hint or source_dir.name
         _save_vuln_json(scan_result, pkg_name, manifest=_MANIFEST_ANALYSIS)
@@ -1479,58 +1492,72 @@ def _do_vuln_scan(
             f"  [dim]{t('cli_scanner_used_dim', engine=engine_used, files=scan_result.files_scanned, findings=len(scan_result.findings))}[/dim]"
         )
 
-    # ── Componentes del manifest exportados (COMP006/COMP007/COMP008) ─────────
-    # _MANIFEST_ANALYSIS ya tiene exported_components del manifest extraído.
-    if scan_result is not None and _MANIFEST_ANALYSIS and getattr(_MANIFEST_ANALYSIS, "exported_components", None):
-        try:
-            from nutcracker_core.vuln_scanner import VulnFinding
-            _COMP_MAP = {
-                "activity":  ("COMP006", "Activity exported sin permission",              "critical", "M6 - Componentes inseguros"),
-                "service":   ("COMP007", "Service exported sin permission",               "high",     "M6 - Componentes inseguros"),
-                "receiver":  ("COMP004", "BroadcastReceiver exported sin permission",     "high",     "M6 - Componentes inseguros"),
-                "provider":  ("COMP008", "ContentProvider exported sin permission",       "critical", "M6 - Componentes inseguros"),
-            }
-            existing_comp = {(f.rule_id, f.matched_text) for f in scan_result.findings if f.rule_id.startswith("COMP")}
-            new_comp = []
-            for ec in _MANIFEST_ANALYSIS.exported_components:
-                tag = ec.get("tag", "").lower()
-                name = ec.get("name", "")
-                if tag not in _COMP_MAP:
-                    continue
-                rule_id, title, severity, category = _COMP_MAP[tag]
-                matched = f'<{tag} android:name="{name}" android:exported="true">'
-                if (rule_id, matched) in existing_comp:
-                    continue
-                new_comp.append(VulnFinding(
-                    rule_id=rule_id,
-                    title=f"{title}: {name.split('.')[-1]}",
-                    severity=severity,
-                    category=category,
-                    file=None,
-                    line=0,
-                    matched_text=matched,
-                    description=(
-                        f"{tag.capitalize()} `{name}` tiene android:exported=\"true\" sin "
-                        f"android:permission. Cualquier app o comando ADB puede invocarlo directamente."
-                    ),
-                    recommendation=(
-                        f"Añadir android:exported=\"false\" o proteger con "
-                        f"android:permission=\"<custom-signature-permission>\"."
-                    ),
-                ))
-                existing_comp.add((rule_id, matched))
-            if new_comp:
-                scan_result.findings.extend(new_comp)
-                console.print(f"  [dim]Componentes exportados (manifest): {len(new_comp)} hallazgo(s) COMP[/dim]")
-        except Exception:
-            pass
-
+    _inject_manifest_component_findings(scan_result)
     print_vuln_report(scan_result, source_dir)
 
     # Guardar JSON con nombre canónico por paquete.
     pkg_name = package_hint or source_dir.name
     _save_vuln_json(scan_result, pkg_name, manifest=_MANIFEST_ANALYSIS)
     return scan_result
+
+
+def _inject_manifest_component_findings(scan_result) -> None:
+    """Agrega hallazgos COMP004/006/007/008 (componentes exportados sin
+    permission) a partir de ``_MANIFEST_ANALYSIS.exported_components``.
+
+    FIX (2026-07-28): vivía inline al final de ``_do_vuln_scan``, después del
+    bloque que solo corre cuando ``include_vuln_scan`` está habilitado -- con
+    ``sast_scan: false`` en config.yaml (el camino "solo leak scan" retorna
+    antes de llegar ahí), estos hallazgos nunca se generaban pese a no tener
+    nada que ver con SAST/semgrep: salen enteramente del manifest, no del
+    código. Extraído a función propia para poder llamarlo desde ambos
+    caminos de ``_do_vuln_scan`` (con y sin vuln_scan habilitado)."""
+    if scan_result is None or not _MANIFEST_ANALYSIS:
+        return
+    if not getattr(_MANIFEST_ANALYSIS, "exported_components", None):
+        return
+    try:
+        from nutcracker_core.vuln_scanner import VulnFinding
+        _COMP_MAP = {
+            "activity":  ("COMP006", "Activity exported sin permission",              "critical", "M6 - Componentes inseguros"),
+            "service":   ("COMP007", "Service exported sin permission",               "high",     "M6 - Componentes inseguros"),
+            "receiver":  ("COMP004", "BroadcastReceiver exported sin permission",     "high",     "M6 - Componentes inseguros"),
+            "provider":  ("COMP008", "ContentProvider exported sin permission",       "critical", "M6 - Componentes inseguros"),
+        }
+        existing_comp = {(f.rule_id, f.matched_text) for f in scan_result.findings if f.rule_id.startswith("COMP")}
+        new_comp = []
+        for ec in _MANIFEST_ANALYSIS.exported_components:
+            tag = ec.get("tag", "").lower()
+            name = ec.get("name", "")
+            if tag not in _COMP_MAP:
+                continue
+            rule_id, title, severity, category = _COMP_MAP[tag]
+            matched = f'<{tag} android:name="{name}" android:exported="true">'
+            if (rule_id, matched) in existing_comp:
+                continue
+            new_comp.append(VulnFinding(
+                rule_id=rule_id,
+                title=f"{title}: {name.split('.')[-1]}",
+                severity=severity,
+                category=category,
+                file=None,
+                line=0,
+                matched_text=matched,
+                description=(
+                    f"{tag.capitalize()} `{name}` tiene android:exported=\"true\" sin "
+                    f"android:permission. Cualquier app o comando ADB puede invocarlo directamente."
+                ),
+                recommendation=(
+                    f"Añadir android:exported=\"false\" o proteger con "
+                    f"android:permission=\"<custom-signature-permission>\"."
+                ),
+            ))
+            existing_comp.add((rule_id, matched))
+        if new_comp:
+            scan_result.findings.extend(new_comp)
+            console.print(f"  [dim]Componentes exportados (manifest): {len(new_comp)} hallazgo(s) COMP[/dim]")
+    except Exception:
+        pass
 
 
 def _load_vuln_json(package: str):

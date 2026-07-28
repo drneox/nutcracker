@@ -178,7 +178,19 @@ def test_build_job_cmd_aipwn_runs_aipwn_subcommand_with_package():
 def test_build_job_cmd_aipwn_without_serial_omits_flag():
     cmd = orch.build_job_cmd("com.example.tapjacking", is_local_apk=False, aipwn=True)
     assert "--serial" not in cmd
-    assert cmd[-1] == "com.example.tapjacking"
+
+
+def test_build_job_cmd_aipwn_always_passes_report():
+    """FIX (2026-07-27): sin --report, plugins/aipwn/__init__.py nunca vuelca
+    el ExploitReport a disco (exploit_report_<pkg>.json/.pdf) -- un job de
+    cola/dashboard corría el exploit agent entero y tiraba el resultado, sin
+    dejar nada reutilizable ni visible. Debe pasarse siempre, con o sin serial."""
+    cmd_with_serial = orch.build_job_cmd(
+        "com.example.tapjacking", is_local_apk=False, aipwn=True, serial="ZY22GPM27J",
+    )
+    cmd_without_serial = orch.build_job_cmd("com.example.tapjacking", is_local_apk=False, aipwn=True)
+    assert "--report" in cmd_with_serial
+    assert "--report" in cmd_without_serial
 
 
 # ── build_job_cmd: source="device" (batch estático+aipwn desde archivo) ────
@@ -322,3 +334,93 @@ def test_run_dynamic_checks_for_survives_a_failing_check(monkeypatch):
 
     orch._run_dynamic_checks_for(_FakeResult(), "SERIAL123")  # no debe lanzar
     registry.reset()
+
+
+# ── _inject_manifest_component_findings (COMP004/006/007/008 desde manifest) ──
+#
+# FIX (2026-07-28): vivía inline al final de _do_vuln_scan, en un tramo que
+# solo se alcanzaba con include_vuln_scan=True. Con sast_scan: false en
+# config.yaml (el camino "solo leak scan" retorna antes), estos hallazgos
+# nunca se generaban -- pese a salir enteramente del manifest, sin relación
+# con SAST/semgrep. Se extrajo a función propia llamada desde ambos caminos.
+
+def test_inject_manifest_component_findings_adds_comp_findings(monkeypatch):
+    from nutcracker_core.scan_types import ScanResult
+
+    class _FakeManifest:
+        exported_components = [
+            {"tag": "activity", "name": "com.example.app.AdminActivity"},
+            {"tag": "provider", "name": "com.example.app.SecretProvider"},
+        ]
+
+    monkeypatch.setattr(orch, "_MANIFEST_ANALYSIS", _FakeManifest())
+
+    scan_result = ScanResult(base_dir=None, findings=[], files_scanned=0, scanner_engine="none")
+    orch._inject_manifest_component_findings(scan_result)
+
+    rule_ids = sorted(f.rule_id for f in scan_result.findings)
+    assert rule_ids == ["COMP006", "COMP008"]
+
+
+def test_inject_manifest_component_findings_noop_without_manifest(monkeypatch):
+    from nutcracker_core.scan_types import ScanResult
+
+    monkeypatch.setattr(orch, "_MANIFEST_ANALYSIS", None)
+
+    scan_result = ScanResult(base_dir=None, findings=[], files_scanned=0, scanner_engine="none")
+    orch._inject_manifest_component_findings(scan_result)
+
+    assert scan_result.findings == []
+
+
+def test_inject_manifest_component_findings_noop_for_none_scan_result(monkeypatch):
+    class _FakeManifest:
+        exported_components = [{"tag": "activity", "name": "x"}]
+
+    monkeypatch.setattr(orch, "_MANIFEST_ANALYSIS", _FakeManifest())
+    orch._inject_manifest_component_findings(None)  # no debe lanzar
+
+
+def test_inject_manifest_component_findings_does_not_duplicate_on_rerun(monkeypatch):
+    """Llamarla dos veces sobre el mismo scan_result (posible si el llamador
+    cambia) no debe duplicar los mismos hallazgos COMP."""
+    from nutcracker_core.scan_types import ScanResult
+
+    class _FakeManifest:
+        exported_components = [{"tag": "service", "name": "com.example.app.SyncService"}]
+
+    monkeypatch.setattr(orch, "_MANIFEST_ANALYSIS", _FakeManifest())
+
+    scan_result = ScanResult(base_dir=None, findings=[], files_scanned=0, scanner_engine="none")
+    orch._inject_manifest_component_findings(scan_result)
+    orch._inject_manifest_component_findings(scan_result)
+
+    assert len(scan_result.findings) == 1
+    assert scan_result.findings[0].rule_id == "COMP007"
+
+
+def test_do_vuln_scan_leak_only_path_still_adds_comp_findings(monkeypatch, tmp_path):
+    """Regresión directa del bug: con include_vuln_scan=False (sast_scan:
+    false en config.yaml), _do_vuln_scan tomaba el camino 'solo leak scan' y
+    retornaba ANTES de inyectar los hallazgos COMP del manifest."""
+    source_dir = tmp_path / "decompiled_app"
+    source_dir.mkdir()
+
+    class _FakeManifest:
+        exported_components = [{"tag": "provider", "name": "com.example.app.LeakyProvider"}]
+        misconfigurations = []
+
+    monkeypatch.setattr(orch, "_MANIFEST_ANALYSIS", _FakeManifest())
+    monkeypatch.setattr(orch, "_CFG", {
+        "sast": {"engine": "regex"},
+        "leak_scan": {"native": False, "apkleaks": False, "gitleaks": False},
+    })
+
+    scan_result = orch._do_vuln_scan(
+        source_dir, apk_path=None, package_hint="com.example.app",
+        include_vuln_scan=False, include_leak_scan=False,
+    )
+
+    assert scan_result is not None
+    rule_ids = [f.rule_id for f in scan_result.findings]
+    assert "COMP008" in rule_ids, "el hallazgo COMP del manifest se perdía en el camino sin vuln_scan"

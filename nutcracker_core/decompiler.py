@@ -42,9 +42,20 @@ def install_instructions() -> str:
     )
 
 
-def decompile(apk_path: Path, output_dir: Path) -> Path:
+def decompile(apk_path: Path, output_dir: Path, dest_name: str | None = None) -> Path:
     """
     Decompila la APK en output_dir.
+
+    ``dest_name`` nombra el subdirectorio de salida (``output_dir / dest_name``).
+    Por defecto usa ``apk_path.stem`` -- pero para Android App Bundles, apkeep
+    guarda el APK base literalmente como "base.apk" para *cualquier* paquete,
+    así que ese default hace colisionar en el mismo directorio a apps
+    distintas. Encontrado en vivo (2026-07-28): jobs estáticos concurrentes de
+    distintos paquetes (todos descargados como "base.apk") decompilando a la
+    vez hacia "decompiled/base/" -- apktool --force de uno pisaba a mitad de
+    camino el output que el otro job estaba escaneando, dejando
+    "files_scanned: 0" pese a que la app no tenía nada que ver con eso.
+    Orchestrator ya pasa ``dest_name=package`` para evitarlo.
 
     Returns:
         El directorio con los fuentes descompilados.
@@ -53,6 +64,7 @@ def decompile(apk_path: Path, output_dir: Path) -> Path:
         DecompilerError si no hay herramienta disponible o falla la decompilación.
     """
     tool, tool_path = get_available_tool()
+    dest_name = dest_name or apk_path.stem
 
     if tool is None:
         raise DecompilerError(
@@ -64,21 +76,21 @@ def decompile(apk_path: Path, output_dir: Path) -> Path:
 
     if tool == "jadx":
         try:
-            return _decompile_jadx(tool_path, apk_path, output_dir)
+            return _decompile_jadx(tool_path, apk_path, output_dir, dest_name)
         except DecompilerError as jadx_exc:
             apktool_path = _find_tool("apktool")
             if apktool_path:
-                return _decompile_apktool(apktool_path, apk_path, output_dir)
+                return _decompile_apktool(apktool_path, apk_path, output_dir, dest_name)
             raise DecompilerError(
                 f"{jadx_exc}\n\n"
                 "No hay fallback disponible con apktool."
             ) from jadx_exc
     else:
-        return _decompile_apktool(tool_path, apk_path, output_dir)
+        return _decompile_apktool(tool_path, apk_path, output_dir, dest_name)
 
 
-def _decompile_jadx(jadx_path: str, apk_path: Path, output_dir: Path) -> Path:
-    dest = output_dir / apk_path.stem
+def _decompile_jadx(jadx_path: str, apk_path: Path, output_dir: Path, dest_name: str) -> Path:
+    dest = output_dir / dest_name
     dest.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -108,8 +120,8 @@ def _decompile_jadx(jadx_path: str, apk_path: Path, output_dir: Path) -> Path:
     return dest
 
 
-def _decompile_apktool(apktool_path: str, apk_path: Path, output_dir: Path) -> Path:
-    dest = output_dir / apk_path.stem
+def _decompile_apktool(apktool_path: str, apk_path: Path, output_dir: Path, dest_name: str) -> Path:
+    dest = output_dir / dest_name
 
     cmd = [
         apktool_path,
@@ -129,22 +141,29 @@ def _decompile_apktool(apktool_path: str, apk_path: Path, output_dir: Path) -> P
     return dest
 
 
-def extract_manifest(apk_path: Path, output_dir: Path) -> Path | None:
+def extract_manifest(apk_path: Path, output_dir: Path, name_hint: str | None = None) -> Path | None:
     """
     Extrae y decodifica únicamente el AndroidManifest.xml del APK.
 
     Útil cuando el código fue obtenido por runtime dump (Frida) y no hay
     manifest disponible, pero sí existe el APK original.
 
+    ``name_hint`` identifica el directorio temporal (por defecto
+    ``apk_path.stem``) -- mismo motivo que en ``decompile()``: "base.apk" no es
+    único entre paquetes distintos (App Bundles), así que sin un hint más
+    específico dos extracciones concurrentes de apps distintas podrían pisarse.
+
     Intenta primero con apktool (--no-src), luego con jadx (--no-res).
     Devuelve la ruta al AndroidManifest.xml decodificado, o None si falla.
     """
     import tempfile
 
+    name_hint = name_hint or apk_path.stem
+
     # ── Intento 1: apktool --no-src (solo recursos + manifest) ───────────────
     apktool_path = _find_tool("apktool")
     if apktool_path:
-        tmp = output_dir / f"_manifest_apktool_{apk_path.stem}"
+        tmp = output_dir / f"_manifest_apktool_{name_hint}"
         try:
             result = subprocess.run(
                 [apktool_path, "d", "--force", "--no-src", "-o", str(tmp), str(apk_path)],
@@ -159,7 +178,7 @@ def extract_manifest(apk_path: Path, output_dir: Path) -> Path | None:
     # ── Intento 2: jadx --no-res (sin recursos, pero extrae manifest decodificado) ─
     jadx_path = _find_tool("jadx")
     if jadx_path:
-        tmp = output_dir / f"_manifest_jadx_{apk_path.stem}"
+        tmp = output_dir / f"_manifest_jadx_{name_hint}"
         try:
             result = subprocess.run(
                 [jadx_path, "--no-res", "--no-src", "-d", str(tmp), str(apk_path)],

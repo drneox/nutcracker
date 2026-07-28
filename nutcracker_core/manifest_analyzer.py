@@ -111,7 +111,7 @@ def analyze_decompiled_dir(
         try:
             from .decompiler import extract_manifest
             _cb(t("analyzing_manifest_progress"))
-            extracted = extract_manifest(apk_path, decompiled_dir.parent)
+            extracted = extract_manifest(apk_path, decompiled_dir.parent, name_hint=decompiled_dir.name)
             if extracted:
                 manifest_path = extracted
         except Exception:  # noqa: BLE001
