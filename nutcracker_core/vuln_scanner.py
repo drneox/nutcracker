@@ -1074,6 +1074,7 @@ def auto_scan(
     leak_engine: str = "apk",
     include_code_leak_rules: bool = True,
     include_xml_leak_rules: bool = True,
+    config: dict | None = None,
 ) -> ScanResult:
     """
     Punto de entrada unificado: elige semgrep o regex según engine.
@@ -1118,7 +1119,7 @@ def auto_scan(
         """Añade hallazgos de apkleaks según leak_engine."""
         if not apk_path or leak_engine == "code":
             return
-        al_findings = scan_with_apkleaks(apk_path, progress_callback)
+        al_findings = scan_with_apkleaks(apk_path, progress_callback, config=config)
         if al_findings:
             if leak_engine == "apk":
                 # Solo APK leaks: quitar HC* de código para evitar duplicados.
@@ -1195,6 +1196,7 @@ def auto_scan(
                 apk_path=apk_path,
                 work_dir=_nat_work,
                 progress_callback=progress_callback,
+                config=config,
             )
             if nat_findings:
                 result.findings.extend(nat_findings)

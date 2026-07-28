@@ -976,6 +976,7 @@ def _do_manifest_scan(decompiled_dir: Path, apk_path: Path | None = None) -> "Ma
             decompiled_dir,
             progress_callback=lambda m: progress.update(task, description=m),
             apk_path=apk_path,
+            config=_CFG,
         )
 
     _print_manifest_report(analysis)
@@ -1200,7 +1201,7 @@ def _do_decompile(apk_path: Path, package: str) -> Path | None:
             # así que sin esto jobs estáticos concurrentes de apps distintas
             # decompilarían todas hacia el mismo "decompiled/base/" y se pisarían
             # entre sí (visto en vivo, 2026-07-28 -- ver decompiler.decompile()).
-            dest = decompile(apk_path, output_dir, dest_name=package)
+            dest = decompile(apk_path, output_dir, dest_name=package, config=_CFG)
 
         console.print(f"[green]✔[/green] {t('cli_source_code_at')} [bold]{dest}[/bold]")
 
@@ -1348,20 +1349,21 @@ def _do_vuln_scan(
                         leak_engine="code",
                         include_code_leak_rules=True,
                         include_xml_leak_rules=False,
+                        config=_CFG,
                     )
                     leaks.extend([f for f in base_scan.findings if _is_leak_finding(f)])
 
                 # 2) apkleaks sobre el APK original
                 if use_apkleaks and apk_for_leaks is not None:
                     try:
-                        leaks.extend(scan_with_apkleaks(apk_for_leaks))
+                        leaks.extend(scan_with_apkleaks(apk_for_leaks, config=_CFG))
                     except Exception as exc:  # noqa: BLE001
                         console.print(f"[yellow]⚠[/yellow] {t('cli_apkleaks_failed')} {exc}")
 
                 # 3) gitleaks sobre código decompilado
                 if use_gitleaks:
                     try:
-                        leaks.extend(scan_with_gitleaks(source_dir))
+                        leaks.extend(scan_with_gitleaks(source_dir, config=_CFG))
                     except Exception as exc:  # noqa: BLE001
                         console.print(f"[yellow]⚠[/yellow] gitleaks falló: {exc}")
 
@@ -1429,6 +1431,7 @@ def _do_vuln_scan(
                 leak_engine=leak_engine,
                 include_code_leak_rules=include_leak_scan and use_native,
                 include_xml_leak_rules=include_leak_scan and use_native,
+                config=_CFG,
             )
 
     except RuntimeError as exc:
@@ -1452,6 +1455,7 @@ def _do_vuln_scan(
                     leak_engine=leak_engine,
                     include_code_leak_rules=include_leak_scan and use_native,
                     include_xml_leak_rules=include_leak_scan and use_native,
+                    config=_CFG,
                 )
         except Exception as exc2:  # noqa: BLE001
             console.print(f"[red]{t('cli_error_vuln_scan')}[/red] {exc2}")
@@ -1464,7 +1468,7 @@ def _do_vuln_scan(
         # Inyectar hallazgos de gitleaks si está habilitado
         if use_gitleaks and include_leak_scan:
             try:
-                gl_findings = scan_with_gitleaks(source_dir)
+                gl_findings = scan_with_gitleaks(source_dir, config=_CFG)
                 if gl_findings:
                     # Dedup: skip gitleaks findings that overlap with existing
                     # HC findings on the same file+line (HC has more context)

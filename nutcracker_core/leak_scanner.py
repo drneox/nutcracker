@@ -8,9 +8,13 @@ motores externos de detección de secretos que operan sobre el binario APK
 
 from __future__ import annotations
 
+import json as _json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+from nutcracker_core import toolbox
 from .scan_types import VulnFinding
 
 # ── Integración con apkleaks ──────────────────────────────────────────────────
@@ -73,20 +77,34 @@ _APKLEAKS_SEVERITY: dict[str, str] = {
 }
 
 
+def _run_leak_tool(
+    tool_name: str, local_bin: str | None, args: list[str], config: dict | None, timeout: int,
+) -> subprocess.CompletedProcess | None:
+    """Corre apkleaks/gitleaks local o vía el toolbox de Docker -- opt-in vía
+    ``toolbox.enabled`` en config.yaml. Devuelve None si no está disponible
+    por ningún lado (los llamadores ya toleraban "no encontrada" con []).
+    """
+    if toolbox.is_enabled(config):
+        try:
+            return toolbox.run(tool_name, args, config=config, timeout=timeout)
+        except toolbox.ToolboxError:
+            return None
+    if not local_bin:
+        return None
+    return subprocess.run([local_bin, *args], capture_output=True, text=True, timeout=timeout)
+
+
 def scan_with_apkleaks(
     apk_path: Path,
     progress_callback=None,
+    config: dict | None = None,
 ) -> list[VulnFinding]:
     """
     Ejecuta apkleaks sobre el APK original y convierte sus hallazgos a VulnFinding.
-    Requiere apkleaks instalado (pip install apkleaks).
-    Devuelve lista vacía si apkleaks no está disponible o falla.
+    Requiere apkleaks instalado (pip install apkleaks) -- o ``toolbox.enabled:
+    true`` en config.yaml para correrlo vía Docker en vez de un binario local.
+    Devuelve lista vacía si apkleaks no está disponible por ningún lado o falla.
     """
-    import json as _json
-    import shutil
-    import subprocess
-    import tempfile
-
     def _parse_plain_output(raw_text: str) -> dict[str, list[str]]:
         """Parsea salida estilo texto de apkleaks: [Categoria] y lineas '- valor'."""
         parsed: dict[str, list[str]] = {}
@@ -107,7 +125,7 @@ def scan_with_apkleaks(
         return parsed
 
     apkleaks_bin = shutil.which("apkleaks")
-    if not apkleaks_bin:
+    if not apkleaks_bin and not toolbox.is_enabled(config):
         if progress_callback:
             progress_callback("apkleaks no encontrado — omitiendo scan de secretos con apkleaks")
         return []
@@ -115,16 +133,22 @@ def scan_with_apkleaks(
     if progress_callback:
         progress_callback("Escaneando secretos con apkleaks...")
 
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-        out_path = tmp.name
+    # Bajo el toolbox de Docker: el reporte tiene que quedar en un directorio
+    # visible dentro del contenedor -- ver toolbox.scratch_dir() (el /tmp del
+    # sistema no está montado ahí). Se usa siempre, con o sin toolbox, para no
+    # tener dos rutas de código distintas según el modo.
+    out_path = str(toolbox.scratch_dir() / f"apkleaks_{apk_path.stem}_{id(apk_path)}.json")
 
     try:
-        proc = subprocess.run(
-            [apkleaks_bin, "-f", str(apk_path), "-o", out_path, "--json"],
-            capture_output=True,
-            text=True,
-            timeout=240,
+        proc = _run_leak_tool(
+            "apkleaks", apkleaks_bin,
+            ["-f", str(apk_path.resolve()), "-o", out_path, "--json"],
+            config, timeout=240,
         )
+        if proc is None:
+            if progress_callback:
+                progress_callback("apkleaks no encontrado — omitiendo scan de secretos con apkleaks")
+            return []
         if proc.returncode not in (0, 1):
             if progress_callback:
                 progress_callback(f"apkleaks terminó con rc={proc.returncode}")
@@ -263,20 +287,17 @@ _GITLEAKS_CRITICAL_RULES: set[str] = {
 def scan_with_gitleaks(
     source_dir: Path,
     progress_callback=None,
+    config: dict | None = None,
 ) -> list[VulnFinding]:
     """
     Ejecuta gitleaks sobre un directorio de código decompilado y convierte
     sus hallazgos a VulnFinding.
-    Requiere gitleaks instalado (brew install gitleaks).
-    Devuelve lista vacía si gitleaks no está disponible o falla.
+    Requiere gitleaks instalado (brew install gitleaks) -- o ``toolbox.enabled:
+    true`` en config.yaml para correrlo vía Docker en vez de un binario local.
+    Devuelve lista vacía si gitleaks no está disponible por ningún lado o falla.
     """
-    import json as _json
-    import shutil
-    import subprocess
-    import tempfile
-
     gitleaks_bin = shutil.which("gitleaks")
-    if not gitleaks_bin:
+    if not gitleaks_bin and not toolbox.is_enabled(config):
         if progress_callback:
             progress_callback("gitleaks no encontrado — omitiendo scan")
         return []
@@ -284,24 +305,28 @@ def scan_with_gitleaks(
     if progress_callback:
         progress_callback("Escaneando secretos con gitleaks...")
 
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-        out_path = tmp.name
+    # Ver comentario equivalente en scan_with_apkleaks: bajo el toolbox, el
+    # reporte tiene que quedar en un directorio visible dentro del contenedor.
+    out_path = str(toolbox.scratch_dir() / f"gitleaks_{source_dir.name}_{id(source_dir)}.json")
 
     try:
-        proc = subprocess.run(
+        proc = _run_leak_tool(
+            "gitleaks", gitleaks_bin,
             [
-                gitleaks_bin, "detect",
+                "detect",
                 "--no-git",
                 "--no-banner",
-                "-s", str(source_dir),
+                "-s", str(source_dir.resolve()),
                 "-f", "json",
                 "-r", out_path,
                 "--log-level", "error",
             ],
-            capture_output=True,
-            text=True,
-            timeout=300,
+            config, timeout=300,
         )
+        if proc is None:
+            if progress_callback:
+                progress_callback("gitleaks no encontrado — omitiendo scan")
+            return []
         # rc=0 → sin hallazgos, rc=1 → hallazgos encontrados, ≥2 → error
         if proc.returncode >= 2:
             if progress_callback:

@@ -32,7 +32,7 @@ def fake_jadx(monkeypatch):
     el dest recibido, para verificar en qué directorio termina escribiendo."""
     calls = []
 
-    monkeypatch.setattr(decompiler, "_find_tool", lambda name: f"/usr/bin/{name}" if name == "jadx" else None)
+    monkeypatch.setattr(decompiler, "_find_tool", lambda name, config=None: f"/usr/bin/{name}" if name == "jadx" else None)
 
     def fake_run(cmd, capture_output=True, text=True, timeout=None):  # noqa: ANN001
         calls.append(cmd)
@@ -103,7 +103,7 @@ def test_decompile_two_base_apks_without_dest_name_would_collide(tmp_path, fake_
 def test_decompile_apktool_fallback_uses_dest_name(tmp_path, monkeypatch):
     """El fallback a apktool (cuando jadx no está instalado, como en este
     entorno) también debe respetar dest_name."""
-    monkeypatch.setattr(decompiler, "_find_tool", lambda name: "/usr/bin/apktool" if name == "apktool" else None)
+    monkeypatch.setattr(decompiler, "_find_tool", lambda name, config=None: "/usr/bin/apktool" if name == "apktool" else None)
 
     calls = []
 
@@ -127,7 +127,7 @@ def test_decompile_apktool_fallback_uses_dest_name(tmp_path, monkeypatch):
 def test_extract_manifest_uses_name_hint_not_apk_stem(tmp_path, monkeypatch):
     """Mismo bug, mismo fix, para el extractor de manifest usado en el flujo
     de runtime dump (Frida) sin manifest disponible."""
-    monkeypatch.setattr(decompiler, "_find_tool", lambda name: "/usr/bin/apktool" if name == "apktool" else None)
+    monkeypatch.setattr(decompiler, "_find_tool", lambda name, config=None: "/usr/bin/apktool" if name == "apktool" else None)
 
     def fake_run(cmd, capture_output=True, text=True, timeout=None):  # noqa: ANN001
         dest = Path(cmd[cmd.index("-o") + 1])
@@ -144,3 +144,117 @@ def test_extract_manifest_uses_name_hint_not_apk_stem(tmp_path, monkeypatch):
 
     assert result is not None
     assert "runtime_dump_com.example.app" in str(result)
+
+
+# ── Toolbox de Docker (opt-in vía config.yaml: toolbox.enabled) ─────────────
+
+def test_get_available_tool_prefers_toolbox_when_enabled(monkeypatch):
+    """Con toolbox.enabled=true, jadx "está disponible" sin necesitar el
+    binario en el host -- lo garantiza la imagen. Sentinel TOOLBOX, no un
+    shutil.which() real."""
+    monkeypatch.setattr(decompiler.shutil, "which", lambda name: None)  # nada instalado local
+
+    tool, path = decompiler.get_available_tool({"toolbox": {"enabled": True}})
+
+    assert tool == "jadx"
+    assert path is decompiler.TOOLBOX
+
+
+def test_get_available_tool_ignores_toolbox_when_disabled(monkeypatch):
+    monkeypatch.setattr(decompiler.shutil, "which", lambda name: None)
+
+    tool, path = decompiler.get_available_tool({"toolbox": {"enabled": False}})
+
+    assert (tool, path) == (None, None)
+
+
+def test_decompile_routes_through_toolbox_run_when_enabled(tmp_path, monkeypatch):
+    """Con el toolbox habilitado, decompile() no debe tocar subprocess.run
+    directo -- todo pasa por toolbox.run()."""
+    monkeypatch.setattr(decompiler.shutil, "which", lambda name: None)
+
+    calls = []
+
+    def fake_toolbox_run(tool, args, config=None, timeout=600, build_if_missing=True):  # noqa: ANN001
+        calls.append((tool, args))
+        dest = Path(args[args.index("-d") + 1])
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "Main.java").write_text("// noop")
+        return decompiler.subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(decompiler.toolbox, "run", fake_toolbox_run)
+
+    def boom(*a, **kw):  # noqa: ANN001
+        raise AssertionError("no debería llamar a subprocess.run local con el toolbox habilitado")
+
+    monkeypatch.setattr(decompiler.subprocess, "run", boom)
+
+    apk = tmp_path / "base.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    dest = decompiler.decompile(
+        apk, tmp_path / "decompiled", dest_name="com.example.app",
+        config={"toolbox": {"enabled": True}},
+    )
+
+    assert dest.name == "com.example.app"
+    assert calls and calls[0][0] == "jadx"
+    # las rutas que le llegan a toolbox.run() deben ser absolutas -- el
+    # contenedor monta Path.cwd() en la misma ruta que el host, así que una
+    # ruta relativa no resolvería del mismo lado.
+    assert Path(calls[0][1][calls[0][1].index("-d") + 1]).is_absolute()
+    assert Path(calls[0][1][-1]).is_absolute()
+
+
+def test_decompile_falls_back_to_apktool_via_toolbox_on_jadx_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(decompiler.shutil, "which", lambda name: None)
+
+    calls = []
+
+    def fake_toolbox_run(tool, args, config=None, timeout=600, build_if_missing=True):  # noqa: ANN001
+        calls.append(tool)
+        if tool == "jadx":
+            return decompiler.subprocess.CompletedProcess([], 1, stdout="", stderr="jadx explotó")
+        dest = Path(args[args.index("-o") + 1])
+        dest.mkdir(parents=True, exist_ok=True)
+        return decompiler.subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(decompiler.toolbox, "run", fake_toolbox_run)
+
+    apk = tmp_path / "base.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    dest = decompiler.decompile(
+        apk, tmp_path / "decompiled", dest_name="com.example.app",
+        config={"toolbox": {"enabled": True}},
+    )
+
+    assert calls == ["jadx", "apktool"]
+    assert dest.name == "com.example.app"
+
+
+def test_decompile_wraps_toolbox_error_as_decompiler_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(decompiler.shutil, "which", lambda name: None)
+
+    def boom(*a, **kw):  # noqa: ANN001
+        raise decompiler.toolbox.ToolboxError("docker no está instalado")
+
+    monkeypatch.setattr(decompiler.toolbox, "run", boom)
+
+    apk = tmp_path / "base.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    with pytest.raises(decompiler.DecompilerError, match="docker no está instalado"):
+        decompiler.decompile(apk, tmp_path / "decompiled", config={"toolbox": {"enabled": True}})
+
+
+def test_decompile_without_toolbox_config_behaves_exactly_as_before(tmp_path, fake_jadx):
+    """config=None (default) no debe activar el toolbox bajo ninguna
+    circunstancia -- comportamiento 100% preexistente."""
+    apk = tmp_path / "base.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    dest = decompiler.decompile(apk, tmp_path / "decompiled")
+
+    assert dest.name == "base"
+    assert fake_jadx  # subprocess.run local sí se usó

@@ -1,0 +1,104 @@
+# Toolbox estático de nutcracker -- ver ../client.py para el diseño completo.
+#
+# Contiene únicamente herramientas que operan sobre contenido de terceros
+# (APKs, código decompilado) -- nada que hable con un dispositivo físico
+# (adb/frida quedan en el host, ver client.py).
+#
+# Cada URL de descarga fue verificada a mano antes de fijar la versión (no
+# adivinada) -- ver plan.md para el detalle. Ninguna requiere autenticación.
+#
+# Build:
+#   docker build -f nutcracker_core/toolbox/docker/Dockerfile.static \
+#       -t nutcracker-toolbox-static:latest nutcracker_core/toolbox/docker
+# (o dejar que client.ensure_image() lo haga solo la primera vez que se use).
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+# apktool/jadx/baksmali/smali corren embebidos en un wrapper que invoca a
+# este mismo curl con un User-Agent de navegador -- Bitbucket (donde vive
+# apktool/smali) devuelve 403 a clientes sin UA (confirmado en vivo).
+ENV CURL_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-17-jre-headless \
+        python3 python3-pip \
+        binutils \
+        aapt \
+        curl unzip ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── radare2 ─────────────────────────────────────────────────────────────
+# No disponible en los repos base de Ubuntu 22.04 (solo en jammy-backports,
+# confirmado en vivo: "Package 'radare2' has no installation candidate" con
+# apt-get install directo) -- se instala desde el .deb oficial publicado en
+# cada release de GitHub en vez de depender de qué repos tenga habilitados
+# la imagen base.
+ARG RADARE2_VERSION=6.1.8
+RUN curl -fsSL -o /tmp/radare2.deb \
+        "https://github.com/radareorg/radare2/releases/download/${RADARE2_VERSION}/radare2_${RADARE2_VERSION}_amd64.deb" \
+    && apt-get update && apt-get install -y --no-install-recommends /tmp/radare2.deb \
+    && rm /tmp/radare2.deb && rm -rf /var/lib/apt/lists/*
+
+# ── apktool (decompilación/recompilación) ──────────────────────────────────
+ARG APKTOOL_VERSION=2.9.3
+RUN curl -fsSL -A "$CURL_UA" -o /usr/local/bin/apktool.jar \
+        "https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_${APKTOOL_VERSION}.jar" \
+    && printf '#!/bin/sh\nexec java -jar /usr/local/bin/apktool.jar "$@"\n' > /usr/local/bin/apktool \
+    && chmod +x /usr/local/bin/apktool
+
+# ── jadx (decompilación a Java legible) ────────────────────────────────────
+ARG JADX_VERSION=1.5.0
+RUN curl -fsSL -o /tmp/jadx.zip \
+        "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" \
+    && mkdir -p /opt/jadx && unzip -q /tmp/jadx.zip -d /opt/jadx && rm /tmp/jadx.zip \
+    && chmod +x /opt/jadx/bin/jadx \
+    && ln -s /opt/jadx/bin/jadx /usr/local/bin/jadx
+
+# ── baksmali / smali (dis/ensamblado de bytecode Dalvik) ───────────────────
+ARG SMALI_VERSION=2.5.2
+RUN curl -fsSL -A "$CURL_UA" -o /usr/local/bin/baksmali.jar \
+        "https://bitbucket.org/JesusFreke/smali/downloads/baksmali-${SMALI_VERSION}.jar" \
+    && curl -fsSL -A "$CURL_UA" -o /usr/local/bin/smali.jar \
+        "https://bitbucket.org/JesusFreke/smali/downloads/smali-${SMALI_VERSION}.jar" \
+    && printf '#!/bin/sh\nexec java -jar /usr/local/bin/baksmali.jar "$@"\n' > /usr/local/bin/baksmali \
+    && printf '#!/bin/sh\nexec java -jar /usr/local/bin/smali.jar "$@"\n' > /usr/local/bin/smali \
+    && chmod +x /usr/local/bin/baksmali /usr/local/bin/smali
+
+# ── aapt2 (binario standalone de Maven -- NO requiere bootstrapear el SDK
+#    completo; el jar contiene el binario nativo en su raíz) ───────────────
+ARG AAPT2_VERSION=9.3.1-15703166
+RUN curl -fsSL -o /tmp/aapt2.jar \
+        "https://dl.google.com/android/maven2/com/android/tools/build/aapt2/${AAPT2_VERSION}/aapt2-${AAPT2_VERSION}-linux.jar" \
+    && unzip -p /tmp/aapt2.jar aapt2 > /usr/local/bin/aapt2 \
+    && chmod +x /usr/local/bin/aapt2 && rm /tmp/aapt2.jar
+
+# ── apksigner (extraído de las build-tools oficiales del Android SDK) ──────
+# A diferencia de aapt2, apksigner no tiene un artefacto Maven standalone --
+# solo se distribuye dentro de build-tools. No fatal si falla: el resto de
+# la imagen sigue siendo útil sin apksigner (firma/verificación de APKs es
+# una pieza más, no bloqueante para decompilar/escanear).
+ARG BUILD_TOOLS_VERSION=34.0.0
+RUN ( curl -fsSL -o /tmp/cmdline-tools.zip \
+        "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+      && mkdir -p /opt/android-sdk/cmdline-tools \
+      && unzip -q /tmp/cmdline-tools.zip -d /opt/android-sdk/cmdline-tools \
+      && mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest \
+      && rm /tmp/cmdline-tools.zip \
+      && yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager \
+           --sdk_root=/opt/android-sdk "build-tools;${BUILD_TOOLS_VERSION}" >/dev/null 2>&1 \
+      && ln -s "/opt/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/apksigner" /usr/local/bin/apksigner \
+    ) || echo "AVISO build: apksigner no se pudo instalar (build-tools/sdkmanager) -- el resto de la imagen sigue funcionando sin él."
+
+# ── gitleaks (detección de secretos hardcodeados) ──────────────────────────
+ARG GITLEAKS_VERSION=8.18.4
+RUN curl -fsSL -o /tmp/gitleaks.tar.gz \
+        "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+    && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
+    && rm /tmp/gitleaks.tar.gz && chmod +x /usr/local/bin/gitleaks
+
+# ── apkid, blint, apkleaks (pip -- todos publican su propio entry point) ──
+RUN pip3 install --no-cache-dir apkid blint apkleaks
+
+WORKDIR /work
+ENTRYPOINT []

@@ -185,3 +185,17 @@ dashboard:
   # doze/corte de red del teléfono); cada cuántos segundos revisarlo y
   # reconectarlo en segundo plano. Mínimo efectivo: 10.
   adb_keepalive_seconds: 60
+# ── Toolbox estático en Docker (opt-in) ────────────────────────────────────
+# Sandboxea jadx/apktool (y a futuro otras herramientas estáticas) dentro de
+# un contenedor Docker en vez de invocar binarios instalados en el host --
+# útil para no depender de tener cada herramienta instalada localmente (este
+# mismo entorno, por ejemplo, no tiene jadx) y para aislar el análisis de
+# APKs de terceros (potencialmente maliciosos) del resto del sistema.
+#
+# Herramientas dinámicas (adb, frida) NUNCA pasan por acá -- necesitan hablar
+# directo con el dispositivo físico conectado al host. Ver
+# nutcracker_core/toolbox/ para el diseño completo.
+toolbox:
+  enabled: false   # true = decompilar vía Docker en vez de binarios locales
+  image: 'nutcracker-toolbox-static:latest'
+

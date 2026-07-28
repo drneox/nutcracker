@@ -30,6 +30,7 @@ config*.yaml
 nutcracker.db
 nutcracker.db-wal
 nutcracker.db-shm
+.nutcracker_tmp/
 
 # AI / IDE tool files
 .code-review-graph/
