@@ -70,6 +70,55 @@ All results are consolidated into a technical PDF report ready for reporting.
 
 ---
 
+## Quick Deploy Guide
+
+Fastest path from a clean machine to a working scan.
+
+**1. Clone and set up the Python environment**
+
+```bash
+git clone <repo>
+cd nutcracker
+./setup.sh
+# or manually:
+#   python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+```
+
+**2. Get the analysis tools — pick one**
+
+- **Install locally** (jadx, apktool, semgrep, gitleaks, apkleaks, apkid, adb, Android SDK
+  build-tools) — see [System Requirements](#system-requirements) for the exact commands per OS.
+- **Or skip the local install entirely: enable the Docker toolbox.** If Docker is available,
+  none of those tools need to be on the host — they run sandboxed in a container. See
+  [Static Analysis Toolbox](#static-analysis-toolbox-docker-optional) below.
+
+  ```yaml
+  # config.yaml
+  toolbox:
+    enabled: true
+  ```
+
+`adb`/`frida` always run on the host either way — they need to talk to a real device or emulator,
+so they're out of scope for the toolbox (see that section for why).
+
+**3. Configure**
+
+```bash
+cp config.yaml.example config.yaml
+# fill in google_play.email/aas_token if you'll download from Google Play (see
+# "Obtaining the Google Play AAS Token" below), and the llm: block if you use
+# ai-review.
+```
+
+**4. Run your first scan**
+
+```bash
+python nutcracker.py analyze path/to/app.apk         # local APK
+python nutcracker.py scan com.example.app            # download + analyze
+```
+
+---
+
 ## System Requirements
 
 ### macOS (install with Homebrew)
@@ -170,6 +219,52 @@ nutcracker --help
 > system tools (pip or Homebrew), not project dependencies.
 > They are validated with `shutil.which()` before use; if not installed,
 > the corresponding module is skipped with a warning.
+
+---
+
+## Static Analysis Toolbox (Docker, optional)
+
+Not to be confused with [Docker Usage (hybrid)](#docker-usage-hybrid) below — that mode runs the
+whole `nutcracker` process inside a container. This is different: it's a uniform access layer that
+sandboxes only the *static* analysis tools (`nutcracker_core/toolbox/`), while `nutcracker` itself
+keeps running directly on the host.
+
+**Why Docker only for static tools:** jadx/apktool/radare2/etc. decompile third-party content
+(APKs of real, potentially malicious apps) — the container isolates any attempt to exploit a bug in
+the decompiler itself from the rest of the host. It also sidesteps installing 8+ separate tools
+per-OS (see [System Requirements](#system-requirements)) — useful on a machine that doesn't have
+them and won't otherwise need them.
+
+**Why not `adb`/`frida` too:** they need to talk directly to a physical device or emulator attached
+to the host. Putting them in a container would add a network/USB layer to solve without gaining real
+isolation — that isolation comes from having a dedicated test device, not from the process that
+controls it.
+
+Tools included: `aapt`, `aapt2`, `apktool`, `baksmali`, `smali`, `jadx`, `r2` (radare2), `readelf`,
+`nm`, `objdump`, `strings`, `blint`, `gitleaks`, `apkid`, `apksigner`, `apkleaks` — all verified
+running for real inside the built image, not just assumed from the Dockerfile.
+
+**Enable it** in `config.yaml`:
+
+```yaml
+toolbox:
+  enabled: false   # true = decompile/scan via Docker instead of local binaries
+  image: 'nutcracker-toolbox-static:latest'
+```
+
+With `enabled: false` (the default), nothing changes — every module still calls local binaries via
+`shutil.which()` exactly as before. Currently wired into `decompiler.py` (jadx/apktool),
+`native_scanner.py` (nm/objdump/strings) and `leak_scanner.py` (gitleaks/apkleaks).
+
+**Build the image** (optional — it builds itself automatically the first time it's needed):
+
+```bash
+docker build -f nutcracker_core/toolbox/docker/Dockerfile.static \
+    -t nutcracker-toolbox-static:latest nutcracker_core/toolbox/docker
+```
+
+See [`nutcracker_core/toolbox/README.md`](nutcracker_core/toolbox/README.md) for the full design
+(volume mounting, the `--user` UID/GID fix, known limitations).
 
 ---
 
