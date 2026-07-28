@@ -7,6 +7,7 @@ import time
 
 import click
 
+from nutcracker_core import adb_transport
 from nutcracker_core.config import load_config, get as cfg_get
 from nutcracker_core.queue.engine import QueueEngine
 from nutcracker_core.scheduler import NutcrackerScheduler
@@ -35,6 +36,19 @@ def serve(config_path: str) -> None:
         static_workers=int(cfg_get(config, "queue", "static_workers", default=4)),
         dynamic_workers=int(cfg_get(config, "queue", "dynamic_workers", default=2)),
     )
+    # Mantiene vivo el serial adb-over-wifi mientras el daemon corre (ver
+    # nutcracker_core/adb_transport.py): esa conexión no sobrevive a un
+    # reinicio del daemon adb ni a un corte de red del teléfono, y sin ella los
+    # jobs dinámicos fallan con "device not found" aunque el teléfono esté ahí.
+    default_serial = str(
+        cfg_get(config, "strategies", "default_device_id", default="")
+    ).strip()
+    keepalive = adb_transport.TransportKeepAlive(
+        serials=[default_serial] if default_serial else [],
+    )
+    engine.transport_keepalive = keepalive
+    keepalive.start()
+
     scheduler = NutcrackerScheduler(engine, config)
     scheduler.start()
 
@@ -56,5 +70,6 @@ def serve(config_path: str) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        keepalive.stop()
         scheduler.stop()
         console.print("[dim]nutcracker serve — detenido[/dim]")

@@ -127,7 +127,7 @@ def test_is_daemon_transient_error_false_for_real_errors():
 def test_ensure_network_serial_connected_noop_for_usb_serial(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "nutcracker_core.downloader.subprocess.run",
+        "nutcracker_core.adb_transport.subprocess.run",
         lambda *a, **kw: calls.append(a) or _completed(),
     )
     _ensure_network_serial_connected("ZY22GPM27J")
@@ -141,7 +141,7 @@ def test_ensure_network_serial_connected_calls_adb_connect_for_ip_serial(monkeyp
         calls.append(cmd)
         return _completed(stdout="connected to 172.20.10.6:5555")
 
-    monkeypatch.setattr("nutcracker_core.downloader.subprocess.run", fake_run)
+    monkeypatch.setattr("nutcracker_core.adb_transport.subprocess.run", fake_run)
     _ensure_network_serial_connected("172.20.10.6:5555")
     assert calls == [["adb", "connect", "172.20.10.6:5555"]]
 
@@ -155,8 +155,8 @@ def test_ensure_network_serial_connected_retries_on_daemon_transient_error(monke
             return _completed(stderr="adb.exe: cannot connect to daemon")
         return _completed(stdout="connected to 172.20.10.6:5555")
 
-    monkeypatch.setattr("nutcracker_core.downloader.subprocess.run", fake_run)
-    monkeypatch.setattr("nutcracker_core.downloader.time.sleep", lambda *_: None)
+    monkeypatch.setattr("nutcracker_core.adb_transport.subprocess.run", fake_run)
+    monkeypatch.setattr("nutcracker_core.adb_transport._sleep", lambda *_: None)
     _ensure_network_serial_connected("172.20.10.6:5555")
     assert len(calls) == 3
 
@@ -182,7 +182,9 @@ def test_download_retries_pm_path_on_daemon_transient_error(monkeypatch, tmp_pat
         return _completed()
 
     monkeypatch.setattr("nutcracker_core.downloader.subprocess.run", fake_run)
+    monkeypatch.setattr("nutcracker_core.adb_transport.subprocess.run", fake_run)
     monkeypatch.setattr("nutcracker_core.downloader.time.sleep", lambda *_: None)
+    monkeypatch.setattr("nutcracker_core.adb_transport._sleep", lambda *_: None)
 
     dl = DeviceInstalledDownloader(output_dir=str(tmp_path), serial="172.20.10.6:5555")
     result = dl.download("com.example.app")

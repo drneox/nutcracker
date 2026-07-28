@@ -137,6 +137,23 @@ def test_queue_add_rejects_dynamic_without_local_apk(client):
     assert r.status_code == 400
 
 
+def test_queue_delete_removes_pending_job(client, engine):
+    r = client.post("/api/queue", json={"target": "com.example.app", "kind": "static"})
+    job_id = r.json()["job_id"]
+
+    r = client.delete(f"/api/queue/{job_id}")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": True}
+
+    jobs = client.get("/api/queue").json()
+    assert all(j["id"] != job_id for j in jobs)
+
+
+def test_queue_delete_404_for_unknown_job(client):
+    r = client.delete("/api/queue/999999")
+    assert r.status_code == 404
+
+
 # ── /api/queue/batch (batch estático+aipwn desde un .txt subido en el frontend) ─
 
 def _wait_for_drain(engine, timeout: float = 5.0) -> None:

@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from nutcracker_core import adb_transport
 from nutcracker_core import orchestrator as orch
 from nutcracker_core.config import get as cfg_get, load_config
 from nutcracker_core.store import db, repository
@@ -175,6 +176,12 @@ class QueueEngine:
         # plugins/dashboard/__init__.py y plugins/aipwn/frida_agent.py). Vacío
         # (default) preserva el env tal cual para quien no lo use.
         self.extra_env: dict[str, str] = {}
+        # Keepalive opcional del transporte adb-over-wifi (ver adb_transport).
+        # Si se asigna, cada job con serial de red lo registra para que el hilo
+        # de fondo lo siga vigilando también en los huecos sin jobs. None
+        # (default) mantiene solo el chequeo por-job, que ya es suficiente para
+        # invocaciones puntuales del CLI.
+        self.transport_keepalive: adb_transport.TransportKeepAlive | None = None
 
     # ── Encolado ─────────────────────────────────────────────────────────────
 
@@ -266,12 +273,38 @@ class QueueEngine:
         ).isoformat(timespec="seconds")
         repository.touch_app_run(conn, package, next_due_at=next_due)
 
+    def _ensure_transport(self, job: Job) -> None:
+        """Revive el transporte adb-over-wifi del job si se cayó.
+
+        No-op para jobs sin serial o con serial USB. Necesario porque la
+        conexión TCP vive en el daemon adb y no sobrevive a un reinicio suyo ni
+        a un corte de red del teléfono: sin esto, el job arranca contra un
+        serial que el daemon ya no tiene registrado y muere con "device
+        '<ip>:5555' not found" pese a que el teléfono está perfectamente
+        accesible (visto en uso real con 3 jobs en vuelo). Nunca es fatal --
+        si no se puede restablecer, dejamos que el comando real del job falle
+        con su propio mensaje, más específico que cualquiera que demos acá."""
+        if not adb_transport.is_network_serial(job.serial):
+            return
+        if self.transport_keepalive is not None:
+            self.transport_keepalive.track(job.serial)
+        try:
+            if not adb_transport.ensure_available(job.serial):
+                _log.warning(
+                    "job #%s: el transporte adb %s sigue caído -- se lanza igual",
+                    job.db_id, job.serial,
+                )
+        except Exception:  # noqa: BLE001 - nunca bloquear un job por el chequeo
+            _log.exception("job #%s: fallo chequeando el transporte adb", job.db_id)
+
     def _run_job(self, job: Job) -> JobOutcome:
         conn = db.connect(self.db_path)
         try:
             repository.update_job_status(conn, job.db_id, "running")
         finally:
             conn.close()
+
+        self._ensure_transport(job)
 
         # FIX (2026-07-27): si el target es un package ID (no una ruta .apk),
         # intenta resolverlo a un APK ya descargado en downloads/<package>/

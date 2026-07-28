@@ -157,8 +157,8 @@ store:
 # run in parallel; dynamic jobs (Frida/ADB on a physical device) are always
 # serialized per device serial, regardless of dynamic_workers.
 queue:
-  static_workers: 4      # parallel static analyses at once
-  dynamic_workers: 2      # concurrent *devices* for dynamic jobs (never same serial)
+  static_workers: 1      # parallel static analyses at once
+  dynamic_workers: 1      # concurrent *devices* for dynamic jobs (never same serial)
 
 # ── Scheduler (periodic reviews — plan.md Fase 1.2) ────────────────────────────
 # `nutcracker serve` re-queues every app whose next_due_at has passed, and
@@ -176,4 +176,12 @@ dashboard:
   port: 8765
   # Video en vivo del dispositivo: pestaña "Dispositivo" -> "🔌 USB directo
   # (fluido)" (WebUSB + WebCodecs, ver nutcracker_core/plugins/dashboard/webusb/).
-  # Sin eso, cae al polling de screenshots (adb exec-out screencap).
+  # Es la única vía de video: no hay fallback por screenshots.
+  #
+  # El navegador reclama el cable USB en exclusiva para ese video, así que
+  # nutcracker debe hablarle al teléfono por el serial de red
+  # (strategies.default_device_id = "<ip>:5555", tras `adb tcpip 5555`). Ese
+  # transporte TCP vive en el daemon adb y se cae solo (reinicio del daemon,
+  # doze/corte de red del teléfono); cada cuántos segundos revisarlo y
+  # reconectarlo en segundo plano. Mínimo efectivo: 10.
+  adb_keepalive_seconds: 60

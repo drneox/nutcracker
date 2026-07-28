@@ -141,3 +141,27 @@ def queue_ls(config_path: str, status: str | None, limit: int) -> None:
         console.print(
             f"  #{r['id']:<5} [{color}]{r['status']:<8}[/{color}] {r['kind']:<8} {r['target']}{pkg}"
         )
+
+
+@queue.command("rm")
+@click.argument("job_id", type=int, nargs=-1, required=True)
+@click.option("--config", "-c", "config_path", default="config.yaml", show_default=True)
+def queue_rm(job_id: tuple[int, ...], config_path: str) -> None:
+    """Borra uno o más jobs pendientes (status='queued') de la cola por ID.
+
+    No afecta jobs 'running' (ya despachados a un worker en algún proceso --
+    no hay forma de "des-despacharlos" borrando la fila) ni 'done'/'error'
+    (son historial, no cola pendiente).
+    """
+    config = load_config(config_path)
+    conn = db.connect(db_path_from_config(config))
+    try:
+        for jid in job_id:
+            if repository.delete_job(conn, jid):
+                console.print(f"[green]✔[/green] job #{jid} borrado")
+            else:
+                console.print(
+                    f"[yellow]⚠[/yellow] job #{jid} no existe o ya no está 'queued'"
+                )
+    finally:
+        conn.close()

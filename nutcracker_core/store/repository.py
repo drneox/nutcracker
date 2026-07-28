@@ -251,6 +251,19 @@ def get_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM queue_jobs WHERE id = ?", (job_id,)).fetchone()
 
 
+def delete_job(conn: sqlite3.Connection, job_id: int) -> bool:
+    """Borra un job en estado 'queued' (pendiente, todavía no despachado a un
+    worker). Deliberadamente NO borra jobs 'running' -- ya tienen un subproceso
+    real corriendo en algún lado que nadie va a interrumpir por borrar la fila;
+    tampoco 'done'/'error' -- son historial, no cola pendiente. Retorna True
+    si borró algo, False si el job no existe o no está en 'queued'."""
+    cur = conn.execute(
+        "DELETE FROM queue_jobs WHERE id = ? AND status = 'queued'", (job_id,),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def list_jobs(conn: sqlite3.Connection, status: str | None = None,
               limit: int = 100) -> list[sqlite3.Row]:
     if status:

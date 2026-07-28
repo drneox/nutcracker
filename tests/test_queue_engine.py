@@ -215,6 +215,60 @@ def test_job_status_transitions_and_error_recorded(monkeypatch, tmp_path, engine
     assert row["started_at"] is not None and row["finished_at"] is not None
 
 
+# ── Borrado de jobs pendientes (delete_job) ─────────────────────────────────
+
+def test_delete_job_removes_queued_job(tmp_path, engine):
+    job = engine.submit(str(_touch_apk(tmp_path, "pending.apk")), kind="static")
+
+    conn = db.connect(engine.db_path)
+    try:
+        deleted = repository.delete_job(conn, job.db_id)
+        assert deleted is True
+        assert repository.get_job(conn, job.db_id) is None
+    finally:
+        conn.close()
+
+
+def test_delete_job_returns_false_for_unknown_id(tmp_path, engine):
+    conn = db.connect(engine.db_path)
+    try:
+        assert repository.delete_job(conn, 999999) is False
+    finally:
+        conn.close()
+
+
+def test_delete_job_refuses_to_delete_running_job(monkeypatch, tmp_path, engine):
+    """Un job 'running' ya tiene un subproceso real corriendo en algún lado --
+    borrar la fila no lo detiene, así que delete_job se niega a tocarlo."""
+    release = threading.Event()
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        release.wait(timeout=5)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    job = engine.submit(str(_touch_apk(tmp_path, "running.apk")), kind="static")
+    thread = threading.Thread(target=engine.drain, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        conn = db.connect(engine.db_path)
+        try:
+            while time.monotonic() < deadline:
+                row = repository.get_job(conn, job.db_id)
+                if row and row["status"] == "running":
+                    break
+                time.sleep(0.02)
+            assert row["status"] == "running"
+            assert repository.delete_job(conn, job.db_id) is False
+        finally:
+            conn.close()
+    finally:
+        release.set()
+        thread.join(timeout=5)
+
+
 # ── Re-agendado tras completar un job (Fase 1.2) ────────────────────────────
 
 def test_reschedule_sets_next_due_at_after_job_completes(monkeypatch, tmp_path, engine):
@@ -624,3 +678,113 @@ def test_job_with_package_id_falls_back_to_scan_when_no_local_apk(monkeypatch, t
     cmd = seen_cmds[0]
     assert "scan" in cmd
     assert pkg in cmd
+
+# ── Keepalive del transporte adb-over-wifi (ver nutcracker_core/adb_transport) ─
+
+def test_job_with_network_serial_revives_dropped_transport(monkeypatch, engine):
+    """Antes de lanzar el job, el engine reconecta el serial de red si el
+    daemon adb lo perdió. Sin esto el job muere con "device '<ip>:5555' not
+    found" aunque el teléfono esté perfectamente accesible (visto en uso real
+    con el video WebUSB reclamando el cable USB)."""
+    ensured = []
+    monkeypatch.setattr(
+        "nutcracker_core.queue.engine.adb_transport.ensure_available",
+        lambda serial, *a, **kw: ensured.append(serial) or True,
+    )
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.app", kind="static", source="device",
+                  serial="172.20.10.6:5555")
+    engine.drain()
+
+    assert ensured == ["172.20.10.6:5555"]
+
+
+def test_job_with_usb_serial_does_not_touch_transport(monkeypatch, engine):
+    ensured = []
+    monkeypatch.setattr(
+        "nutcracker_core.queue.engine.adb_transport.ensure_available",
+        lambda serial, *a, **kw: ensured.append(serial) or True,
+    )
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.app", kind="static", source="device", serial="ZY22GPM27J")
+    engine.drain()
+
+    assert ensured == []
+
+
+def test_job_runs_even_if_transport_cannot_be_restored(monkeypatch, engine):
+    """El chequeo es best-effort: si no se puede revivir el transporte, el job
+    igual se lanza para que falle con su propio mensaje (más específico)."""
+    monkeypatch.setattr(
+        "nutcracker_core.queue.engine.adb_transport.ensure_available",
+        lambda *a, **kw: False,
+    )
+
+    seen = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.app", kind="static", source="device",
+                  serial="172.20.10.6:5555")
+    outcomes = engine.drain()
+
+    assert len(seen) == 1
+    assert outcomes[0].ok
+
+
+def test_job_survives_an_exploding_transport_check(monkeypatch, engine):
+    def boom(*a, **kw):  # noqa: ANN001
+        raise RuntimeError("adb explotó")
+
+    monkeypatch.setattr(
+        "nutcracker_core.queue.engine.adb_transport.ensure_available", boom)
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.app", kind="static", source="device",
+                  serial="172.20.10.6:5555")
+    outcomes = engine.drain()
+
+    assert outcomes[0].ok
+
+
+def test_job_registers_its_serial_with_the_keepalive(monkeypatch, engine):
+    """Un job encolado con un serial distinto al default del config también
+    debe quedar cubierto por la vigilancia de fondo."""
+    from nutcracker_core import adb_transport
+
+    monkeypatch.setattr(
+        "nutcracker_core.queue.engine.adb_transport.ensure_available",
+        lambda *a, **kw: True,
+    )
+
+    keepalive = adb_transport.TransportKeepAlive()
+    engine.transport_keepalive = keepalive
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.app", kind="static", source="device",
+                  serial="10.0.0.5:5555")
+    engine.drain()
+
+    assert keepalive.serials == {"10.0.0.5:5555"}
