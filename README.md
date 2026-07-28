@@ -736,6 +736,12 @@ git clone https://github.com/<user>/<plugin-repo> nutcracker_core/plugins/<name>
 > - **Linux**: `sudo apt install binutils-aarch64-linux-gnu` (provides `aarch64-linux-gnu-objdump`). Already included in the Docker image.
 > - **Optional**: `radare2` — if present, preferred over objdump for richer output.
 
+> **`aipwn` native library analysis** — The agent can disassemble and patch `.so` files
+> (native RASP checks). This requires a cross-compiler `objdump` for ARM64:
+> - **macOS**: system `objdump` (LLVM) supports ELF ARM64 — no extra install needed.
+> - **Linux**: `sudo apt install binutils-aarch64-linux-gnu` (provides `aarch64-linux-gnu-objdump`). Already included in the Docker image.
+> - **Optional**: `radare2` — if present, preferred over objdump for richer output.
+
 ---
 
 ## Building a Plugin

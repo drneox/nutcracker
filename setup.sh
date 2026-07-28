@@ -58,7 +58,7 @@ WEBUSB_DIR="$DASHBOARD_DIR/webusb"
 if [[ -d "$DASHBOARD_DIR" ]]; then
     echo ""
     echo ""
-    echo "==> Instalando dependencias del dashboard web (fastapi/uvicorn/PyAV)..."
+    echo "==> Instalando dependencias del dashboard web (fastapi/uvicorn)..."
     if [[ -f "$DASHBOARD_DIR/requirements.txt" ]]; then
         if pip install -r "$DASHBOARD_DIR/requirements.txt" --quiet; then
             echo "    OK: 'nutcracker dashboard' listo para usar."
@@ -69,30 +69,12 @@ if [[ -d "$DASHBOARD_DIR" ]]; then
     fi
 
     echo ""
-    echo "==> Verificando scrcpy (video en vivo del dispositivo en el dashboard, opcional)..."
-    if command -v scrcpy &>/dev/null; then
-        echo "    OK: $(scrcpy --version 2>&1 | head -1)"
-    else
-        echo "    scrcpy NO encontrado -- opcional: sin él, la pestaña Dispositivo cae automáticamente"
-        echo "    a polling de screenshots (nada se rompe)."
-        if [[ "$(uname)" == "Darwin" ]]; then
-            command -v brew &>/dev/null && brew install scrcpy || echo "    Instala con: brew install scrcpy"
-        elif [[ "$(uname)" == "Linux" ]]; then
-            sudo apt-get install -y scrcpy 2>/dev/null || \
-                echo "    Instala con: sudo apt install scrcpy (o ver https://github.com/Genymobile/scrcpy)"
-        else
-            echo "    Windows/WSL: instala scrcpy en Windows y apunta dashboard.scrcpy_path en config.yaml"
-            echo "    a su ruta .exe (ver README.md, sección 'Live device video (scrcpy)')."
-        fi
-    fi
-
-    echo ""
-    echo "==> Video USB fluido del dashboard (WebUSB + WebCodecs, app.webadb.com-style)..."
+    echo "==> Video USB fluido del dashboard (WebUSB + WebCodecs, único modo -- sin fallback)..."
     if [[ ! -d "$WEBUSB_DIR" ]]; then
         echo "    Subproyecto webusb/ no presente en este checkout -- omitiendo (opcional)."
     elif ! command -v npm &>/dev/null; then
-        echo "    npm NO encontrado -- opcional, solo habilita el modo de video más fluido (15-30fps,"
-        echo "    requiere Chrome/Edge + USB directo). Instala Node.js 20+ y corre:"
+        echo "    npm NO encontrado -- opcional, solo habilita el video en vivo de la pestaña"
+        echo "    'Dispositivo' (requiere Chrome/Edge + USB directo). Instala Node.js 20+ y corre:"
         echo "        cd $WEBUSB_DIR && npm install && npm run build"
         echo "    Detalles/troubleshooting (incluye un problema conocido en WSL): $WEBUSB_DIR/README.md"
     elif [[ "$(command -v npm)" == /mnt/c/* || "$(command -v node)" == /mnt/c/* ]]; then
@@ -106,8 +88,8 @@ if [[ -d "$DASHBOARD_DIR" ]]; then
         if (cd "$WEBUSB_DIR" && npm install --silent && npm run build); then
             echo "    OK: bundle generado -- el botón '🔌 USB directo (fluido)' aparecerá en el dashboard."
         else
-            echo "    AVISO: el build falló -- opcional, el dashboard sigue funcionando sin él (cae a"
-            echo "    scrcpy/polling). Detalles: $WEBUSB_DIR/README.md"
+            echo "    AVISO: el build falló -- opcional, el resto del dashboard sigue funcionando sin"
+            echo "    el video en vivo. Detalles: $WEBUSB_DIR/README.md"
         fi
     fi
 fi
