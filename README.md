@@ -547,6 +547,16 @@ llm:
   max_tokens: 4096
   timeout: 120
 
+# Azure AI Foundry example: keep provider: openai (the ".../openai/v1"
+# endpoint is OpenAI-wire-compatible) -- do NOT use provider: azure or
+# azureopenai for this URL shape, those expect a different endpoint format
+# (*.models.ai.azure.com or *.openai.azure.com + api_version) and will fail.
+# llm:
+#   provider: openai
+#   model: my-deployment-name          # the Azure deployment name, not a generic model id
+#   api_key: "<azure-api-key>"
+#   base_url: "https://<resource>.services.ai.azure.com/openai/v1"
+
 auto:
   unattended: true              # Unattended mode (no manual intervention)
 

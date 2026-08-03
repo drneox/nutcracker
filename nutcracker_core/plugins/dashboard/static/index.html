@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nutcracker dashboard</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --border:#2a2f3a;
+    --text:#e6e8ec; --dim:#9aa4b2; --accent:#4c8dff;
+    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f4f5f7; --panel:#ffffff; --panel2:#f0f1f4; --border:#d9dce2;
+      --text:#1a1d24; --dim:#5b6472; --accent:#2f6fed;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel)}
+  header h1{font-size:16px;margin:0;font-weight:700}
+  header h1 span{color:var(--accent)}
+  .stats{display:flex;flex-wrap:wrap;gap:16px;margin-left:auto;font-size:12px;color:var(--dim)}
+  .stats b{color:var(--text);font-size:14px}
+  main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);margin:0 0 12px}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:12px}
+  .tab{padding:8px 14px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
+  .tab.active{color:var(--text);border-color:var(--accent)}
+  .tabpanel{display:none}
+  .tabpanel.active{display:block}
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  tr.clickable{cursor:pointer}
+  tr.clickable:hover{background:var(--panel2)}
+  .badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+  .badge.good{background:color-mix(in srgb, var(--good) 18%, transparent);color:var(--good)}
+  .badge.warning{background:color-mix(in srgb, var(--warning) 20%, transparent);color:#8a5d00}
+  .badge.serious{background:color-mix(in srgb, var(--serious) 20%, transparent);color:var(--serious)}
+  .badge.critical{background:color-mix(in srgb, var(--critical) 20%, transparent);color:var(--critical)}
+  .badge.neutral{background:var(--panel2);color:var(--dim)}
+  input,select,button{font:inherit;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px}
+  button{cursor:pointer;background:var(--accent);color:#fff;border:none;font-weight:600}
+  button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  #log{background:#05070a;color:#c9d1d9;padding:12px;border-radius:8px;height:320px;overflow:auto;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
+  #webusb-canvas{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;min-height:280px;display:block}
+  .device-status{font-size:12px;color:var(--dim);margin:6px 0}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
+  .modal-backdrop.open{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;max-width:820px;width:100%;padding:20px}
+  .modal h3{margin-top:0}
+  .kpis{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+  .kpi{background:var(--panel2);border-radius:8px;padding:10px 14px;min-width:120px}
+  .kpi b{display:block;font-size:18px}
+  .kpi span{color:var(--dim);font-size:11px;text-transform:uppercase}
+  .close-x{float:right;cursor:pointer;color:var(--dim);font-size:20px;line-height:1}
+  #chatlog{height:180px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
+  #chatlog .msg{margin-bottom:6px}
+  #chatlog .op{color:var(--accent)}
+  svg.trend{width:100%;height:160px;overflow:visible}
+  .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
+  @media (max-width:600px){
+    header{padding:10px 14px}
+    main{padding:10px;gap:10px}
+    .card{padding:12px}
+    th,td{padding:6px 7px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>nutcracker</span> dashboard</h1>
+  <div class="stats" id="stats">
+    <div><b id="s-apps">–</b> apps</div>
+    <div><b id="s-runs">–</b> runs</div>
+    <div><b id="s-findings">–</b> findings</div>
+    <div><b id="s-jobs">–</b> active jobs</div>
+  </div>
+</header>
+
+<main>
+
+  <section class="card">
+    <h2>Apps</h2>
+    <div class="table-scroll">
+      <table id="apps-table">
+        <thead><tr><th>Package</th><th>Veredicto</th><th>MASVS</th><th>Próxima revisión</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Cola de análisis</h2>
+    <div class="row">
+      <input id="q-target" placeholder="ruta .apk / URL / package id" style="flex:1;min-width:200px">
+      <select id="q-kind"><option value="static">static</option><option value="dynamic">dynamic</option><option value="aipwn">aipwn</option></select>
+      <input id="q-serial" placeholder="serial (opcional)" style="width:140px">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="q-run-now" style="width:auto"> correr ahora
+      </label>
+      <button onclick="submitQueue()">Encolar</button>
+    </div>
+
+    <div class="row" style="border-top:1px solid var(--border);padding-top:10px">
+      <span style="font-size:12px;color:var(--dim)">Batch desde archivo (.txt, un package por línea):</span>
+      <input type="file" id="batch-file" accept=".txt" style="flex:1;min-width:160px">
+      <select id="batch-source">
+        <option value="">fuente: store (default)</option>
+        <option value="device">fuente: device instalado</option>
+      </select>
+      <input id="batch-serial" placeholder="serial (si source=device)" style="width:180px">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="batch-then-aipwn" checked style="width:auto"> encadenar aipwn
+      </label>
+      <button class="secondary" onclick="runBatch()">Batch</button>
+    </div>
+
+    <div class="table-scroll">
+      <table id="queue-table">
+        <thead><tr><th>#</th><th>Kind</th><th>Target</th><th>Estado</th><th>Package</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="tabs">
+      <div class="tab active" data-tab="logs">Logs en vivo</div>
+      <div class="tab" data-tab="device">Dispositivo</div>
+      <div class="tab" data-tab="agent">Agente / Chat</div>
+    </div>
+
+    <div class="tabpanel active" id="tab-logs">
+      <div class="row">
+        <input id="log-job-id" placeholder="job id" style="width:100px">
+        <button class="secondary" onclick="connectJobLog()">Ver logs</button>
+      </div>
+      <pre id="log">(elegí un job id de la cola de arriba)</pre>
+    </div>
+
+    <div class="tabpanel" id="tab-device">
+      <div class="row">
+        <button id="webusb-btn" class="secondary" style="display:none" onclick="connectWebUsb()">🔌 USB directo (fluido)</button>
+        <button id="webusb-stop-btn" class="secondary" style="display:none" onclick="disconnectWebUsb()">⏏ Soltar USB</button>
+      </div>
+      <div class="device-status" id="device-status">cargando…</div>
+      <canvas id="webusb-canvas" width="720" height="1600"></canvas>
+    </div>
+
+    <div class="tabpanel" id="tab-agent">
+      <h2 style="margin-top:0">System prompt del agente aipwn</h2>
+      <pre id="agent-prompt" style="max-height:200px;overflow:auto;background:var(--panel2);padding:10px;border-radius:8px;font-size:11px">cargando…</pre>
+      <h2>Chat</h2>
+      <div class="row">
+        <input id="chat-package" placeholder="package id" style="width:220px">
+        <button class="secondary" onclick="connectChat()">Conectar</button>
+      </div>
+      <div id="chatlog"></div>
+      <div class="row">
+        <input id="chat-text" placeholder="mensaje para el agente…" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
+        <button onclick="sendChat()">Enviar</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="modal-backdrop" id="app-modal">
+  <div class="modal">
+    <span class="close-x" onclick="closeAppModal()">&times;</span>
+    <h3 id="modal-pkg">-</h3>
+    <div class="kpis">
+      <div class="kpi"><b id="modal-verdict">-</b><span>Veredicto</span></div>
+      <div class="kpi"><b id="modal-score">-</b><span>Score / Grade</span></div>
+      <div class="kpi"><b id="modal-due">-</b><span>Próxima revisión</span></div>
+    </div>
+    <div class="row">
+      <button class="secondary" onclick="reQueue()">Re-analizar</button>
+    </div>
+    <h4>Tendencia MASVS</h4>
+    <svg class="trend" id="trend-svg" viewBox="0 0 600 160" preserveAspectRatio="none"></svg>
+    <h4>Programar revisión</h4>
+    <div class="row">
+      <input type="number" id="sched-days" min="1" value="30" style="width:100px"> días
+      <button class="secondary" onclick="saveSchedule()">Guardar</button>
+      <span id="sched-saved" style="color:var(--good);display:none">✔ guardado</span>
+    </div>
+    <h4>Hallazgos del último run</h4>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Regla</th><th>Severidad</th><th>MASVS</th><th>MASWE</th><th>CWE</th><th>Ubicación</th></tr></thead>
+        <tbody id="modal-findings"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="tooltip-fixed" id="trend-tooltip"></div>
+
+<script>
+const SEV_CLASS = {critical:'critical', high:'serious', medium:'warning', low:'good', info:'neutral'};
+const SEV_ICON  = {critical:'✖', high:'▲', medium:'●', low:'●', info:'·'};
+
+function sevBadge(sev){
+  sev = (sev||'info').toLowerCase();
+  const cls = SEV_CLASS[sev] || 'neutral';
+  const icon = SEV_ICON[sev] || '·';
+  return `<span class="badge ${cls}">${icon} ${sev.toUpperCase()}</span>`;
+}
+function verdictBadge(v){
+  if (v === 'protection_broken') return `<span class="badge critical">⚡ BYPASSED</span>`;
+  if (v === 'protected') return `<span class="badge good">✔ PROTECTED</span>`;
+  if (v === 'not_protected') return `<span class="badge warning">✘ NO PROTECTION</span>`;
+  return `<span class="badge neutral">–</span>`;
+}
+async function j(url, opts){
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+let currentApp = null;
+
+async function refreshAll(){
+  try {
+    const s = await j('/api/summary');
+    document.getElementById('s-apps').textContent = s.apps;
+    document.getElementById('s-runs').textContent = s.runs;
+    document.getElementById('s-findings').textContent = s.findings;
+    document.getElementById('s-jobs').textContent = s.active_jobs;
+  } catch(e){}
+  await refreshApps();
+  await refreshQueue();
+}
+
+async function refreshApps(){
+  const apps = await j('/api/apps');
+  const tbody = document.querySelector('#apps-table tbody');
+  tbody.innerHTML = apps.map(a => `
+    <tr class="clickable" onclick="openApp('${a.package}')">
+      <td>${a.package}</td>
+      <td>${verdictBadge(a.last_verdict)}</td>
+      <td>${a.masvs_score ?? '–'} ${a.grade ? '('+a.grade+')' : ''}</td>
+      <td>${a.next_due_at ? a.next_due_at.slice(0,10) : '–'}</td>
+      <td>–</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="color:var(--dim)">(sin apps todavía)</td></tr>';
+}
+
+async function refreshQueue(){
+  const jobs = await j('/api/queue');
+  const tbody = document.querySelector('#queue-table tbody');
+  tbody.innerHTML = jobs.map(job => `
+    <tr>
+      <td>#${job.id}</td><td>${job.kind}</td><td>${job.target}</td>
+      <td>${job.status}</td><td>${job.package || '–'}</td>
+      <td>${job.status === 'queued'
+        ? `<button class="secondary" onclick="deleteQueueJob(${job.id})" title="Borrar job pendiente">🗑</button>`
+        : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(cola vacía)</td></tr>';
+}
+
+async function deleteQueueJob(jobId){
+  try {
+    await j(`/api/queue/${jobId}`, { method: 'DELETE' });
+    await refreshQueue();
+  } catch (e) {
+    alert(`No se pudo borrar el job #${jobId}: ${e.message || e}`);
+  }
+}
+
+async function submitQueue(){
+  const target = document.getElementById('q-target').value.trim();
+  if (!target) return;
+  const payload = {
+    target,
+    kind: document.getElementById('q-kind').value,
+    serial: document.getElementById('q-serial').value.trim() || null,
+    run_now: document.getElementById('q-run-now').checked,
+  };
+  await j('/api/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  document.getElementById('q-target').value = '';
+  refreshQueue();
+}
+
+async function runBatch(){
+  const fileInput = document.getElementById('batch-file');
+  if (!fileInput.files.length) return;
+  const text = await fileInput.files[0].text();
+  const targets = text.split('\n');
+  const payload = {
+    targets,
+    source: document.getElementById('batch-source').value || null,
+    serial: document.getElementById('batch-serial').value.trim() || null,
+    then_aipwn: document.getElementById('batch-then-aipwn').checked,
+  };
+  await j('/api/queue/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  refreshQueue();
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'agent') loadAgentPrompt();
+  });
+});
+
+// ── Logs en vivo ─────────────────────────────────────────────────────────
+let logSocket = null;
+function connectJobLog(){
+  const id = document.getElementById('log-job-id').value.trim();
+  if (!id) return;
+  if (logSocket) logSocket.close();
+  const log = document.getElementById('log');
+  log.textContent = '';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  logSocket = new WebSocket(`${proto}://${location.host}/ws/jobs/${id}`);
+  logSocket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    const line = msg.kind === 'status' ? `\n[status] ${JSON.stringify(msg.data)}\n` : (msg.data + '\n');
+    log.textContent += line;
+    log.scrollTop = log.scrollHeight;
+  };
+}
+
+// ── Dispositivo ──────────────────────────────────────────────────────────
+// Único modo de video: WebUSB + WebCodecs ("USB directo (fluido)"), 100%
+// opt-in vía su propio botón -- no hay fallback de screenshots/scrcpy, a
+// pedido explícito del usuario. Import perezoso: si el bundle no existe
+// porque nadie corrió `npm run build` en webusb/, o el navegador no soporta
+// WebUSB, el botón simplemente no aparece.
+// Reconexión tras F5: se guarda en sessionStorage (NO localStorage) el serial
+// del device que el usuario conectó a mano. sessionStorage tiene justo la vida
+// útil que queremos -- sobrevive a un reload, muere al cerrar la pestaña -- así
+// que la reconexión automática ocurre SOLO en la pestaña donde el usuario ya
+// había pedido video explícitamente. Abrir el dashboard de cero nunca toca el
+// USB solo: el cable es exclusivo (mientras el navegador lo tiene, adb no puede
+// usarlo), así que reclamarlo sin que lo pidan rompería los jobs de la cola.
+const WEBUSB_SESSION_KEY = 'nutcracker.webusb.serial';
+
+function rememberWebUsbSerial(serial){
+  try { serial ? sessionStorage.setItem(WEBUSB_SESSION_KEY, serial)
+               : sessionStorage.removeItem(WEBUSB_SESSION_KEY); } catch (e) { /* modo privado */ }
+}
+function rememberedWebUsbSerial(){
+  try { return sessionStorage.getItem(WEBUSB_SESSION_KEY); } catch (e) { return null; }
+}
+function setWebUsbConnectedUi(connected){
+  document.getElementById('webusb-btn').style.display = connected ? 'none' : '';
+  document.getElementById('webusb-stop-btn').style.display = connected ? '' : 'none';
+}
+
+// Import perezoso: si el bundle no existe porque nadie corrió `npm run build`
+// en webusb/, o el navegador no soporta WebUSB, el botón simplemente no aparece.
+(async () => {
+  const status = document.getElementById('device-status');
+  try {
+    const mod = await import('/static/webusb-video.bundle.js');
+    if (mod.isSupported && mod.isSupported()) {
+      window.__nutcrackerWebUsb = mod;
+      setWebUsbConnectedUi(false);
+      status.textContent = 'Clic en "🔌 USB directo (fluido)" para conectar por USB.';
+
+      const previous = rememberedWebUsbSerial();
+      if (previous) {
+        const canvas = document.getElementById('webusb-canvas');
+        const serial = await mod.reconnect(canvas, (s) => { status.textContent = s; }, previous);
+        rememberWebUsbSerial(serial);
+        setWebUsbConnectedUi(!!serial);
+      }
+      return;
+    }
+  } catch (e) { /* bundle no compilado o navegador sin soporte -- no-op */ }
+  status.textContent = 'WebUSB no disponible (necesita Chrome/Edge y el bundle compilado — ver nutcracker_core/plugins/dashboard/webusb/README.md).';
+})();
+
+async function connectWebUsb(){
+  const mod = window.__nutcrackerWebUsb;
+  if (!mod) return;
+  const canvas = document.getElementById('webusb-canvas');
+  const status = document.getElementById('device-status');
+  try {
+    // mod.connect() ya captura sus propios errores internamente y los reporta
+    // vía onStatus (ver webusb/src/main.ts) -- este try/catch es defensa en
+    // profundidad por si algo se escapa (p.ej. el propio import/bundle).
+    const serial = await mod.connect(canvas, (s) => { status.textContent = s; });
+    rememberWebUsbSerial(serial);
+    setWebUsbConnectedUi(!!serial);
+  } catch (e) {
+    console.error('connectWebUsb falló:', e);
+    status.textContent = `Error con USB directo: ${e.message || e}`;
+  }
+}
+
+async function disconnectWebUsb(){
+  const mod = window.__nutcrackerWebUsb;
+  if (!mod) return;
+  const status = document.getElementById('device-status');
+  // Se olvida el serial ANTES de cerrar: si el cierre falla a mitad, no queremos
+  // que el próximo F5 vuelva a reclamar el cable por su cuenta.
+  rememberWebUsbSerial(null);
+  setWebUsbConnectedUi(false);
+  try {
+    await mod.disconnect((s) => { status.textContent = s; });
+  } catch (e) {
+    console.error('disconnectWebUsb falló:', e);
+    status.textContent = `Error soltando el USB: ${e.message || e}`;
+  }
+}
+
+// ── Agente / Chat ────────────────────────────────────────────────────────
+async function loadAgentPrompt(){
+  const data = await j('/api/agent/prompt');
+  document.getElementById('agent-prompt').textContent =
+    data.available ? data.prompt : '(plugin aipwn no instalado/disponible en este entorno)';
+}
+
+let chatSocket = null;
+function connectChat(){
+  const pkg = document.getElementById('chat-package').value.trim();
+  if (!pkg) return;
+  if (chatSocket) chatSocket.close();
+  document.getElementById('chatlog').innerHTML = '';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  chatSocket = new WebSocket(`${proto}://${location.host}/ws/chat/${encodeURIComponent(pkg)}`);
+  chatSocket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    const log = document.getElementById('chatlog');
+    log.innerHTML += `<div class="msg"><span class="op">[${msg.data.from}]</span> ${msg.data.text}</div>`;
+    log.scrollTop = log.scrollHeight;
+  };
+}
+function sendChat(){
+  const input = document.getElementById('chat-text');
+  if (!chatSocket || !input.value.trim()) return;
+  chatSocket.send(input.value.trim());
+  input.value = '';
+}
+
+// ── Modal de detalle de app ──────────────────────────────────────────────
+async function openApp(pkg){
+  currentApp = pkg;
+  document.getElementById('modal-pkg').textContent = pkg;
+  const apps = await j('/api/apps');
+  const app = apps.find(a => a.package === pkg) || {};
+  document.getElementById('modal-verdict').innerHTML = verdictBadge(app.last_verdict);
+  document.getElementById('modal-score').textContent = (app.masvs_score ?? '–') + (app.grade ? ' ('+app.grade+')' : '');
+  document.getElementById('modal-due').textContent = app.next_due_at ? app.next_due_at.slice(0,10) : '–';
+
+  if (app.last_run_id) {
+    const run = await j(`/api/runs/${app.last_run_id}`);
+    const tbody = document.getElementById('modal-findings');
+    tbody.innerHTML = run.findings.map(f => `
+      <tr>
+        <td>${f.rule_id}</td><td>${sevBadge(f.severity)}</td>
+        <td>${f.masvs || '–'}</td><td>${f.maswe || '–'}</td><td>${f.cwe || '–'}</td>
+        <td>${f.file ? f.file + ':' + (f.line||0) : '–'}</td>
+      </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(sin hallazgos)</td></tr>';
+  }
+
+  const trend = await j(`/api/apps/${encodeURIComponent(pkg)}/trend`);
+  renderTrend(trend);
+
+  document.getElementById('app-modal').classList.add('open');
+}
+function closeAppModal(){
+  document.getElementById('app-modal').classList.remove('open');
+}
+
+function renderTrend(points){
+  const svg = document.getElementById('trend-svg');
+  const W = 600, H = 160, PAD = 24;
+  svg.innerHTML = '';
+  if (!points.length) {
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" fill="var(--dim)" font-size="12" text-anchor="middle">(sin historial)</text>`;
+    return;
+  }
+  const gradeColor = {A:'var(--good)', B:'var(--good)', C:'var(--warning)', D:'var(--serious)', F:'var(--critical)'};
+  const n = points.length;
+  const x = (i) => PAD + (i/(Math.max(n-1,1))) * (W - 2*PAD);
+  const y = (score) => H - PAD - (score/100) * (H - 2*PAD);
+
+  let svgHtml = '';
+  [0,25,50,75,100].forEach(v => {
+    svgHtml += `<line x1="${PAD}" y1="${y(v)}" x2="${W-PAD}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>`;
+    svgHtml += `<text x="2" y="${y(v)+4}" font-size="9" fill="var(--dim)">${v}</text>`;
+  });
+  let path = points.map((p,i) => `${i===0?'M':'L'} ${x(i)} ${y(p.masvs_score)}`).join(' ');
+  svgHtml += `<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
+  points.forEach((p,i) => {
+    const color = gradeColor[p.grade] || 'var(--dim)';
+    svgHtml += `<circle cx="${x(i)}" cy="${y(p.masvs_score)}" r="5" fill="${color}"
+      onmouseenter="showTrendTip(event,'${(p.finished_at||'').slice(0,10)} — Score ${p.masvs_score} (${p.grade||'?'})')"
+      onmouseleave="hideTrendTip()" style="cursor:pointer"/>`;
+  });
+  if (n) {
+    svgHtml += `<text x="${x(0)}" y="${H-4}" font-size="9" fill="var(--dim)">${(points[0].finished_at||'').slice(0,10)}</text>`;
+    svgHtml += `<text x="${x(n-1)}" y="${H-4}" font-size="9" fill="var(--dim)" text-anchor="end">${(points[n-1].finished_at||'').slice(0,10)}</text>`;
+  }
+  svg.innerHTML = svgHtml;
+}
+function showTrendTip(ev, text){
+  const tip = document.getElementById('trend-tooltip');
+  tip.textContent = text;
+  tip.style.left = (ev.clientX + 12) + 'px';
+  tip.style.top = (ev.clientY + 12) + 'px';
+  tip.style.display = 'block';
+}
+function hideTrendTip(){
+  document.getElementById('trend-tooltip').style.display = 'none';
+}
+
+async function saveSchedule(){
+  const days = parseInt(document.getElementById('sched-days').value, 10) || 30;
+  await j(`/api/schedule/${encodeURIComponent(currentApp)}`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({interval_days: days, enabled: true}),
+  });
+  const ok = document.getElementById('sched-saved');
+  ok.style.display = 'inline';
+  setTimeout(() => ok.style.display = 'none', 1500);
+  refreshApps();
+}
+
+async function reQueue(){
+  const apps = await j('/api/apps');
+  const app = apps.find(a => a.package === currentApp) || {};
+  // FIX (2026-07-27): si la app se analizó desde un .apk local (nunca publicada
+  // en ninguna store), re-descargarla por package id siempre falla -- usar la
+  // ruta local guardada en apps.source (ver store/hooks.py::_persist_after_analysis).
+  const target = (app.source && app.source.startsWith('local:')) ? app.source.slice(6) : currentApp;
+  await j('/api/queue', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({target, kind:'static', run_now:true}),
+  });
+  closeAppModal();
+  refreshQueue();
+}
+
+// Precarga los campos de serial (cola/batch) con strategies.default_device_id
+// de config.yaml -- típicamente un serial de red ("ip:5555" tras `adb tcpip
+// 5555`) para no tener que escribirlo a mano y para que no compita por el
+// cable USB con el video WebUSB. Solo si el campo está vacío -- no pisa lo
+// que el operador ya haya escrito.
+(async () => {
+  try {
+    const { serial } = await j('/api/config/default-serial');
+    if (!serial) return;
+    for (const id of ['q-serial', 'batch-serial']) {
+      const el = document.getElementById(id);
+      if (el && !el.value) el.value = serial;
+    }
+  } catch (e) { /* config no disponible -- no-op, los campos quedan vacíos */ }
+})();
+
+refreshAll();
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>

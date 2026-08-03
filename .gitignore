@@ -23,6 +23,7 @@ logs/
 # Tool caches / outputs
 .semgrep/
 frida_scripts/
+node_modules/
 config.yaml
 test.yaml
 config*.yaml
@@ -44,8 +45,14 @@ CLAUDE.md
 AGENTS.md
 GEMINI.md
 
-# Plugin outputs / memory
-plugins/
+# Plugin outputs / memory -- todos los plugins quedan fuera del repo principal
+# EXCEPTO dashboard/, que pasó a ser parte del proyecto principal (ya no es un
+# repo git separado). El patrón debe ser "*" (no "plugins/" a secas): git no
+# puede des-ignorar algo dentro de un directorio que ya está ignorado como
+# unidad completa, solo dentro de uno cuyo contenido se ignora entrada por
+# entrada.
+nutcracker_core/plugins/*
+!nutcracker_core/plugins/dashboard/
 aipwn_memory/
 
 # Backup files
