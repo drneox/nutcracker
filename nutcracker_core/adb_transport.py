@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 import threading
 
@@ -74,6 +75,48 @@ def _adb(args: list[str], adb_bin: str, timeout: int) -> subprocess.CompletedPro
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
+
+
+def kill_server(adb_bin: str = "adb") -> dict:
+    """Mata el/los daemon(es) adb -- pensado para el botón "adb kill-server"
+    del dashboard (libera el cable USB antes de conectar WebUSB, ver
+    plugins/dashboard/webusb/).
+
+    Corre el kill por DOS vías distintas, no solo una:
+      - "wsl": ``adb_bin`` resuelto por el PATH normal (en este proyecto,
+        típicamente un symlink al adb.exe de Windows vía interop de WSL).
+      - "windows": explícitamente vía ``powershell.exe``, que resuelve el PATH
+        *de Windows* -- puede apuntar a un adb.exe DISTINTO si el usuario tiene
+        más de una instalación de platform-tools (p.ej. Android Studio además
+        de la standalone que usa este proyecto). Un solo "adb kill-server"
+        desde WSL no necesariamente mata ese otro proceso.
+
+    No falla si no corre bajo WSL/Windows -- ``powershell.exe`` simplemente no
+    existe en Linux nativo/macOS, y esa mitad queda en ``None`` en vez de
+    error (no hay nada que matar ahí; no es una falla)."""
+    result: dict = {"wsl": None, "windows": None}
+
+    proc = _adb(["kill-server"], adb_bin, timeout=10)
+    result["wsl"] = {
+        "ok": proc is not None and proc.returncode == 0,
+        "detail": ((proc.stdout or "") + (proc.stderr or "")).strip() if proc else "adb no encontrado",
+    }
+
+    powershell = shutil.which("powershell.exe")
+    if powershell:
+        try:
+            win_proc = subprocess.run(
+                [powershell, "-NoProfile", "-Command", "adb kill-server"],
+                capture_output=True, text=True, timeout=15,
+            )
+            result["windows"] = {
+                "ok": win_proc.returncode == 0,
+                "detail": ((win_proc.stdout or "") + (win_proc.stderr or "")).strip(),
+            }
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            result["windows"] = {"ok": False, "detail": str(exc)}
+
+    return result
 
 
 def is_transport_alive(serial: str, adb_bin: str = "adb") -> bool:

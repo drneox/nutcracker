@@ -198,4 +198,11 @@ dashboard:
 toolbox:
   enabled: false   # true = decompilar vía Docker en vez de binarios locales
   image: 'nutcracker-toolbox-static:latest'
+  # Techo de memoria por contenedor (formato Docker: '4g', '2048m', ...). Sin
+  # esto, un jadx desbocado contra un APK grande/ofuscado puede agotar TODA
+  # la VM compartida de WSL2 (Docker Desktop comparte el mismo pool) y
+  # tirarse abajo con ella el dashboard y otros jobs. --memory-swap se fija
+  # igual a este valor (sin swap extra) para que un contenedor que se pasa
+  # del límite muera rápido por su cgroup en vez de entrar en swap thrashing.
+  memory_limit: '4g'
 

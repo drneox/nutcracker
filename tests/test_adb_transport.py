@@ -208,3 +208,74 @@ def test_keepalive_start_stop_is_idempotent(monkeypatch):
 def test_keepalive_interval_has_a_floor():
     """Un intervalo diminuto martillaría adb (y con él, el USB) sin ganancia."""
     assert adb_transport.TransportKeepAlive(interval_seconds=1).interval_seconds == 10
+
+
+# ── kill_server (botón "adb kill-server" del dashboard, WSL + Windows) ──────
+
+def test_kill_server_reports_wsl_success(monkeypatch):
+    _patch_adb(monkeypatch, lambda cmd: _completed(stdout="killed\n"))
+    monkeypatch.setattr(adb_transport.shutil, "which", lambda name: None)  # sin powershell.exe
+
+    result = adb_transport.kill_server()
+
+    assert result["wsl"]["ok"] is True
+    assert result["windows"] is None
+
+
+def test_kill_server_reports_wsl_failure_when_adb_missing(monkeypatch):
+    def fake_run(cmd, capture_output=True, text=True, timeout=None):  # noqa: ANN001
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(adb_transport.subprocess, "run", fake_run)
+    monkeypatch.setattr(adb_transport.shutil, "which", lambda name: None)
+
+    result = adb_transport.kill_server()
+
+    assert result["wsl"]["ok"] is False
+    assert "no encontrado" in result["wsl"]["detail"]
+
+
+def test_kill_server_also_runs_via_powershell_when_available(monkeypatch):
+    calls = []
+
+    def fake_adb_run(cmd, capture_output=True, text=True, timeout=None):  # noqa: ANN001
+        calls.append(("adb", cmd))
+        return _completed(stdout="killed\n")
+
+    def fake_which(name):
+        return "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" if name == "powershell.exe" else None
+
+    def fake_subprocess_run(cmd, capture_output=True, text=True, timeout=None):  # noqa: ANN001
+        calls.append(("powershell", cmd))
+        return _completed(stdout="killed\n")
+
+    monkeypatch.setattr(adb_transport, "_adb", lambda args, adb_bin, timeout: fake_adb_run([adb_bin, *args]))
+    monkeypatch.setattr(adb_transport.shutil, "which", fake_which)
+    monkeypatch.setattr(adb_transport.subprocess, "run", fake_subprocess_run)
+
+    result = adb_transport.kill_server()
+
+    assert result["wsl"]["ok"] is True
+    assert result["windows"]["ok"] is True
+    assert calls[0][0] == "adb" and calls[1][0] == "powershell"
+    assert "adb kill-server" in calls[1][1][-1]
+
+
+def test_kill_server_windows_side_survives_powershell_timeout(monkeypatch):
+    _patch_adb(monkeypatch, lambda cmd: _completed(stdout="killed\n"))
+    monkeypatch.setattr(adb_transport.shutil, "which", lambda name: "/usr/bin/powershell.exe")
+
+    # _patch_adb ya parcheó subprocess.run para el lado "adb" -- acá lo
+    # volvemos a parchear para que powershell explote (viene después).
+    original = adb_transport.subprocess.run
+
+    def dispatch(cmd, **kw):
+        if "powershell" in cmd[0].lower():
+            raise adb_transport.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return original(cmd, **kw)
+
+    monkeypatch.setattr(adb_transport.subprocess, "run", dispatch)
+
+    result = adb_transport.kill_server()  # no debe propagar
+
+    assert result["windows"]["ok"] is False

@@ -186,13 +186,19 @@ class QueueEngine:
     # ── Encolado ─────────────────────────────────────────────────────────────
 
     def submit(self, target: str, kind: str = "static", serial: str | None = None,
-               priority: int = 0, source: str | None = None) -> Job:
+               priority: int = 0, source: str | None = None,
+               aipwn_resume: bool = False, aipwn_extra_iterations: int = 5) -> Job:
         """Encola un job (persistido en SQLite como 'queued' de inmediato).
 
         ``source`` solo aplica a jobs "static" con ``target`` = package id:
         ``"device"`` extrae el .apk ya instalado en ``serial`` vía adb en vez
         de descargarlo de una store (ver ``downloader.DeviceInstalledDownloader`,
-        ``orchestrator.build_job_cmd``)."""
+        ``orchestrator.build_job_cmd``).
+
+        ``aipwn_resume``/``aipwn_extra_iterations`` solo aplican a jobs
+        "aipwn": continúan la última sesión sin conclusión de ``target`` en
+        vez de arrancar una conversación nueva (botón "+N iteraciones" del
+        dashboard)."""
         is_local = _is_local_apk(target)
         if kind == "dynamic" and not is_local:
             raise ValueError(
@@ -201,7 +207,8 @@ class QueueEngine:
                 "flujos dinámicos con descarga automática."
             )
         job = Job(target=target, kind=kind, is_local_apk=is_local, serial=serial,
-                   priority=priority, source=source)
+                   priority=priority, source=source, aipwn_resume=aipwn_resume,
+                   aipwn_extra_iterations=aipwn_extra_iterations)
         conn = db.connect(self.db_path)
         try:
             job.db_id = repository.enqueue_job(conn, target=target, kind=kind,
@@ -333,6 +340,8 @@ class QueueEngine:
             serial=job.serial,
             aipwn=(job.kind == "aipwn"),
             source=job.source,
+            aipwn_resume=job.aipwn_resume,
+            aipwn_extra_iterations=job.aipwn_extra_iterations,
         )
         env = dict(os.environ)
         env["NUTCRACKER_QUEUE_JOB_ID"] = str(job.db_id)

@@ -37,6 +37,8 @@
   th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
   tr.clickable{cursor:pointer}
   tr.clickable:hover{background:var(--panel2)}
+  .job-id-link{color:var(--accent);text-decoration:none;font-weight:600}
+  .job-id-link:hover{text-decoration:underline}
   .badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
   .badge.good{background:color-mix(in srgb, var(--good) 18%, transparent);color:var(--good)}
   .badge.warning{background:color-mix(in srgb, var(--warning) 20%, transparent);color:#8a5d00}
@@ -150,6 +152,7 @@
       <div class="row">
         <button id="webusb-btn" class="secondary" style="display:none" onclick="connectWebUsb()">🔌 USB directo (fluido)</button>
         <button id="webusb-stop-btn" class="secondary" style="display:none" onclick="disconnectWebUsb()">⏏ Soltar USB</button>
+        <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB">🔪 adb kill-server</button>
       </div>
       <div class="device-status" id="device-status">cargando…</div>
       <canvas id="webusb-canvas" width="720" height="1600"></canvas>
@@ -193,11 +196,25 @@
       <button class="secondary" onclick="saveSchedule()">Guardar</button>
       <span id="sched-saved" style="color:var(--good);display:none">✔ guardado</span>
     </div>
-    <h4>Hallazgos del último run</h4>
+    <h4 id="modal-findings-title">Hallazgos del último run</h4>
     <div class="table-scroll">
       <table>
         <thead><tr><th>Regla</th><th>Severidad</th><th>MASVS</th><th>MASWE</th><th>CWE</th><th>Ubicación</th></tr></thead>
         <tbody id="modal-findings"></tbody>
+      </table>
+    </div>
+    <h4>Historial de análisis <span style="font-weight:400;color:var(--dim);font-size:11px">(clic en una fila para ver sus hallazgos)</span></h4>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Fecha</th><th>Veredicto</th><th>Score</th><th>Hallazgos</th><th>Reporte</th></tr></thead>
+        <tbody id="modal-history"></tbody>
+      </table>
+    </div>
+    <h4>Hallazgos consolidados <span style="font-weight:400;color:var(--dim);font-size:11px">(deduplicados de todas las corridas)</span></h4>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Estado</th><th>Regla</th><th>Severidad</th><th>Ubicación</th><th>Visto en</th><th>Primera vez</th><th>Última vez</th></tr></thead>
+        <tbody id="modal-consolidated"></tbody>
       </table>
     </div>
   </div>
@@ -220,6 +237,11 @@ function verdictBadge(v){
   if (v === 'protected') return `<span class="badge good">✔ PROTECTED</span>`;
   if (v === 'not_protected') return `<span class="badge warning">✘ NO PROTECTION</span>`;
   return `<span class="badge neutral">–</span>`;
+}
+function findingStatusBadge(status){
+  return status === 'present'
+    ? `<span class="badge warning">● presente</span>`
+    : `<span class="badge good">✔ resuelto</span>`;
 }
 async function j(url, opts){
   const r = await fetch(url, opts);
@@ -259,12 +281,34 @@ async function refreshQueue(){
   const tbody = document.querySelector('#queue-table tbody');
   tbody.innerHTML = jobs.map(job => `
     <tr>
-      <td>#${job.id}</td><td>${job.kind}</td><td>${job.target}</td>
+      <td><a href="#" class="job-id-link" onclick="goToJobLog(${job.id}); return false"
+             title="Ver logs del job #${job.id}">#${job.id}</a></td>
+      <td>${job.kind}</td><td>${job.target}</td>
       <td>${job.status}</td><td>${job.package || '–'}</td>
-      <td>${job.status === 'queued'
-        ? `<button class="secondary" onclick="deleteQueueJob(${job.id})" title="Borrar job pendiente">🗑</button>`
-        : ''}</td>
+      <td>
+        ${job.status === 'queued'
+          ? `<button class="secondary" onclick="deleteQueueJob(${job.id})" title="Borrar job pendiente">🗑</button>`
+          : ''}
+        ${job.resumable
+          ? `<button class="secondary" onclick="resumeAipwnJob(${job.id})"
+               title="Continuar esta sesión de aipwn con 5 iteraciones más, recordando lo que hizo hasta ahora">▶ +5 iteraciones</button>`
+          : ''}
+      </td>
     </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(cola vacía)</td></tr>';
+}
+
+// Botón "▶ +5 iteraciones": el job aipwn terminó sin conclusión (límite de
+// iteraciones, o el LLM se quedó sin margen a mitad de razonamiento) y quedó
+// una sesión guardada (ver agent_memory.save_resume_state en el backend) --
+// esto encola una corrida NUEVA que continúa esa conversación tal cual, con
+// más presupuesto, en vez de empezar de cero.
+async function resumeAipwnJob(jobId){
+  try {
+    await j(`/api/queue/${jobId}/resume-aipwn`, {method: 'POST'});
+    await refreshQueue();
+  } catch (e) {
+    alert(`No se pudo reanudar el job #${jobId}: ${e.message || e}`);
+  }
 }
 
 async function deleteQueueJob(jobId){
@@ -306,14 +350,16 @@ async function runBatch(){
 }
 
 // ── Tabs ─────────────────────────────────────────────────────────────────
+function activateTab(name){
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'agent') loadAgentPrompt();
+}
+
 document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-    if (tab.dataset.tab === 'agent') loadAgentPrompt();
-  });
+  tab.addEventListener('click', () => activateTab(tab.dataset.tab));
 });
 
 // ── Logs en vivo ─────────────────────────────────────────────────────────
@@ -332,6 +378,15 @@ function connectJobLog(){
     log.textContent += line;
     log.scrollTop = log.scrollHeight;
   };
+}
+
+// Click en el "#id" de un job (tabla de la cola) -- lleva directo a "Logs en
+// vivo" con ese job ya cargado, sin tener que copiar el id a mano al campo de
+// texto de al lado.
+function goToJobLog(jobId){
+  document.getElementById('log-job-id').value = jobId;
+  activateTab('logs');
+  connectJobLog();
 }
 
 // ── Dispositivo ──────────────────────────────────────────────────────────
@@ -419,6 +474,26 @@ async function disconnectWebUsb(){
   }
 }
 
+// Mata el daemon adb por las dos vías (WSL + Windows, ver
+// adb_transport.kill_server()) -- pensado para correr ANTES de "🔌 USB directo
+// (fluido)": mientras el daemon esté vivo, tiene el cable reclamado y WebUSB
+// no puede tomarlo (ver plan.md).
+async function adbKillServer(){
+  const status = document.getElementById('device-status');
+  status.textContent = 'Matando adb (WSL + Windows)…';
+  try {
+    const r = await j('/api/adb/kill-server', {method: 'POST'});
+    const parts = [];
+    if (r.wsl) parts.push(`WSL: ${r.wsl.ok ? 'OK' : 'falló'}`);
+    if (r.windows) parts.push(`Windows: ${r.windows.ok ? 'OK' : 'falló'}`);
+    else parts.push('Windows: n/a (no es WSL)');
+    status.textContent = `adb kill-server — ${parts.join(' · ')}`;
+  } catch (e) {
+    console.error('adbKillServer falló:', e);
+    status.textContent = `Error matando adb: ${e.message || e}`;
+  }
+}
+
 // ── Agente / Chat ────────────────────────────────────────────────────────
 async function loadAgentPrompt(){
   const data = await j('/api/agent/prompt');
@@ -449,6 +524,26 @@ function sendChat(){
 }
 
 // ── Modal de detalle de app ──────────────────────────────────────────────
+function renderFindingsTable(findings){
+  const tbody = document.getElementById('modal-findings');
+  tbody.innerHTML = (findings || []).map(f => `
+    <tr>
+      <td>${f.rule_id}</td><td>${sevBadge(f.severity)}</td>
+      <td>${f.masvs || '–'}</td><td>${f.maswe || '–'}</td><td>${f.cwe || '–'}</td>
+      <td>${f.file ? f.file + ':' + (f.line||0) : '–'}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(sin hallazgos)</td></tr>';
+}
+
+// Clic en una fila del historial -- carga los hallazgos de ESE run puntual en
+// la tabla de arriba (antes solo mostraba el run más reciente, sin forma de
+// inspeccionar corridas viejas).
+async function loadRunFindings(runId, dateLabel){
+  const run = await j(`/api/runs/${runId}`);
+  document.getElementById('modal-findings-title').textContent =
+    `Hallazgos del run #${runId}` + (dateLabel ? ` (${dateLabel})` : '');
+  renderFindingsTable(run.findings);
+}
+
 async function openApp(pkg){
   currentApp = pkg;
   document.getElementById('modal-pkg').textContent = pkg;
@@ -457,25 +552,71 @@ async function openApp(pkg){
   document.getElementById('modal-verdict').innerHTML = verdictBadge(app.last_verdict);
   document.getElementById('modal-score').textContent = (app.masvs_score ?? '–') + (app.grade ? ' ('+app.grade+')' : '');
   document.getElementById('modal-due').textContent = app.next_due_at ? app.next_due_at.slice(0,10) : '–';
+  document.getElementById('modal-findings-title').textContent = 'Hallazgos del último run';
 
   if (app.last_run_id) {
     const run = await j(`/api/runs/${app.last_run_id}`);
-    const tbody = document.getElementById('modal-findings');
-    tbody.innerHTML = run.findings.map(f => `
-      <tr>
-        <td>${f.rule_id}</td><td>${sevBadge(f.severity)}</td>
-        <td>${f.masvs || '–'}</td><td>${f.maswe || '–'}</td><td>${f.cwe || '–'}</td>
-        <td>${f.file ? f.file + ':' + (f.line||0) : '–'}</td>
-      </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(sin hallazgos)</td></tr>';
+    renderFindingsTable(run.findings);
+  } else {
+    renderFindingsTable([]);
   }
 
   const trend = await j(`/api/apps/${encodeURIComponent(pkg)}/trend`);
   renderTrend(trend);
 
+  const history = await j(`/api/apps/${encodeURIComponent(pkg)}/runs`);
+  renderHistory(history, app.last_run_id);
+
+  const consolidated = await j(`/api/apps/${encodeURIComponent(pkg)}/findings`);
+  renderConsolidatedFindings(consolidated);
+
   document.getElementById('app-modal').classList.add('open');
 }
 function closeAppModal(){
   document.getElementById('app-modal').classList.remove('open');
+}
+
+// Historial de análisis de la app (GET /api/apps/{pkg}/runs), con descarga de
+// reportes por run. El PDF es un archivo canónico por PAQUETE (reporter.py lo
+// sobreescribe en cada análisis, no genera uno por run) -- mostrarlo en runs
+// viejos daría a entender que ese PDF corresponde a ESE análisis puntual,
+// cuando en realidad sería el más reciente. Por eso el botón de PDF solo
+// aparece en el run más reciente; el JSON sí es único por run (nombre con
+// timestamp) y se muestra siempre que exista.
+function renderHistory(runs, lastRunId){
+  const tbody = document.getElementById('modal-history');
+  tbody.innerHTML = runs.map(r => {
+    const dateLabel = (r.finished_at || r.started_at || '–').slice(0,16).replace('T',' ');
+    const buttons = [];
+    if (r.artifacts && r.artifacts.json) {
+      buttons.push(`<a href="/api/runs/${r.id}/download/json" class="job-id-link" title="Descargar JSON">JSON</a>`);
+    }
+    if (r.artifacts && r.artifacts.pdf && r.id === lastRunId) {
+      buttons.push(`<a href="/api/runs/${r.id}/download/pdf" class="job-id-link" title="Descargar PDF">PDF</a>`);
+    }
+    return `
+      <tr class="clickable" onclick="loadRunFindings(${r.id}, '${dateLabel}')" title="Ver hallazgos del run #${r.id}">
+        <td>${dateLabel}</td>
+        <td>${verdictBadge(r.verdict)}</td>
+        <td>${r.masvs_score ?? '–'}${r.grade ? ' ('+r.grade+')' : ''}</td>
+        <td>${r.findings_count}</td>
+        <td>${buttons.join(' · ') || '<span style="color:var(--dim)">–</span>'}</td>
+      </tr>`;
+  }).join('') || '<tr><td colspan="5" style="color:var(--dim)">(sin historial)</td></tr>';
+}
+
+function renderConsolidatedFindings(findings){
+  const tbody = document.getElementById('modal-consolidated');
+  tbody.innerHTML = (findings || []).map(f => `
+    <tr>
+      <td>${findingStatusBadge(f.status)}</td>
+      <td>${f.rule_id}</td>
+      <td>${sevBadge(f.severity)}</td>
+      <td>${f.file ? f.file + ':' + (f.line||0) : '–'}</td>
+      <td>${f.seen_in_runs}</td>
+      <td>${(f.first_seen_at || '–').slice(0,10)}</td>
+      <td>${(f.last_seen_at || '–').slice(0,10)}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--dim)">(sin hallazgos en ninguna corrida)</td></tr>';
 }
 
 function renderTrend(points){

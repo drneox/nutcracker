@@ -4,12 +4,23 @@ a través de sus APIs públicas (QueueEngine), nunca reimplementa análisis."""
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from nutcracker_core import adb_transport
 from nutcracker_core.queue.engine import QueueEngine
 from nutcracker_core.store import db, repository
+
+# aipwn es un plugin opcional (repo git separado, puede no estar presente en
+# el checkout) -- import perezoso/tolerante para no romper el resto del
+# dashboard si falta.
+try:
+    from nutcracker_core.plugins.aipwn import agent_memory
+except ImportError:
+    agent_memory = None
 
 from . import chat_mailbox, store_reader
 from .events import bus
@@ -120,6 +131,14 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
         README de nutcracker_core/plugins/dashboard/webusb/)."""
         return {"serial": default_serial}
 
+    @router.post("/api/adb/kill-server")
+    def adb_kill_server():
+        """Mata el daemon adb por las dos vías (WSL + Windows, ver
+        adb_transport.kill_server()) -- botón "🔪 adb kill-server" de la
+        pestaña Dispositivo, para soltar el cable USB antes de conectar
+        WebUSB sin que el operador tenga que abrir una terminal aparte."""
+        return adb_transport.kill_server()
+
     @router.get("/api/apps")
     def apps_list():
         conn = _conn()
@@ -135,6 +154,51 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
             return store_reader.masvs_trend(conn, package)
         finally:
             conn.close()
+
+    @router.get("/api/apps/{package}/findings")
+    def app_consolidated_findings(package: str):
+        """Hallazgos deduplicados de TODAS las corridas de un paquete, con
+        estado present/resolved (ver store_reader.consolidated_findings_for_app)."""
+        conn = _conn()
+        try:
+            return store_reader.consolidated_findings_for_app(conn, package)
+        finally:
+            conn.close()
+
+    @router.get("/api/apps/{package}/runs")
+    def app_runs(package: str, limit: int = 50):
+        """Historial de análisis de un paquete -- sección "Historial" del
+        modal de detalle de app (ver store_reader.list_runs_for_app)."""
+        conn = _conn()
+        try:
+            return store_reader.list_runs_for_app(conn, package, limit=limit)
+        finally:
+            conn.close()
+
+    @router.get("/api/runs/{run_id}/download/{artifact_type}")
+    def run_download(run_id: int, artifact_type: str):
+        """Descarga el JSON o PDF de un run puntual.
+
+        El PDF es un archivo canónico por *paquete* (se sobreescribe en cada
+        análisis, ver store_reader.list_runs_for_app) -- si el run pedido no
+        es el más reciente, esto sirve igual el PDF más reciente que exista
+        en disco para ese run_id, porque es lo único que hay: no existe un
+        PDF histórico por run. El frontend decide cuándo tiene sentido
+        mostrar ese botón (solo en el run más reciente) para no confundir."""
+        if artifact_type not in ("json", "pdf"):
+            raise HTTPException(404, f"Tipo de artefacto inválido: {artifact_type!r}")
+        conn = _conn()
+        try:
+            artifacts = repository.artifacts_for_run(conn, run_id)
+        finally:
+            conn.close()
+        match = next((a for a in artifacts if a["type"] == artifact_type), None)
+        if match is None:
+            raise HTTPException(404, f"No hay artefacto '{artifact_type}' para el run #{run_id}")
+        path = Path(match["path"])
+        if not path.exists():
+            raise HTTPException(404, f"El archivo ya no existe en disco: {path}")
+        return FileResponse(path, filename=path.name)
 
     @router.get("/api/runs")
     def runs_list(limit: int = 100):
@@ -179,9 +243,27 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
     def queue_list(status: str | None = None, limit: int = 100):
         conn = _conn()
         try:
-            return [dict(r) for r in repository.list_jobs(conn, status=status, limit=limit)]
+            jobs = [dict(r) for r in repository.list_jobs(conn, status=status, limit=limit)]
         finally:
             conn.close()
+        # "resumable": el job aipwn de este target terminó sin conclusión
+        # (límite de iteraciones, LLM cortado) y hay una sesión guardada para
+        # continuar -- ver agent_memory.save_resume_state(). Solo tiene
+        # sentido para el job MÁS RECIENTE de cada target: si alguien ya lo
+        # reanudó y volvió a terminar sin conclusión, el estado guardado ahora
+        # es el de esa corrida nueva, no la vieja -- no marcar ambas.
+        _latest_aipwn_id_by_target: dict[str, int] = {}
+        for j in jobs:
+            if j["kind"] == "aipwn":
+                _latest_aipwn_id_by_target.setdefault(j["target"], j["id"])
+        for j in jobs:
+            j["resumable"] = bool(
+                agent_memory is not None
+                and j["kind"] == "aipwn"
+                and _latest_aipwn_id_by_target.get(j["target"]) == j["id"]
+                and agent_memory.has_resume_state(j["target"])
+            )
+        return jobs
 
     @router.post("/api/queue")
     def queue_add(payload: QueuePayload):
@@ -211,6 +293,35 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
                 detail="job no encontrado o ya no está en estado 'queued'",
             )
         return {"deleted": True}
+
+    @router.post("/api/queue/{job_id}/resume-aipwn")
+    def queue_resume_aipwn(job_id: int, extra_iterations: int = 5):
+        """Encola una nueva corrida de aipwn que CONTINÚA la sesión sin
+        conclusión de ``job_id`` (mismo target/serial) en vez de arrancar de
+        cero -- ver agent_memory.save_resume_state(). Botón "+N iteraciones"
+        del dashboard."""
+        if agent_memory is None:
+            raise HTTPException(status_code=404, detail="plugin aipwn no instalado en este entorno")
+        conn = _conn()
+        try:
+            job = repository.get_job(conn, job_id)
+        finally:
+            conn.close()
+        if job is None:
+            raise HTTPException(status_code=404, detail="job no encontrado")
+        if job["kind"] != "aipwn":
+            raise HTTPException(status_code=400, detail="solo se pueden reanudar jobs 'aipwn'")
+        if not agent_memory.has_resume_state(job["target"]):
+            raise HTTPException(
+                status_code=404,
+                detail=f"no hay sesión pendiente para reanudar de '{job['target']}'",
+            )
+        new_job = engine.submit(
+            job["target"], kind="aipwn", serial=job["serial"],
+            aipwn_resume=True, aipwn_extra_iterations=extra_iterations,
+        )
+        _drain_in_background(engine)
+        return {"job_id": new_job.db_id}
 
     @router.post("/api/queue/batch")
     def queue_batch(payload: QueueBatchPayload):

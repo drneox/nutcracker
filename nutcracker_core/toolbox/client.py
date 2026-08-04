@@ -43,6 +43,7 @@ STATIC_TOOLS = (
 )
 
 DEFAULT_IMAGE = "nutcracker-toolbox-static:latest"
+DEFAULT_MEMORY_LIMIT = "4g"
 _DOCKERFILE = Path(__file__).parent / "docker" / "Dockerfile.static"
 
 
@@ -56,6 +57,10 @@ def is_enabled(config: dict | None) -> bool:
 
 def image_name(config: dict | None) -> str:
     return str(cfg_get(config or {}, "toolbox", "image", default=DEFAULT_IMAGE))
+
+
+def memory_limit(config: dict | None) -> str:
+    return str(cfg_get(config or {}, "toolbox", "memory_limit", default=DEFAULT_MEMORY_LIMIT))
 
 
 def _docker_bin() -> str:
@@ -121,17 +126,33 @@ def run(
     rerun habría fallado). Se corre como el UID:GID del host para que el
     resultado quede utilizable por el resto del pipeline, que corre como el
     usuario normal.
+
+    FIX (verificado en vivo, 2026-08-03): sin límite propio, un `jadx --deobf`
+    desbocado contra un APK grande/ofuscado (visto con com.example.app) podía
+    agotar TODA la memoria compartida de la VM de WSL2 -- Docker Desktop en
+    modo "WSL2 based engine" comparte el mismo pool que la distro principal
+    (confirmado: `docker info` "Total Memory" sigue en lockstep los cambios de
+    .wslconfig) -- tirándose abajo con ella el dashboard y cualquier otro job
+    corriendo, en vez de fallar solo el contenedor. `--memory-swap` igual a
+    `--memory` (en vez de dejarlo sin fijar, que le daría swap extra por
+    default) le niega swap adicional al contenedor: si se pasa del límite,
+    el kernel lo mata rápido por su cgroup en vez de dejarlo entrar en swap
+    thrashing, que es lo que además pone lenta/inestable a toda la VM antes
+    de que ocurra ningún OOM-kill real.
     """
     docker_bin = _docker_bin()
     if build_if_missing:
         ensure_image(config)
 
     cwd = str(Path.cwd().resolve())
+    limit = memory_limit(config)
     cmd = [
         docker_bin, "run", "--rm",
         "-v", f"{cwd}:{cwd}",
         "-w", cwd,
         "--user", f"{os.getuid()}:{os.getgid()}",
+        "--memory", limit,
+        "--memory-swap", limit,
         image_name(config),
         tool, *args,
     ]

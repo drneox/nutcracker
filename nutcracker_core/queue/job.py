@@ -26,3 +26,10 @@ class Job:
     # un job recuperado tras un reinicio del daemon (_load_queued_from_db)
     # cae a descarga normal en vez de perderse.
     source: str | None = None
+    # Botón "+N iteraciones" del dashboard (job kind="aipwn"): continúa la
+    # última sesión sin conclusión de este paquete en vez de arrancar una
+    # conversación nueva -- ver agent_memory.load_resume_state() y
+    # orchestrator.build_job_cmd(aipwn_resume=...). Solo en memoria, mismo
+    # motivo que ``source``.
+    aipwn_resume: bool = False
+    aipwn_extra_iterations: int = 5

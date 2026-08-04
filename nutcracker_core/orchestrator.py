@@ -103,6 +103,8 @@ def build_job_cmd(
     serial: str | None = None,
     aipwn: bool = False,
     source: str | None = None,
+    aipwn_resume: bool = False,
+    aipwn_extra_iterations: int = 5,
 ) -> list[str]:
     """Construye el argv para ejecutar un job de análisis como subproceso aislado.
 
@@ -148,6 +150,8 @@ def build_job_cmd(
         cmd += ["aipwn", target, "--report"]
         if serial:
             cmd += ["--serial", serial]
+        if aipwn_resume:
+            cmd += ["--resume", "--extra-iterations", str(aipwn_extra_iterations)]
         return cmd
     if is_local_apk:
         cmd += ["analyze", target, "--config", config_path]

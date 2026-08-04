@@ -61,6 +61,82 @@ def run_detail(conn: sqlite3.Connection, run_id: int) -> dict | None:
     return data
 
 
+def list_runs_for_app(conn: sqlite3.Connection, package: str, limit: int = 50) -> list[dict]:
+    """Historial de runs de un paquete (más reciente primero), con conteo de
+    hallazgos y los artefactos descargables (JSON/PDF) de cada uno -- para la
+    sección "Historial de análisis" del modal de detalle de app.
+
+    El PDF es un archivo canónico por *paquete* (reporter.py lo sobreescribe
+    en cada análisis, ver store/hooks.py::_find_artifacts), no por run -- así
+    que el mismo path puede aparecer repetido en varios runs viejos, y ya no
+    refleja el contenido de ese run específico. El JSON sí es único por run
+    (nombre con timestamp). El shapeo de qué mostrar/ocultar en la UI para
+    evitar confundir "PDF de este run" con "PDF más reciente" vive en el
+    frontend, no acá -- esta función solo expone los datos crudos tal cual
+    están en la tabla ``artifacts``.
+    """
+    rows = repository.history(conn, package, limit=limit)
+    result = []
+    for row in rows:
+        d = dict(row)
+        artifacts = repository.artifacts_for_run(conn, d["id"])
+        d["artifacts"] = {a["type"]: a["path"] for a in artifacts}
+        d["findings_count"] = conn.execute(
+            "SELECT COUNT(*) FROM findings WHERE run_id = ?", (d["id"],)
+        ).fetchone()[0]
+        result.append(d)
+    return result
+
+
+def consolidated_findings_for_app(conn: sqlite3.Connection, package: str) -> list[dict]:
+    """Hallazgos distintos vistos alguna vez en CUALQUIER run de esta app,
+    deduplicados por (rule_id, file, line) -- sin esto, dos runs del mismo
+    build muestran los mismos hallazgos dos veces (confirmado con datos
+    reales: com.bcp.bo.wallet runs #10/#11, idénticos byte a byte).
+
+    Cada hallazgo distinto trae ``status``:
+      - "present":  sigue apareciendo en el run más reciente.
+      - "resolved": apareció en algún run viejo, pero ya no en el más reciente
+                    (se corrigió, o el código que lo generaba cambió/desapareció).
+
+    ``repository.history()`` devuelve los runs más reciente primero -- se
+    recorren en ese orden, así que la primera vez que aparece una clave es su
+    ``last_seen`` (el run más reciente donde está), y se va empujando
+    ``first_seen`` hacia atrás a medida que se la encuentra en runs más viejos.
+    """
+    runs = repository.history(conn, package, limit=1000)
+    if not runs:
+        return []
+    latest_run_id = runs[0]["id"]
+
+    consolidated: dict[tuple, dict] = {}
+    for run in runs:
+        run_id = run["id"]
+        run_time = run["finished_at"] or run["started_at"]
+        for f in repository.findings_for_run(conn, run_id):
+            key = (f["rule_id"], f["file"], f["line"])
+            if key not in consolidated:
+                consolidated[key] = {
+                    "rule_id": f["rule_id"], "title": f["title"], "severity": f["severity"],
+                    "masvs": f["masvs"], "maswe": f["maswe"], "cwe": f["cwe"],
+                    "file": f["file"], "line": f["line"],
+                    "last_seen_run": run_id, "last_seen_at": run_time,
+                    "first_seen_run": run_id, "first_seen_at": run_time,
+                    "seen_in_runs": 0,
+                }
+            consolidated[key]["seen_in_runs"] += 1
+            consolidated[key]["first_seen_run"] = run_id
+            consolidated[key]["first_seen_at"] = run_time
+
+    result = list(consolidated.values())
+    for entry in result:
+        entry["status"] = "present" if entry["last_seen_run"] == latest_run_id else "resolved"
+
+    _sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    result.sort(key=lambda e: (e["status"] != "present", _sev_order.get(e["severity"], 5)))
+    return result
+
+
 def masvs_trend(conn: sqlite3.Connection, package: str) -> list[dict]:
     """Score MASVS por run a lo largo del tiempo (ascendente), para el gráfico
     de tendencia del modal de detalle de app."""

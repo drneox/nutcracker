@@ -37,6 +37,11 @@ def test_image_name_defaults_and_override():
     assert toolbox.image_name({"toolbox": {"image": "custom:tag"}}) == "custom:tag"
 
 
+def test_memory_limit_defaults_and_override():
+    assert toolbox.memory_limit(None) == toolbox.DEFAULT_MEMORY_LIMIT
+    assert toolbox.memory_limit({"toolbox": {"memory_limit": "2g"}}) == "2g"
+
+
 # ── run() sin docker instalado ───────────────────────────────────────────────
 
 def test_run_raises_toolbox_error_without_docker(monkeypatch):
@@ -148,10 +153,33 @@ def test_run_builds_expected_docker_command(monkeypatch):
     cwd = str(Path.cwd().resolve())
     assert mount == f"{cwd}:{cwd}"
     assert "-w" in cmd and cmd[cmd.index("-w") + 1] == cwd
+    # FIX 2026-08-03: límite de memoria propio del contenedor (ver client.py
+    # run() -- evita que jadx desbocado se lleve puesta toda la VM de WSL2).
+    assert "--memory" in cmd and cmd[cmd.index("--memory") + 1] == toolbox.DEFAULT_MEMORY_LIMIT
+    assert "--memory-swap" in cmd and cmd[cmd.index("--memory-swap") + 1] == toolbox.DEFAULT_MEMORY_LIMIT
     assert toolbox.DEFAULT_IMAGE in cmd
     # tool + args van al final, en orden, después de la imagen
     tail = cmd[cmd.index(toolbox.DEFAULT_IMAGE) + 1:]
     assert tail == ["jadx", "--no-res", "/abs/path/app.apk"]
+
+
+def test_run_uses_configured_memory_limit(monkeypatch):
+    monkeypatch.setattr(client.shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(client, "ensure_image", lambda config=None, build_timeout=1800: None)
+
+    calls = []
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=None):  # noqa: ANN001
+        calls.append(cmd)
+        return _completed(returncode=0)
+
+    monkeypatch.setattr(client.subprocess, "run", fake_run)
+
+    toolbox.run("jadx", ["--help"], config={"toolbox": {"memory_limit": "8g"}})
+
+    cmd = calls[0]
+    assert cmd[cmd.index("--memory") + 1] == "8g"
+    assert cmd[cmd.index("--memory-swap") + 1] == "8g"
 
 
 def test_run_calls_ensure_image_by_default(monkeypatch):
