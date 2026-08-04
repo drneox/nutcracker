@@ -8,6 +8,7 @@ cubierto por Fase 0 / tests existentes).
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -159,6 +160,113 @@ def test_aipwn_job_builds_aipwn_command(monkeypatch, engine):
     assert "aipwn" in cmd
     assert "com.example.tapjacking" in cmd
     assert "--serial" in cmd and "ZY22GPM27J" in cmd
+
+
+def test_frida_host_sets_env_var_for_relay_backed_job(monkeypatch, engine):
+    """Relay "browser-as-bridge" (plan.md): submit(frida_host=...) debe
+    terminar como NUTCRACKER_FRIDA_HOST en el env del subproceso -- es lo que
+    lee aipwn.py (override sobre strategies.frida_host del config) para
+    apuntar frida al túnel local en vez del host fijo."""
+    seen_envs = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_envs.append(env)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit(
+        "com.example.tapjacking", kind="aipwn", serial="127.0.0.1:54321",
+        frida_host="127.0.0.1:54322",
+    )
+    outcomes = engine.drain()
+
+    assert len(outcomes) == 1 and outcomes[0].ok
+    assert seen_envs[0]["NUTCRACKER_FRIDA_HOST"] == "127.0.0.1:54322"
+
+
+def test_no_frida_host_means_no_env_var(monkeypatch, engine):
+    seen_envs = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_envs.append(env)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.tapjacking", kind="aipwn", serial="ZY22GPM27J")
+    engine.drain()
+
+    assert "NUTCRACKER_FRIDA_HOST" not in seen_envs[0]
+
+
+def test_relay_session_id_sets_env_var_and_prepends_shim_to_path(monkeypatch, engine):
+    """FIX de diseño (2026-08-04): el túnel TCP crudo para adb no es viable
+    (Android bloquea reenviar tcp: hacia el propio puerto de control de
+    adbd) -- el reemplazo es un shim de 'adb' interceptado vía PATH, que
+    traduce a RPC. submit(relay_session_id=...) debe: (1) setear
+    NUTCRACKER_RELAY_SESSION_ID, y (2) anteponer el directorio del shim al
+    PATH del subproceso, para que shutil.which("adb") lo recoja."""
+    from nutcracker_core.queue.engine import _RELAY_ADB_SHIM_DIR
+
+    seen_envs = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_envs.append(env)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.tapjacking", kind="aipwn", serial="device-x",
+                  relay_session_id="device-x")
+    outcomes = engine.drain()
+
+    assert len(outcomes) == 1 and outcomes[0].ok
+    env = seen_envs[0]
+    assert env["NUTCRACKER_RELAY_SESSION_ID"] == "device-x"
+    assert env["PATH"].split(os.pathsep)[0] == _RELAY_ADB_SHIM_DIR
+
+
+def test_no_relay_session_id_means_no_shim_in_path(monkeypatch, engine):
+    from nutcracker_core.queue.engine import _RELAY_ADB_SHIM_DIR
+
+    seen_envs = []
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        seen_envs.append(env)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.tapjacking", kind="aipwn", serial="ZY22GPM27J")
+    engine.drain()
+
+    env = seen_envs[0]
+    assert "NUTCRACKER_RELAY_SESSION_ID" not in env
+    assert _RELAY_ADB_SHIM_DIR not in env["PATH"].split(os.pathsep)
+
+
+def test_ensure_transport_skips_network_check_for_relay_backed_job(monkeypatch, engine):
+    """Doble resguardo (ver _ensure_transport): aunque un operador elija un
+    session_id con forma ip:puerto, un job relay no debe disparar un
+    `adb connect` real -- el device está detrás del navegador, no alcanzable
+    directo desde el backend."""
+    ensure_calls = []
+    monkeypatch.setattr(
+        "nutcracker_core.queue.engine.adb_transport.ensure_available",
+        lambda serial: ensure_calls.append(serial) or True,
+    )
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    engine.submit("com.example.tapjacking", kind="aipwn", serial="192.168.1.1:5555",
+                  relay_session_id="192.168.1.1:5555")
+    engine.drain()
+
+    assert ensure_calls == []
 
 
 def test_dynamic_jobs_different_serials_run_in_parallel(monkeypatch, tmp_path, engine):

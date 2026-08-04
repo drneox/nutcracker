@@ -157,3 +157,89 @@ def test_chat_ws_also_writes_to_mailbox_for_aipwn_polling(client):
         ws.receive_json()  # esperar el eco antes de leer el mailbox (evita carrera)
 
     assert chat_mailbox.drain("com.example.app") == ["toma un screenshot"]
+
+
+# ── /ws/relay/{session_id} -- integración real vía TestClient (2026-08-04) ──
+#
+# Complementa tests/dashboard/test_relay.py (unit, sin WebSocket real): acá se
+# valida el endpoint completo -- TestClient corre la app ASGI real en un hilo
+# aparte con su propio loop, así que una conexión TCP real desde el hilo del
+# test contra el puerto anunciado por el relay ejercita el mismo camino que
+# usaría el proceso `frida`/`adb` real en producción.
+
+import socket as _socket_mod
+import time as _time_mod
+
+from nutcracker_core.plugins.dashboard.relay import relay_manager as _relay_manager
+
+
+@pytest.fixture(autouse=True)
+def _clean_relay_sessions():
+    yield
+    import asyncio as _asyncio
+    for session_id in list(_relay_manager._sessions):
+        _asyncio.run(_relay_manager.remove(session_id))
+
+
+def _open_tcp(port: int, timeout: float = 2.0) -> _socket_mod.socket:
+    deadline = _time_mod.monotonic() + timeout
+    last_exc: Exception | None = None
+    while _time_mod.monotonic() < deadline:
+        try:
+            return _socket_mod.create_connection(("127.0.0.1", port), timeout=1.0)
+        except OSError as exc:  # noqa: PERF203 -- puerto puede tardar en estar listo
+            last_exc = exc
+            _time_mod.sleep(0.02)
+    raise AssertionError(f"no se pudo conectar a 127.0.0.1:{port}: {last_exc}")
+
+
+def test_ws_relay_sends_ready_message_with_tunnel_ports(client):
+    with client.websocket_connect("/ws/relay/test-target-1") as ws:
+        msg = ws.receive_json()
+        assert msg["type"] == "ready"
+        assert set(msg["ports"]) == {"frida", "adb"}
+        assert all(isinstance(p, int) and p > 0 for p in msg["ports"].values())
+
+
+def test_ws_relay_forwards_local_tcp_connection_to_client_as_open_then_bytes(client):
+    with client.websocket_connect("/ws/relay/test-target-2") as ws:
+        ready = ws.receive_json()
+        frida_port = ready["ports"]["frida"]
+
+        sock = _open_tcp(frida_port)
+        try:
+            sock.sendall(b"process real de frida conectando")
+
+            open_msg = ws.receive_json()
+            assert open_msg["type"] == "open"
+            assert open_msg["tunnel"] == "frida"
+            conn_id = open_msg["conn_id"]
+
+            frame = ws.receive_bytes()
+            got_id = int.from_bytes(frame[:4], "big")
+            assert got_id == conn_id
+            assert frame[4:] == b"process real de frida conectando"
+        finally:
+            sock.close()
+
+
+def test_ws_relay_client_bytes_reach_local_tcp_connection(client):
+    with client.websocket_connect("/ws/relay/test-target-3") as ws:
+        ready = ws.receive_json()
+        adb_port = ready["ports"]["adb"]
+
+        sock = _open_tcp(adb_port)
+        try:
+            sock.sendall(b"hola")  # dispara el "open" del lado navegador
+            open_msg = ws.receive_json()
+            conn_id = open_msg["conn_id"]
+            ws.receive_bytes()  # el frame con "hola" -- no es lo que estamos probando acá
+
+            frame_back = conn_id.to_bytes(4, "big") + b"respuesta simulada del device"
+            ws.send_bytes(frame_back)
+
+            sock.settimeout(2.0)
+            received = sock.recv(1024)
+            assert received == b"respuesta simulada del device"
+        finally:
+            sock.close()

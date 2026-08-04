@@ -33,3 +33,22 @@ class Job:
     # motivo que ``source``.
     aipwn_resume: bool = False
     aipwn_extra_iterations: int = 5
+    # Relay "browser-as-bridge" (plan.md): cuando se setea, el subproceso del
+    # job recibe NUTCRACKER_FRIDA_HOST=<este valor> en su env, para que aipwn
+    # (aipwn.py:179) apunte frida al túnel local en vez de leer
+    # strategies.frida_host del config. Solo en memoria, mismo motivo que
+    # ``source``.
+    frida_host: str | None = None
+    # Relay "browser-as-bridge": session_id de la sesión de relay a usar para
+    # TODO lo que antes iba por adb (shell/install/pull/...) -- ver
+    # engine.py::_run_job y toolbox/relay_adb_shim/adb. FIX de diseño
+    # (verificado en vivo, 2026-08-04): el túnel TCP crudo para adb no es
+    # viable (Android bloquea reenviar tcp: hacia el propio puerto de control
+    # de adbd), así que a diferencia de frida_host, estas operaciones van por
+    # RPC estructurado, no por un socket. `serial` NO se reescribe a una
+    # dirección de loopback -- queda como el session_id elegido por el
+    # operador, a propósito: así ``adb_transport.is_network_serial()`` no lo
+    # confunde con un serial de red real y ``_ensure_transport`` no intenta
+    # reconectarlo (ver el chequeo explícito ahí de todos modos, doble
+    # resguardo). Solo en memoria, mismo motivo que ``source``.
+    relay_session_id: str | None = None

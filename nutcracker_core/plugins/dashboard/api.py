@@ -24,6 +24,7 @@ except ImportError:
 
 from . import chat_mailbox, store_reader
 from .events import bus
+from .relay import RelayError, RpcError, RpcTimeoutError, relay_manager
 
 
 def _drain_in_background(engine: QueueEngine) -> None:
@@ -83,12 +84,49 @@ class ScheduleSetPayload(BaseModel):
     enabled: bool = True
 
 
+class RelayShellPayload(BaseModel):
+    command: str
+    timeout: float = 30.0
+
+
+class RelayApkPayload(BaseModel):
+    name: str
+    data_b64: str
+
+
+class RelayInstallPayload(BaseModel):
+    apks: list[RelayApkPayload]
+    flags: list[str] = []
+    multi: bool = False
+    timeout: float = 120.0
+
+
+class RelayPullPayload(BaseModel):
+    remote_path: str
+    timeout: float = 180.0
+
+
+class RelayScreencapPayload(BaseModel):
+    timeout: float = 30.0
+
+
+class RelayLogcatPayload(BaseModel):
+    args: list[str] = []
+    duration_seconds: float = 30.0
+    timeout: float = 40.0
+
+
 class QueuePayload(BaseModel):
     target: str
     kind: str = "static"
     serial: str | None = None
     source: str | None = None
     run_now: bool = False
+    # Relay "browser-as-bridge" (plan.md): si True, ``serial`` no es un serial
+    # adb directo sino el session_id de una sesión de relay ya conectada
+    # (ver /ws/relay/{session_id}) -- queue_add la resuelve a los puertos
+    # locales del túnel antes de encolar (ver más abajo).
+    relay: bool = False
 
 
 class QueueBatchPayload(BaseModel):
@@ -96,6 +134,31 @@ class QueueBatchPayload(BaseModel):
     source: str | None = None
     serial: str | None = None
     then_aipwn: bool = True
+
+
+def _require_attached_relay_session(session_id: str):
+    """Sesión de relay con navegador conectado, o 404 -- chequeo repetido por
+    los 4 endpoints RPC (shell/install/pull/screencap), factorizado acá."""
+    session = relay_manager.get(session_id)
+    if session is None or not session.attached:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no hay un navegador con el relay conectado para '{session_id}'.",
+        )
+    return session
+
+
+async def _run_relay_rpc(session, op: str, **fields):
+    """``session.rpc(op, **fields)`` con el mismo mapeo de errores a HTTP en
+    los 4 endpoints RPC -- factorizado para no repetirlo cuatro veces."""
+    try:
+        return await session.rpc(op, **fields)
+    except RpcTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except RpcError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RelayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def create_router(db_path: str, engine: QueueEngine, default_serial: str | None = None) -> APIRouter:
@@ -265,11 +328,127 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
             )
         return jobs
 
+    @router.get("/api/relay/{session_id}")
+    def relay_status(session_id: str):
+        """Estado de una sesión de relay (ver relay.py) -- el navegador debe
+        estar conectado a ``/ws/relay/{session_id}`` para que exista. Usado
+        por el frontend antes de ofrecer "encolar con relay", y por
+        ``queue_add`` para resolver ``payload.relay=True``."""
+        session = relay_manager.get(session_id)
+        if session is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no hay sesión de relay para '{session_id}' -- conectá el "
+                       "navegador a /ws/relay/{session_id} primero (WebUSB).",
+            )
+        return {"session_id": session_id, "attached": session.attached, "ports": session.ports}
+
+    @router.post("/api/relay/{session_id}/rpc/shell")
+    async def relay_rpc_shell(session_id: str, payload: RelayShellPayload):
+        """Ejecuta un comando `adb shell` a través del relay -- usado por el
+        shim de adb (ver toolbox/relay_adb_shim/adb), nunca directo por un
+        operador. Reemplaza el túnel TCP crudo original para adb: Android
+        bloquea el reenvío `tcp:` hacia el propio puerto de control de adbd
+        (verificado en vivo), así que esto va como RPC estructurado -- el
+        navegador lo resuelve con `adb.subprocess.spawnAndWait()` (métodos
+        nativos de Tango, el mismo mecanismo que ya usa scrcpy/app.webadb.com,
+        no una técnica nueva sin probar)."""
+        session = _require_attached_relay_session(session_id)
+        result = await _run_relay_rpc(session, "shell", command=payload.command, timeout=payload.timeout)
+        return {
+            "stdout": result.get("stdout", ""),
+            "stderr": result.get("stderr", ""),
+            "exit_code": result.get("exit_code", 0),
+        }
+
+    @router.post("/api/relay/{session_id}/rpc/install")
+    async def relay_rpc_install(session_id: str, payload: RelayInstallPayload):
+        """Instala uno (`install`) o varios (`install-multiple`) APKs a través
+        del relay -- usado por el shim de adb. El navegador sube cada APK al
+        device con `adb.sync().write()` (Etapa 2 del plan) a
+        `/data/local/tmp/<nombre>`, corre `pm install[-multiple] <flags>
+        <rutas>`, y borra los temporales -- mismos métodos nativos de Tango
+        que shell/pull, no un socket crudo."""
+        session = _require_attached_relay_session(session_id)
+        result = await _run_relay_rpc(
+            session, "install",
+            apks=[a.model_dump() for a in payload.apks],
+            flags=payload.flags, multi=payload.multi, timeout=payload.timeout,
+        )
+        return {
+            "stdout": result.get("stdout", ""),
+            "stderr": result.get("stderr", ""),
+            "exit_code": result.get("exit_code", 0),
+        }
+
+    @router.post("/api/relay/{session_id}/rpc/pull")
+    async def relay_rpc_pull(session_id: str, payload: RelayPullPayload):
+        """Trae un archivo del device (`adb pull`) a través del relay -- el
+        navegador lo lee con `adb.sync().read()` y lo manda en base64 (Etapa
+        4 del plan). El shim de adb lo escribe en la ruta local que pidió el
+        caller."""
+        session = _require_attached_relay_session(session_id)
+        result = await _run_relay_rpc(session, "pull", remote_path=payload.remote_path, timeout=payload.timeout)
+        return {"data_b64": result.get("data_b64", "")}
+
+    @router.post("/api/relay/{session_id}/rpc/screencap")
+    async def relay_rpc_screencap(session_id: str, payload: RelayScreencapPayload):
+        """Captura pantalla (`adb exec-out screencap -p`) a través del relay
+        -- el navegador corre `screencap -p` y devuelve los bytes PNG crudos
+        en base64 (Etapa 3 del plan), sin pasar por decodificación de texto
+        (que corrompería el binario)."""
+        session = _require_attached_relay_session(session_id)
+        result = await _run_relay_rpc(session, "screencap", timeout=payload.timeout)
+        return {"data_b64": result.get("data_b64", "")}
+
+    @router.post("/api/relay/{session_id}/rpc/logcat")
+    async def relay_rpc_logcat(session_id: str, payload: RelayLogcatPayload):
+        """Captura logcat acotada en el tiempo a través del relay -- reemplaza
+        `adb logcat` en modo streaming (Etapa 5 del plan). No es streaming
+        real línea-a-línea: aipwn solo consume el log DESPUÉS de la ventana
+        de captura de todos modos (ver frida_capture.py::stream_logcat), así
+        que el navegador junta las líneas durante `duration_seconds` y las
+        manda todas juntas en un solo `rpc_response` -- mismo patrón que
+        shell/install/pull/screencap, sin protocolo de streaming nuevo."""
+        session = _require_attached_relay_session(session_id)
+        result = await _run_relay_rpc(
+            session, "logcat", args=payload.args,
+            duration_seconds=payload.duration_seconds, timeout=payload.timeout,
+        )
+        return {"stdout": result.get("stdout", "")}
+
     @router.post("/api/queue")
     def queue_add(payload: QueuePayload):
+        serial = payload.serial
+        frida_host = None
+        relay_session_id = None
+        if payload.relay:
+            if not serial:
+                raise HTTPException(
+                    status_code=400,
+                    detail="relay=true requiere 'serial' con el session_id de una "
+                           "sesión de relay conectada.",
+                )
+            session = relay_manager.get(serial)
+            if session is None or not session.attached:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"no hay un navegador con el relay conectado para '{serial}' "
+                           "-- abrí el dashboard, conectá el device por WebUSB, y "
+                           "activá el túnel antes de encolar este job.",
+                )
+            # `serial` NO se reescribe a una dirección de loopback -- queda
+            # como el session_id tal cual (ver Job.relay_session_id: el shim
+            # de adb lo ignora igual, y así is_network_serial() no lo confunde
+            # con un serial de red real). frida_host sí sigue siendo una
+            # dirección real -- el túnel TCP crudo de frida funciona bien
+            # (27042 no es el puerto de control de adbd, ver relay.py).
+            relay_session_id = serial
+            frida_host = f"127.0.0.1:{session.ports['frida']}"
         try:
             job = engine.submit(
-                payload.target, kind=payload.kind, serial=payload.serial, source=payload.source,
+                payload.target, kind=payload.kind, serial=serial, source=payload.source,
+                frida_host=frida_host, relay_session_id=relay_session_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

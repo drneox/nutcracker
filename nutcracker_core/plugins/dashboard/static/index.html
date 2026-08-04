@@ -104,7 +104,10 @@
     <div class="row">
       <input id="q-target" placeholder="ruta .apk / URL / package id" style="flex:1;min-width:200px">
       <select id="q-kind"><option value="static">static</option><option value="dynamic">dynamic</option><option value="aipwn">aipwn</option></select>
-      <input id="q-serial" placeholder="serial (opcional)" style="width:140px">
+      <input id="q-serial" placeholder="serial (opcional) / session id si usás relay" style="width:220px">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo 'serial' de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) en vez de un serial adb directo.">
+        <input type="checkbox" id="q-relay" style="width:auto"> vía relay
+      </label>
       <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
         <input type="checkbox" id="q-run-now" style="width:auto"> correr ahora
       </label>
@@ -156,6 +159,24 @@
       </div>
       <div class="device-status" id="device-status">cargando…</div>
       <canvas id="webusb-canvas" width="720" height="1600"></canvas>
+
+      <h3 style="margin-top:16px">Relay (frida/adb desde un backend remoto)</h3>
+      <p style="font-size:12px;color:var(--muted,#888)">
+        Puentea `frida`/`adb` corriendo en este backend hacia el device conectado
+        acá. `adb` (shell/install/pull/screencap) reusa la misma conexión USB de
+        arriba (conectá "USB directo" primero). `frida` va por un WebSocket nativo
+        directo a la IP de LAN del device (Tango no sostiene bien el handshake
+        WebSocket que usa frida moderno, verificado en vivo — ver plan.md) —
+        necesita que ESTA PC tenga alcance de red al device, y puede pedir el
+        permiso "Acceso a Red Local" de Chrome la primera vez.
+      </p>
+      <div class="row">
+        <input id="relay-session-id" placeholder="session id (ej. el serial del device)" style="width:220px">
+        <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" style="width:220px">
+        <button id="relay-btn" class="secondary" onclick="connectRelay()">🌐 Activar relay</button>
+        <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()">⏏ Detener relay</button>
+      </div>
+      <div class="device-status" id="relay-status"></div>
     </div>
 
     <div class="tabpanel" id="tab-agent">
@@ -328,6 +349,7 @@ async function submitQueue(){
     kind: document.getElementById('q-kind').value,
     serial: document.getElementById('q-serial').value.trim() || null,
     run_now: document.getElementById('q-run-now').checked,
+    relay: document.getElementById('q-relay').checked,
   };
   await j('/api/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
   document.getElementById('q-target').value = '';
@@ -491,6 +513,59 @@ async function adbKillServer(){
   } catch (e) {
     console.error('adbKillServer falló:', e);
     status.textContent = `Error matando adb: ${e.message || e}`;
+  }
+}
+
+// ── Relay (browser-as-bridge, plan.md) ──────────────────────────────────
+// Puentea frida/adb reales del backend hacia el device de ESTA pestaña,
+// reusando el mismo handle Adb ya autenticado que usa el video de arriba
+// (mod.getAdb() -- ver webusb/src/main.ts/relay.ts). No abre una segunda
+// conexión USB: eso pisaría a la del video (WebUSB es exclusivo por interfaz).
+let relayClient = null;
+
+function setRelayConnectedUi(connected){
+  document.getElementById('relay-btn').style.display = connected ? 'none' : '';
+  document.getElementById('relay-stop-btn').style.display = connected ? '' : 'none';
+}
+
+async function connectRelay(){
+  const mod = window.__nutcrackerWebUsb;
+  const status = document.getElementById('relay-status');
+  if (!mod) { status.textContent = 'Bundle WebUSB no disponible.'; return; }
+  const adb = mod.getAdb && mod.getAdb();
+  if (!adb) {
+    status.textContent = 'Conectá "🔌 USB directo (fluido)" primero -- el relay reusa esa conexión.';
+    return;
+  }
+  const sessionId = document.getElementById('relay-session-id').value.trim();
+  if (!sessionId) { status.textContent = 'Poné un session id (ej. el serial del device).'; return; }
+  const deviceIp = document.getElementById('relay-device-ip').value.trim();
+  // fridaWsUrl null si no hay IP -- el túnel de frida simplemente no vuelve a
+  // abrir (ver openFridaWsChannel), pero adb (shell/install/pull/screencap)
+  // sigue funcionando igual.
+  const fridaWsUrl = deviceIp ? `ws://${deviceIp}:27042/ws` : null;
+  try {
+    relayClient = new mod.RelayClient(adb, sessionId, (s) => { status.textContent = s; }, fridaWsUrl);
+    await relayClient.start();
+    setRelayConnectedUi(true);
+  } catch (e) {
+    console.error('connectRelay falló:', e);
+    status.textContent = `Error activando el relay: ${e.message || e}`;
+    relayClient = null;
+  }
+}
+
+async function disconnectRelay(){
+  const status = document.getElementById('relay-status');
+  setRelayConnectedUi(false);
+  if (!relayClient) return;
+  try {
+    await relayClient.stop();
+  } catch (e) {
+    console.error('disconnectRelay falló:', e);
+    status.textContent = `Error deteniendo el relay: ${e.message || e}`;
+  } finally {
+    relayClient = null;
   }
 }
 

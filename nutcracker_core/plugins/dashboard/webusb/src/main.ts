@@ -47,6 +47,10 @@ import {
 } from "@yume-chan/scrcpy-decoder-webcodecs";
 import { ReadableStream as YumeChanReadableStream } from "@yume-chan/stream-extra";
 
+// Re-exportado para que el bundle lo exponga -- ver vite.config.ts (build.lib
+// solo preserva exports nombrados alcanzables desde ESTE entry point).
+export { RelayClient } from "./relay.js";
+
 // Ruta en el device donde se sube el server.bin (ver AdbScrcpyClient.pushServer
 // más abajo) -- nombre propio para no chocar con otras herramientas (scrcpy
 // del sistema, ws-scrcpy, etc.) que puedan dejar su propio server ahí.
@@ -86,6 +90,19 @@ let _session: Session | null = null;
 /** True si hay video corriendo ahora mismo en esta pestaña. */
 export function isConnected(): boolean {
   return _session !== null;
+}
+
+/**
+ * Handle `Adb` (Tango) de la sesión WebUSB activa, o null si no hay ninguna.
+ *
+ * Expuesto para relay.ts (plan.md: relay "browser-as-bridge" frida/adb hacia
+ * un device detrás del navegador) -- reusa la MISMA conexión USB autenticada
+ * del video en vez de abrir una segunda (WebUSB es exclusivo por interfaz,
+ * ver el comentario de isUsbBusyError() más abajo; dos handles simultáneos
+ * se pisarían entre sí).
+ */
+export function getAdb(): Adb | null {
+  return _session?.adb ?? null;
 }
 
 function isUsbBusyError(message: string): boolean {

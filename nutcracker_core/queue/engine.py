@@ -116,6 +116,13 @@ _ERROR_MARKERS = ("error", "failed", "traceback", "exception", "no route to host
 # de nutcracker se volcaba como un bloque de texto ilegible en el navegador).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 
+# Shim de adb para jobs con relay activo (ver toolbox/relay_adb_shim/adb y
+# Job.relay_session_id) -- un directorio conteniendo un único archivo llamado
+# literalmente "adb", para anteponerlo al PATH del subproceso.
+_RELAY_ADB_SHIM_DIR = str(
+    Path(__file__).resolve().parent.parent / "toolbox" / "relay_adb_shim"
+)
+
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
@@ -187,7 +194,8 @@ class QueueEngine:
 
     def submit(self, target: str, kind: str = "static", serial: str | None = None,
                priority: int = 0, source: str | None = None,
-               aipwn_resume: bool = False, aipwn_extra_iterations: int = 5) -> Job:
+               aipwn_resume: bool = False, aipwn_extra_iterations: int = 5,
+               frida_host: str | None = None, relay_session_id: str | None = None) -> Job:
         """Encola un job (persistido en SQLite como 'queued' de inmediato).
 
         ``source`` solo aplica a jobs "static" con ``target`` = package id:
@@ -198,7 +206,16 @@ class QueueEngine:
         ``aipwn_resume``/``aipwn_extra_iterations`` solo aplican a jobs
         "aipwn": continúan la última sesión sin conclusión de ``target`` en
         vez de arrancar una conversación nueva (botón "+N iteraciones" del
-        dashboard)."""
+        dashboard).
+
+        ``frida_host``/``relay_session_id`` (relay "browser-as-bridge",
+        plan.md): si se pasan, el subproceso del job recibe
+        NUTCRACKER_FRIDA_HOST/NUTCRACKER_RELAY_SESSION_ID en su env (ver
+        _run_job), y el PATH del subproceso queda apuntado al shim de adb
+        (toolbox/relay_adb_shim/) para que TODO lo que el job haga con adb se
+        resuelva vía RPC contra el navegador en vez de un adb real. El engine
+        no sabe nada de relays -- solo transporta los valores; quien arma el
+        job (api.py, ya resolvió la sesión de relay) decide si corresponden."""
         is_local = _is_local_apk(target)
         if kind == "dynamic" and not is_local:
             raise ValueError(
@@ -208,7 +225,8 @@ class QueueEngine:
             )
         job = Job(target=target, kind=kind, is_local_apk=is_local, serial=serial,
                    priority=priority, source=source, aipwn_resume=aipwn_resume,
-                   aipwn_extra_iterations=aipwn_extra_iterations)
+                   aipwn_extra_iterations=aipwn_extra_iterations, frida_host=frida_host,
+                   relay_session_id=relay_session_id)
         conn = db.connect(self.db_path)
         try:
             job.db_id = repository.enqueue_job(conn, target=target, kind=kind,
@@ -290,7 +308,17 @@ class QueueEngine:
         '<ip>:5555' not found" pese a que el teléfono está perfectamente
         accesible (visto en uso real con 3 jobs en vuelo). Nunca es fatal --
         si no se puede restablecer, dejamos que el comando real del job falle
-        con su propio mensaje, más específico que cualquiera que demos acá."""
+        con su propio mensaje, más específico que cualquiera que demos acá.
+
+        No-op también para jobs con relay (job.relay_session_id): ahí
+        ``job.serial`` es el session_id elegido por el operador (nunca se
+        reescribe a una dirección de red, a propósito -- ver Job.relay_session_id),
+        pero por las dudas de que alguien elija un session_id con forma
+        ip:puerto, este chequeo explícito evita que se intente un
+        `adb connect` real hacia un valor que no es una dirección de red de
+        verdad."""
+        if job.relay_session_id is not None:
+            return
         if not adb_transport.is_network_serial(job.serial):
             return
         if self.transport_keepalive is not None:
@@ -354,6 +382,17 @@ class QueueEngine:
         env["NO_COLOR"] = "1"
         env.pop("FORCE_COLOR", None)
         env.update(self.extra_env)
+        if job.frida_host:
+            env["NUTCRACKER_FRIDA_HOST"] = job.frida_host
+        if job.relay_session_id:
+            # Antepone el shim al PATH: todo lo que el subproceso resuelva
+            # como "adb" (shutil.which("adb") -- aipwn.py, frida_capture.py,
+            # frida_agent_tools.py) cae en toolbox/relay_adb_shim/adb en vez
+            # del adb real, sin tocar esos call sites. Ver Job.relay_session_id
+            # para el porqué (el túnel TCP crudo para adb no es viable en
+            # Android real -- Etapa 1 del plan: solo 'shell' soportado).
+            env["NUTCRACKER_RELAY_SESSION_ID"] = job.relay_session_id
+            env["PATH"] = f"{_RELAY_ADB_SHIM_DIR}{os.pathsep}{env.get('PATH', '')}"
 
         _log.info("job #%s: %s", job.db_id, " ".join(cmd))
         if self.on_line is not None:

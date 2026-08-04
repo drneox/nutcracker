@@ -285,6 +285,91 @@ def test_queue_add_rejects_dynamic_without_local_apk(client):
     assert r.status_code == 400
 
 
+# ── Relay "browser-as-bridge" (plan.md, 2026-08-04) ─────────────────────────
+#
+# queue_add(relay=True) trata `serial` como el session_id de una sesión de
+# relay ya conectada (ver /ws/relay/{session_id} en ws.py) en vez de un
+# serial adb directo -- debe resolverla a los puertos locales del túnel antes
+# de encolar, o rechazar con 400 si no hay navegador conectado todavía.
+
+import asyncio as _asyncio
+
+from nutcracker_core.plugins.dashboard.relay import relay_manager as _relay_manager
+
+
+class _FakeRelayWs:
+    async def send_json(self, data):
+        pass
+
+    async def send_bytes(self, data):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _clean_relay_sessions():
+    yield
+    for session_id in list(_relay_manager._sessions):
+        _asyncio.run(_relay_manager.remove(session_id))
+
+
+def test_relay_status_404_without_session(client):
+    r = client.get("/api/relay/no-existe")
+    assert r.status_code == 404
+
+
+def test_relay_status_returns_ports_when_attached(client):
+    session = _asyncio.run(_relay_manager.get_or_create("device-x"))
+    session.attach_websocket(_FakeRelayWs())
+
+    r = client.get("/api/relay/device-x")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["attached"] is True
+    assert set(body["ports"]) == {"frida", "adb"}
+
+
+def test_queue_add_relay_requires_serial(client):
+    r = client.post("/api/queue", json={"target": "com.example.app", "kind": "aipwn", "relay": True})
+    assert r.status_code == 400
+
+
+def test_queue_add_relay_400_without_relay_session(client):
+    r = client.post("/api/queue", json={
+        "target": "com.example.app", "kind": "aipwn", "relay": True, "serial": "no-existe",
+    })
+    assert r.status_code == 400
+
+
+def test_queue_add_relay_400_when_session_not_attached(client):
+    _asyncio.run(_relay_manager.get_or_create("device-y"))  # nunca se le adjunta un navegador
+
+    r = client.post("/api/queue", json={
+        "target": "com.example.app", "kind": "aipwn", "relay": True, "serial": "device-y",
+    })
+    assert r.status_code == 400
+
+
+def test_queue_add_relay_resolves_frida_port_and_submits_job(client, engine):
+    """serial NO se reescribe a una dirección de loopback (queda el
+    session_id tal cual -- el shim de adb lo ignora igual, ver
+    Job.relay_session_id); solo frida_host usa el puerto real del túnel,
+    porque ESE sí sigue siendo un socket TCP crudo válido (27042 no es el
+    puerto de control de adbd)."""
+    session = _asyncio.run(_relay_manager.get_or_create("device-z"))
+    session.attach_websocket(_FakeRelayWs())
+
+    r = client.post("/api/queue", json={
+        "target": "com.example.app", "kind": "aipwn", "relay": True, "serial": "device-z",
+    })
+    assert r.status_code == 200
+    job_id = r.json()["job_id"]
+
+    submitted = next(j for j in engine._pending if j.db_id == job_id)
+    assert submitted.serial == "device-z"
+    assert submitted.relay_session_id == "device-z"
+    assert submitted.frida_host == f"127.0.0.1:{session.ports['frida']}"
+
+
 def test_queue_delete_removes_pending_job(client, engine):
     r = client.post("/api/queue", json={"target": "com.example.app", "kind": "static"})
     job_id = r.json()["job_id"]
@@ -540,3 +625,183 @@ def test_agent_prompt_response_shape(client):
     r = client.get("/api/agent/prompt")
     assert r.status_code == 200
     assert "available" in r.json()
+
+
+# ── POST /api/relay/{session_id}/rpc/shell (2026-08-04) ─────────────────────
+#
+# Reemplaza el túnel TCP crudo original para adb (Android bloquea reenviar
+# tcp: hacia el propio puerto de control de adbd, ver relay.py). El shim de
+# adb hace este POST; el navegador resuelve con adb.subprocess.spawnAndWait().
+#
+# La mecánica real de correlación request_id/timeout/etc. de session.rpc() ya
+# está probada a fondo en tests/dashboard/test_relay.py (asyncio puro, sin
+# HTTP). Acá solo importa el mapeo de status codes del endpoint -- se prueba
+# con un doble de sesión en vez de una WebSocket real: abrir una WS real +
+# mandarle un POST concurrente desde otro hilo choca con una limitación
+# conocida del TestClient de Starlette (deadlock del harness, no del código
+# real -- confirmado en vivo, se colgaba sin avanzar).
+
+from nutcracker_core.plugins.dashboard import api as api_mod
+
+
+class _StubRelaySession:
+    def __init__(self, attached=True, rpc_result=None, rpc_exception=None):
+        self.attached = attached
+        self._result = rpc_result
+        self._exception = rpc_exception
+
+    async def rpc(self, op, timeout=30.0, **fields):
+        if self._exception is not None:
+            raise self._exception
+        return self._result
+
+
+def test_relay_rpc_shell_round_trip(client, monkeypatch):
+    stub = _StubRelaySession(rpc_result={
+        "stdout": "package:com.example.app\n", "stderr": "", "exit_code": 0,
+    })
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post(
+        "/api/relay/device-shell-1/rpc/shell",
+        json={"command": "pm list packages com.example.app"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["stdout"] == "package:com.example.app\n"
+    assert body["exit_code"] == 0
+
+
+def test_relay_rpc_shell_404_without_connected_session(client):
+    r = client.post(
+        "/api/relay/no-existe/rpc/shell",
+        json={"command": "echo hi"},
+    )
+    assert r.status_code == 404
+
+
+def test_relay_rpc_shell_404_when_session_exists_but_not_attached(client, monkeypatch):
+    stub = _StubRelaySession(attached=False)
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post("/api/relay/device-x/rpc/shell", json={"command": "echo hi"})
+    assert r.status_code == 404
+
+
+def test_relay_rpc_shell_502_when_browser_reports_failure(client, monkeypatch):
+    from nutcracker_core.plugins.dashboard.relay import RpcError
+    stub = _StubRelaySession(rpc_exception=RpcError("createSocket falló: device offline"))
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post(
+        "/api/relay/device-shell-2/rpc/shell",
+        json={"command": "pm install /data/local/tmp/app.apk"},
+    )
+
+    assert r.status_code == 502
+    assert "device offline" in r.json()["detail"]
+
+
+def test_relay_rpc_shell_504_on_timeout(client, monkeypatch):
+    from nutcracker_core.plugins.dashboard.relay import RpcTimeoutError
+    stub = _StubRelaySession(rpc_exception=RpcTimeoutError("timeout (0.2s) esperando respuesta"))
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post(
+        "/api/relay/device-shell-3/rpc/shell",
+        json={"command": "echo hi", "timeout": 0.2},
+    )
+
+    assert r.status_code == 504
+
+
+def test_relay_rpc_shell_409_on_relay_error(client, monkeypatch):
+    from nutcracker_core.plugins.dashboard.relay import RelayError
+    stub = _StubRelaySession(rpc_exception=RelayError("el navegador se desconectó antes de responder"))
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post("/api/relay/device-shell-4/rpc/shell", json={"command": "echo hi"})
+    assert r.status_code == 409
+
+
+# ── POST /api/relay/{session_id}/rpc/install|pull|screencap (Etapas 2-4) ────
+#
+# Mismo enfoque que /rpc/shell: doble de sesión, sin WebSocket real (ver el
+# comentario largo sobre el deadlock del TestClient más arriba).
+
+def test_relay_rpc_install_round_trip(client, monkeypatch):
+    stub = _StubRelaySession(rpc_result={"stdout": "Success\n", "stderr": "", "exit_code": 0})
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post("/api/relay/device-x/rpc/install", json={
+        "apks": [{"name": "app.apk", "data_b64": "UEsDBA=="}],
+        "flags": ["-r", "-d"],
+        "multi": False,
+    })
+
+    assert r.status_code == 200
+    assert r.json()["stdout"] == "Success\n"
+
+
+def test_relay_rpc_install_404_without_connected_session(client):
+    r = client.post("/api/relay/no-existe/rpc/install", json={"apks": [{"name": "a.apk", "data_b64": "AA=="}]})
+    assert r.status_code == 404
+
+
+def test_relay_rpc_pull_round_trip(client, monkeypatch):
+    stub = _StubRelaySession(rpc_result={"data_b64": "aGVsbG8="})
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post("/api/relay/device-x/rpc/pull", json={"remote_path": "/data/local/tmp/lib.so"})
+
+    assert r.status_code == 200
+    assert r.json()["data_b64"] == "aGVsbG8="
+
+
+def test_relay_rpc_pull_502_when_browser_reports_failure(client, monkeypatch):
+    from nutcracker_core.plugins.dashboard.relay import RpcError
+    stub = _StubRelaySession(rpc_exception=RpcError("no such file"))
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post("/api/relay/device-x/rpc/pull", json={"remote_path": "/no/existe"})
+
+    assert r.status_code == 502
+    assert "no such file" in r.json()["detail"]
+
+
+def test_relay_rpc_screencap_round_trip(client, monkeypatch):
+    stub = _StubRelaySession(rpc_result={"data_b64": "iVBORw0KGgo="})
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post("/api/relay/device-x/rpc/screencap", json={})
+
+    assert r.status_code == 200
+    assert r.json()["data_b64"] == "iVBORw0KGgo="
+
+
+def test_relay_rpc_screencap_504_on_timeout(client, monkeypatch):
+    from nutcracker_core.plugins.dashboard.relay import RpcTimeoutError
+    stub = _StubRelaySession(rpc_exception=RpcTimeoutError("timeout"))
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post("/api/relay/device-x/rpc/screencap", json={})
+
+    assert r.status_code == 504
+
+
+def test_relay_rpc_logcat_round_trip(client, monkeypatch):
+    stub = _StubRelaySession(rpc_result={"stdout": "W OkHttp: warning\n"})
+    monkeypatch.setattr(api_mod.relay_manager, "get", lambda sid: stub)
+
+    r = client.post("/api/relay/device-x/rpc/logcat", json={
+        "args": ["-v", "time", "*:W"], "duration_seconds": 15,
+    })
+
+    assert r.status_code == 200
+    assert r.json()["stdout"] == "W OkHttp: warning\n"
+
+
+def test_relay_rpc_logcat_404_without_connected_session(client):
+    r = client.post("/api/relay/no-existe/rpc/logcat", json={})
+    assert r.status_code == 404

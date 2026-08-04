@@ -3,6 +3,7 @@ cola (`/ws/jobs/{id}`) y chat operador→agente (`/ws/chat/{package}`)."""
 
 from __future__ import annotations
 
+import json
 import queue as queue_mod
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -10,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import chat_mailbox
 from .events import bus
+from .relay import relay_manager
 
 router = APIRouter()
 
@@ -74,3 +76,45 @@ async def ws_chat(websocket: WebSocket, package: str) -> None:
         # Ver el comentario equivalente en ws_job -- un cierre en mal momento
         # puede llegar como RuntimeError en vez de WebSocketDisconnect.
         pass
+
+
+@router.websocket("/ws/relay/{session_id}")
+async def ws_relay(websocket: WebSocket, session_id: str) -> None:
+    """Punto de entrada del navegador al túnel frida/adb (ver relay.py y
+    plan.md, sección "Browser-as-relay"). El navegador se conecta acá y:
+
+    - recibe control en JSON (frame de texto) por cada conexión TCP local
+      nueva que `frida`/`adb` reales (en el backend) abrieron contra los
+      puertos de la sesión (``{"type": "open", "tunnel": "frida"|"adb",
+      "conn_id": N}``) o que se cerraron (``{"type": "close", "conn_id": N}``);
+    - manda/recibe los bytes de cada conexión como frames BINARIOS con un
+      header de 4 bytes big-endian = conn_id (ver relay._HEADER) -- necesario
+      porque frida abre varias conexiones concurrentes a frida-server, así
+      que un solo socket no alcanza, hay que multiplexar por conn_id dentro
+      de esta única WebSocket.
+
+    Se usa ``websocket.receive()`` de bajo nivel (en vez de receive_text/
+    receive_bytes) porque esta WebSocket mezcla ambos tipos de frame -- las
+    variantes tipadas solo aceptan uno de los dos y explotan con el otro."""
+    await websocket.accept()
+    session = await relay_manager.get_or_create(session_id)
+    session.attach_websocket(websocket)
+    try:
+        await websocket.send_json({"type": "ready", "ports": session.ports})
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            text = message.get("text")
+            if text is not None:
+                await session.handle_browser_control(json.loads(text))
+                continue
+            data = message.get("bytes")
+            if data is not None:
+                await session.handle_browser_data(data)
+    except (WebSocketDisconnect, RuntimeError):
+        # Ver el comentario equivalente en ws_job -- un cierre en mal momento
+        # puede llegar como RuntimeError en vez de WebSocketDisconnect.
+        pass
+    finally:
+        session.detach_websocket()
