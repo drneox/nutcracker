@@ -202,14 +202,25 @@ def list_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 # ── queue_jobs (Fase 1: cola paralela/secuencial) ──────────────────────────────
 
 def enqueue_job(conn: sqlite3.Connection, target: str, kind: str = "static",
-                 serial: str | None = None, priority: int = 0) -> int:
-    """Inserta un job en estado 'queued' y retorna su id."""
+                 serial: str | None = None, priority: int = 0,
+                 relay_session_id: str | None = None, frida_host: str | None = None) -> int:
+    """Inserta un job en estado 'queued' y retorna su id.
+
+    ``relay_session_id``/``frida_host`` (relay "browser-as-bridge", ver
+    queue/job.py) SÍ se persisten -- a diferencia de otros campos del ``Job``
+    en memoria (``source``, ``aipwn_resume``), perderlos en una recarga desde
+    SQLite (reinicio del dashboard con el job todavía 'queued') no degrada
+    con gracia: rompe el job en silencio (cae a un adb sin dispositivo
+    detrás) con un síntoma engañoso, en vez de simplemente re-descargar o
+    reiniciar la conversación."""
     cur = conn.execute(
         """
-        INSERT INTO queue_jobs (target, kind, serial, priority, status, created_at)
-        VALUES (?, ?, ?, ?, 'queued', ?)
+        INSERT INTO queue_jobs
+            (target, kind, serial, priority, status, created_at,
+             relay_session_id, frida_host)
+        VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
         """,
-        (target, kind, serial, priority, _utcnow()),
+        (target, kind, serial, priority, _utcnow(), relay_session_id, frida_host),
     )
     conn.commit()
     return cur.lastrowid

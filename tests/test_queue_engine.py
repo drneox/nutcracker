@@ -896,3 +896,75 @@ def test_job_registers_its_serial_with_the_keepalive(monkeypatch, engine):
     engine.drain()
 
     assert keepalive.serials == {"10.0.0.5:5555"}
+
+
+# ── relay_session_id/frida_host sobreviven un reinicio del dashboard ───────
+# Bug real reportado en vivo (2026-08-05, job aipwn real contra
+# sh.nutcracker.nutbank): estos dos campos del Job vivían SOLO en memoria --
+# un job relay-backed que seguía 'queued' cuando el proceso del dashboard se
+# reiniciaba (pasó varias veces en la sesión, por otros fixes) los perdía en
+# silencio al recargarse desde SQLite, degradando el job a un adb sin
+# dispositivo detrás. Síntoma final: "app not installed on device" pese a
+# estar instalada de verdad -- sin ningún error que apuntara a la causa real.
+
+def test_relay_session_id_and_frida_host_persist_to_sqlite(engine):
+    job = engine.submit(
+        "sh.nutcracker.nutbank", kind="aipwn", serial="ZY22GPM27J",
+        relay_session_id="ZY22GPM27J", frida_host="127.0.0.1:35207",
+    )
+
+    conn = db.connect(engine.db_path)
+    try:
+        row = repository.get_job(conn, job.db_id)
+    finally:
+        conn.close()
+
+    assert row["relay_session_id"] == "ZY22GPM27J"
+    assert row["frida_host"] == "127.0.0.1:35207"
+
+
+def test_relay_job_survives_dashboard_restart(tmp_path):
+    """Simula el escenario real del bug: un job relay-backed se encola en un
+    proceso, el proceso del dashboard se reinicia ANTES de que el job corra
+    (_pending vacío en el engine nuevo), y el job se recupera de SQLite vía
+    _load_queued_from_db() -- relay_session_id/frida_host deben sobrevivir
+    ese ciclo completo, no solo la fila cruda de la DB."""
+    db_path = str(tmp_path / "queue_test.db")
+
+    engine_before_restart = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    job = engine_before_restart.submit(
+        "sh.nutcracker.nutbank", kind="aipwn", serial="ZY22GPM27J",
+        relay_session_id="ZY22GPM27J", frida_host="127.0.0.1:35207",
+    )
+    assert job.relay_session_id == "ZY22GPM27J"  # correcto en memoria, antes del "reinicio"
+
+    # "Reinicio": engine nuevo, mismo db_path, _pending arranca vacío -- como
+    # pasa de verdad cuando se relanza el proceso del dashboard.
+    engine_after_restart = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    assert engine_after_restart._pending == []
+    engine_after_restart._load_queued_from_db()
+
+    assert len(engine_after_restart._pending) == 1
+    reloaded = engine_after_restart._pending[0]
+    assert reloaded.relay_session_id == "ZY22GPM27J", (
+        "relay_session_id se perdió al recargar el job desde SQLite tras el reinicio"
+    )
+    assert reloaded.frida_host == "127.0.0.1:35207", (
+        "frida_host se perdió al recargar el job desde SQLite tras el reinicio"
+    )
+
+
+def test_non_relay_job_still_has_none_relay_fields_after_restart(tmp_path):
+    """Retrocompatibilidad: un job normal (sin relay) sigue reconstruyéndose
+    con relay_session_id/frida_host en None, no algún valor inventado."""
+    db_path = str(tmp_path / "queue_test.db")
+
+    e1 = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    e1.submit("com.example.app", kind="static")
+
+    e2 = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    e2._load_queued_from_db()
+
+    reloaded = e2._pending[0]
+    assert reloaded.relay_session_id is None
+    assert reloaded.frida_host is None

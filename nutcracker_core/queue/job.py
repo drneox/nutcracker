@@ -36,8 +36,11 @@ class Job:
     # Relay "browser-as-bridge" (plan.md): cuando se setea, el subproceso del
     # job recibe NUTCRACKER_FRIDA_HOST=<este valor> en su env, para que aipwn
     # (aipwn.py:179) apunte frida al túnel local en vez de leer
-    # strategies.frida_host del config. Solo en memoria, mismo motivo que
-    # ``source``.
+    # strategies.frida_host del config. SÍ se persiste en SQLite (columna
+    # queue_jobs.frida_host, migración 3 de store/db.py) -- a diferencia de
+    # ``source``/``aipwn_resume``, perder esto en una recarga no degrada con
+    # gracia (rompe el job en silencio con un síntoma engañoso, ver el fix en
+    # vivo del 2026-08-05 documentado en plan.md).
     frida_host: str | None = None
     # Relay "browser-as-bridge": session_id de la sesión de relay a usar para
     # TODO lo que antes iba por adb (shell/install/pull/...) -- ver
@@ -50,5 +53,6 @@ class Job:
     # operador, a propósito: así ``adb_transport.is_network_serial()`` no lo
     # confunde con un serial de red real y ``_ensure_transport`` no intenta
     # reconectarlo (ver el chequeo explícito ahí de todos modos, doble
-    # resguardo). Solo en memoria, mismo motivo que ``source``.
+    # resguardo). SÍ se persiste en SQLite -- mismo motivo que ``frida_host``
+    # de arriba (perderlo NO degrada con gracia, a diferencia de ``source``).
     relay_session_id: str | None = None

@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -44,6 +44,20 @@ _MIGRATIONS: dict[int, list[str]] = {
         """,
         "CREATE INDEX IF NOT EXISTS idx_queue_jobs_status ON queue_jobs(status)",
         "CREATE INDEX IF NOT EXISTS idx_queue_jobs_package ON queue_jobs(package)",
+    ],
+    # FIX (bug real reportado en vivo, 2026-08-05): relay_session_id/frida_host
+    # (relay "browser-as-bridge", ver Job en queue/job.py) vivían SOLO en
+    # memoria -- cualquier reconstrucción de Job desde SQLite (reinicio del
+    # dashboard mientras un job relay-backed seguía 'queued', ver
+    # engine.py::_load_queued_from_db) los perdía en silencio, degradando el
+    # job a un adb normal sin dispositivo detrás -- síntoma final: "app no
+    # instalada" pese a estar instalada de verdad, sin ningún error claro que
+    # apunte a la causa real. A diferencia de `source`/`aipwn_resume` (que sí
+    # se dejan sin persistir a propósito -- su fallback es aceptable, ver
+    # comentarios en job.py), acá no hay degradación razonable posible.
+    3: [
+        "ALTER TABLE queue_jobs ADD COLUMN relay_session_id TEXT",
+        "ALTER TABLE queue_jobs ADD COLUMN frida_host TEXT",
     ],
 }
 

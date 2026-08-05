@@ -230,7 +230,9 @@ class QueueEngine:
         conn = db.connect(self.db_path)
         try:
             job.db_id = repository.enqueue_job(conn, target=target, kind=kind,
-                                                 serial=serial, priority=priority)
+                                                 serial=serial, priority=priority,
+                                                 relay_session_id=relay_session_id,
+                                                 frida_host=frida_host)
         finally:
             conn.close()
         self._pending.append(job)
@@ -261,6 +263,12 @@ class QueueEngine:
                 serial=row["serial"],
                 priority=row["priority"],
                 db_id=row["id"],
+                # FIX (bug real reportado en vivo, 2026-08-05): sin esto, un
+                # job relay-backed recargado tras un reinicio del dashboard
+                # (mientras seguía 'queued') perdía el túnel en silencio --
+                # ver el comentario de la migración 3 en store/db.py.
+                relay_session_id=row["relay_session_id"],
+                frida_host=row["frida_host"],
             ))
 
     def enqueue_due_apps(self) -> int:
