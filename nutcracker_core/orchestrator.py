@@ -493,7 +493,7 @@ def _run_analysis(apk_path: Path, report_path: str | None, keep_apk: bool, gen_p
             def on_progress(msg: str) -> None:
                 progress.update(task, description=msg)
 
-            analyzer = APKAnalyzer(progress_callback=on_progress, engine=anti_root_engine)
+            analyzer = APKAnalyzer(progress_callback=on_progress, engine=anti_root_engine, config=_CFG)
             result = analyzer.analyze(apk_path)
             # Si anti_root_analysis=false en config, ignorar la detección de protección
             if not bool(cfg_get(_CFG, "strategies", "anti_root_analysis", default=True)):
@@ -914,6 +914,7 @@ def _decompile_and_scan(
                 dex_files,
                 clean_dir,
                 progress_callback=lambda m: progress.update(task, description=m),
+                config=_CFG,
             )
     except RuntimeError as exc:
         console.print(f"[red]{t('cli_error_decompiling_dex')}[/red] {exc}")

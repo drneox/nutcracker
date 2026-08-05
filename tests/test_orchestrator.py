@@ -234,7 +234,7 @@ def test_build_job_cmd_local_apk_ignores_source():
 # env var solo cuando el archivo sobrevive al análisis (keep_apk=True).
 
 class _FakeAnalyzer:
-    def __init__(self, progress_callback=None, engine=None):
+    def __init__(self, progress_callback=None, engine=None, config=None):
         pass
 
     def analyze(self, apk_path):
