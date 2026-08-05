@@ -34,7 +34,11 @@ class _FakeDashboardHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 -- nombre requerido por BaseHTTPRequestHandler
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length)
-        type(self).seen_requests.append({"path": self.path, "body": json.loads(raw)})
+        type(self).seen_requests.append({
+            "path": self.path,
+            "body": json.loads(raw),
+            "headers": dict(self.headers),
+        })
         body = json.dumps(type(self).response_body).encode("utf-8")
         self.send_response(type(self).response_status)
         self.send_header("Content-Type", "application/json")
@@ -97,6 +101,48 @@ def test_shell_round_trip_propagates_stdout_stderr_exit_code(fake_dashboard):
     # adb real junta con espacios los tokens después de "shell" -- se replica
     # el mismo comportamiento.
     assert req["body"]["command"] == "pm list packages com.example.app"
+
+
+# ── Header de auth (bug real reportado en vivo, 2026-08-05) ────────────────
+# Con dashboard.auth.enabled (login), el middleware protege /api/* completo
+# -- este shim nunca mandaba ningún header de auth, así que cada RPC le
+# devolvía 401 en silencio. check_app_installed() (aipwn.py), que solo mira
+# stdout, interpretaba eso como "app no instalada" pese a que la sesión de
+# relay estaba perfectamente conectada. Confirmado en vivo contra un servidor
+# uvicorn real con auth activado antes de escribir este test: sin el header,
+# 401; con el header (NUTCRACKER_DASHBOARD_TOKEN), pasa la auth limpio.
+
+def test_shell_sends_internal_token_header_when_env_var_set(fake_dashboard):
+    server, url = fake_dashboard
+    _FakeDashboardHandler.response_body = {"stdout": "", "stderr": "", "exit_code": 0}
+
+    _run_shim(
+        ["-s", "device-1", "shell", "echo", "hi"],
+        env={
+            "NUTCRACKER_DASHBOARD_URL": url,
+            "NUTCRACKER_RELAY_SESSION_ID": "device-1",
+            "NUTCRACKER_DASHBOARD_TOKEN": "test-token-abc123",
+        },
+    )
+
+    assert len(_FakeDashboardHandler.seen_requests) == 1
+    headers = _FakeDashboardHandler.seen_requests[0]["headers"]
+    assert headers.get("X-Nutcracker-Token") == "test-token-abc123"
+
+
+def test_shell_omits_token_header_when_env_var_absent(fake_dashboard):
+    """Retrocompatibilidad: sin dashboard.auth (uso local/dev), la env var no
+    existe y el shim no debe mandar ningún header inventado."""
+    server, url = fake_dashboard
+    _FakeDashboardHandler.response_body = {"stdout": "", "stderr": "", "exit_code": 0}
+
+    _run_shim(
+        ["-s", "device-1", "shell", "echo", "hi"],
+        env={"NUTCRACKER_DASHBOARD_URL": url, "NUTCRACKER_RELAY_SESSION_ID": "device-1"},
+    )
+
+    headers = _FakeDashboardHandler.seen_requests[0]["headers"]
+    assert "X-Nutcracker-Token" not in headers
 
 
 def test_shell_propagates_nonzero_exit_code_from_device(fake_dashboard):

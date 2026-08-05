@@ -75,7 +75,20 @@ def _parse_args(argv: list[str]) -> tuple[str, list[str]]:
 def _rpc_post(dashboard_url: str, session_id: str, op: str, payload: dict, timeout: float) -> dict:
     url = f"{dashboard_url}/api/relay/{session_id}/rpc/{op}"
     body = json.dumps(payload).encode("utf-8")
-    request = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    # FIX (bug real reportado en vivo, 2026-08-05): con dashboard.auth.enabled
+    # (login), el middleware protege /api/* completo -- este shim nunca
+    # mandaba ningún header de auth, así que cada RPC (shell/install/pull/...)
+    # le devolvía 401 en silencio. check_app_installed() (aipwn.py), que solo
+    # mira stdout, interpretaba eso como "app no instalada" pese a que la
+    # sesión de relay estaba perfectamente conectada -- mismo token interno
+    # que ya usa frida_agent.py::_check_operator_chat (NUTCRACKER_DASHBOARD_
+    # TOKEN, inyectado por engine.py solo cuando el dashboard tiene auth
+    # activado; sin auth, la env var no existe y esto es un no-op).
+    token = os.environ.get("NUTCRACKER_DASHBOARD_TOKEN")
+    if token:
+        headers["X-Nutcracker-Token"] = token
+    request = Request(url, data=body, headers=headers, method="POST")
     try:
         with urlopen(request, timeout=timeout + 10) as resp:
             return json.loads(resp.read().decode("utf-8"))
