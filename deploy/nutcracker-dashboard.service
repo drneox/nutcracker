@@ -6,10 +6,12 @@ After=network.target
 # Ajustar User/WorkingDirectory/ExecStart al usuario y ruta reales del VPS.
 User=nutcracker
 WorkingDirectory=/opt/nutcracker
-# bind 127.0.0.1: el dashboard NO debe quedar accesible directo en :8765
-# desde internet -- solo Caddy (localhost) le habla; el firewall del VPS
-# bloquea 8765 desde afuera (ver deploy/README.md).
-ExecStart=/opt/nutcracker/.venv/bin/python nutcracker.py dashboard --host 127.0.0.1 --port 8765
+# bind 127.0.0.1:8766 -- puerto interno, distinto del 8765 público que usa
+# nginx (no pueden compartir número: 0.0.0.0:8765 de nginx chocaría con
+# 127.0.0.1:8765 acá). El dashboard NO debe quedar accesible directo desde
+# internet -- solo nginx (localhost) le habla; el firewall del VPS bloquea
+# 8766 desde afuera (ver deploy/README.md).
+ExecStart=/opt/nutcracker/.venv/bin/python nutcracker.py dashboard --host 127.0.0.1 --port 8766
 Restart=on-failure
 RestartSec=5
 

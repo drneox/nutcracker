@@ -10,10 +10,32 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
 
 from . import chat_mailbox
+from .auth import AuthConfig, websocket_authenticated
 from .events import bus
 from .relay import relay_manager
 
 router = APIRouter()
+
+# Config de auth del dashboard, seteada por server.create_app(). None = sin
+# protección (uso local/dev). Módulo-global a propósito: el router se define a
+# nivel de módulo, así que no puede recibir la config por parámetro.
+_auth: AuthConfig | None = None
+
+
+def set_auth(auth: "AuthConfig | None") -> None:
+    global _auth
+    _auth = auth
+
+
+async def _reject_if_unauthenticated(websocket: WebSocket) -> bool:
+    """Cierra el WS con 1008 (policy violation) si no hay sesión válida.
+    Devuelve True si rechazó (el caller debe cortar). El middleware ya rechaza
+    el handshake no autenticado antes de llegar acá; esto es defensa en
+    profundidad y cubre los tests que montan el endpoint sin el middleware."""
+    if websocket_authenticated(websocket, _auth):
+        return False
+    await websocket.close(code=1008)
+    return True
 
 # q.get() sin timeout bloquearía el hilo del threadpool para siempre tras el
 # último evento -- si el cliente se desconecta mientras tanto, la tarea async
@@ -39,6 +61,8 @@ async def ws_job(websocket: WebSocket, job_id: str) -> None:
     ("Unexpected ASGI message 'websocket.send', after sending
     'websocket.close'") al intentar mandar después. Ambos significan lo
     mismo acá: el cliente ya no está, hay que cortar en silencio."""
+    if await _reject_if_unauthenticated(websocket):
+        return
     await websocket.accept()
     q = bus.subscribe(job_id)
     try:
@@ -64,6 +88,8 @@ async def ws_chat(websocket: WebSocket, package: str) -> None:
     chat_mailbox.py / plugins/aipwn/frida_agent.py::_check_operator_chat),
     (2) publica en el EventBus (canal=package, para que futuros viewers vean
     el historial vía bus.history), y (3) se hace eco directo al remitente."""
+    if await _reject_if_unauthenticated(websocket):
+        return
     await websocket.accept()
     try:
         while True:
@@ -96,6 +122,8 @@ async def ws_relay(websocket: WebSocket, session_id: str) -> None:
     Se usa ``websocket.receive()`` de bajo nivel (en vez de receive_text/
     receive_bytes) porque esta WebSocket mezcla ambos tipos de frame -- las
     variantes tipadas solo aceptan uno de los dos y explotan con el otro."""
+    if await _reject_if_unauthenticated(websocket):
+        return
     await websocket.accept()
     session = await relay_manager.get_or_create(session_id)
     session.attach_websocket(websocket)

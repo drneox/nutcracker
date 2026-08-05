@@ -185,6 +185,26 @@ dashboard:
   # doze/corte de red del teléfono); cada cuántos segundos revisarlo y
   # reconectarlo en segundo plano. Mínimo efectivo: 10.
   adb_keepalive_seconds: 60
+  # ── Login del dashboard (obligatorio para exponerlo a internet) ──────────
+  # Sin esto el dashboard no pide autenticación: cualquiera con acceso de red
+  # puede operarlo (encolar jobs, manejar el relay al dispositivo, leer
+  # reportes). Para uso local (bind 127.0.0.1) podés dejarlo deshabilitado;
+  # para un despliegue en VPS (ver deploy/README.md) es imprescindible.
+  #
+  # Generá username/password_hash/secret_key con:
+  #   python nutcracker.py dashboard-hash-password
+  # (pide la contraseña sin eco e imprime este bloque listo para pegar). NUNCA
+  # guardes la contraseña en texto plano -- solo el hash pbkdf2 va acá.
+  auth:
+    enabled: false
+    username: admin
+    password_hash: ''   # pbkdf2_sha256$...  (dashboard-hash-password)
+    # Firma las cookies de sesión. Con una clave fija las sesiones sobreviven
+    # reinicios del server; si se deja vacía se genera una al arrancar (habría
+    # que re-loguearse tras cada reinicio). Generar una:
+    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+    secret_key: ''
+    session_hours: 12   # duración de la sesión antes de re-loguear
 # ── Toolbox estático en Docker (opt-in) ────────────────────────────────────
 # Sandboxea jadx/apktool (y a futuro otras herramientas estáticas) dentro de
 # un contenedor Docker en vez de invocar binarios instalados en el host --

@@ -85,6 +85,7 @@
     <div><b id="s-findings">–</b> findings</div>
     <div><b id="s-jobs">–</b> active jobs</div>
   </div>
+  <button class="secondary" id="logout-btn" style="margin-left:12px" onclick="logout()">Salir</button>
 </header>
 
 <main>
@@ -264,10 +265,19 @@ function findingStatusBadge(status){
     ? `<span class="badge warning">● presente</span>`
     : `<span class="badge good">✔ resuelto</span>`;
 }
+function redirectToLogin(){
+  const next = encodeURIComponent(location.pathname + location.search);
+  location.href = '/login?next=' + next;
+}
 async function j(url, opts){
   const r = await fetch(url, opts);
+  if (r.status === 401){ redirectToLogin(); throw new Error('unauthorized'); }
   if (!r.ok) throw new Error(await r.text());
   return r.json();
+}
+async function logout(){
+  try { await fetch('/api/logout', {method:'POST'}); } catch(e){}
+  location.href = '/login';
 }
 
 let currentApp = null;
@@ -394,6 +404,7 @@ function connectJobLog(){
   log.textContent = '';
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   logSocket = new WebSocket(`${proto}://${location.host}/ws/jobs/${id}`);
+  logSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
   logSocket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     const line = msg.kind === 'status' ? `\n[status] ${JSON.stringify(msg.data)}\n` : (msg.data + '\n');
@@ -584,6 +595,7 @@ function connectChat(){
   document.getElementById('chatlog').innerHTML = '';
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   chatSocket = new WebSocket(`${proto}://${location.host}/ws/chat/${encodeURIComponent(pkg)}`);
+  chatSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
   chatSocket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     const log = document.getElementById('chatlog');

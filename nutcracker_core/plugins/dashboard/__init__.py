@@ -39,6 +39,34 @@ def _ensure_dashboard_deps() -> None:
 
 
 def register(cli) -> None:
+    @cli.command("dashboard-hash-password")
+    @click.option(
+        "--username", "-u", default=None,
+        help="Usuario a incluir en el bloque YAML de ejemplo (opcional).",
+    )
+    def dashboard_hash_password(username: str | None) -> None:
+        """Genera el hash de una contraseña para dashboard.auth.password_hash.
+
+        Pide la contraseña sin eco por stdin, imprime el hash pbkdf2-sha256 (y
+        un bloque YAML listo para pegar en config.yaml). Nunca guardes la
+        contraseña en texto plano -- solo este hash va a config.
+        """
+        import secrets as _secrets
+
+        from .auth import hash_password
+
+        password = click.prompt("Contraseña", hide_input=True, confirmation_prompt=True)
+        digest = hash_password(password)
+        click.echo("\nHash generado:\n")
+        click.echo(f"  {digest}\n")
+        click.echo("Bloque para config.yaml (dashboard.auth):\n")
+        click.echo("  auth:")
+        click.echo("    enabled: true")
+        click.echo(f"    username: {username or 'admin'}")
+        click.echo(f"    password_hash: '{digest}'")
+        click.echo(f"    secret_key: '{_secrets.token_urlsafe(48)}'")
+        click.echo("    session_hours: 12")
+
     @cli.command()
     @click.option(
         "--config", "-c", "config_path",
@@ -78,12 +106,34 @@ def register(cli) -> None:
         from nutcracker_core.scheduler import NutcrackerScheduler
         from nutcracker_core.store.hooks import db_path_from_config
 
+        from .auth import AuthConfig
         from .events import bus
         from .server import create_app
 
         config = load_config(config_path)
         bind = host or str(cfg_get(config, "dashboard", "bind", default="127.0.0.1"))
         listen_port = port or int(cfg_get(config, "dashboard", "port", default=8765))
+
+        # Auth (login por sesión) -- ver auth.py y deploy/README.md. Se activa
+        # solo si `dashboard.auth.enabled` es true; sin eso el dashboard queda
+        # abierto (uso local/dev). El `internal_token` es una credencial de
+        # máquina generada acá y pasada al subproceso aipwn por env var, para
+        # que su polling del mailbox de chat (127.0.0.1) autentique sin cookie
+        # -- necesario porque detrás de Caddy toda request llega desde
+        # localhost y no se puede eximir al subproceso solo por IP de origen.
+        import secrets as _secrets
+        internal_token = _secrets.token_urlsafe(32)
+        auth_cfg_dict = cfg_get(config, "dashboard", "auth", default={}) or {}
+        # secure_cookie=False solo para probar el login en local por HTTP
+        # plano (dashboard.auth.secure_cookie: false en config.yaml) -- los
+        # navegadores descartan cookies "Secure" fuera de HTTPS, así que con
+        # el default (True) el login "funcionaría" pero la cookie nunca
+        # quedaría guardada. En el VPS (detrás de HTTPS) dejar el default.
+        auth = AuthConfig.from_config(
+            auth_cfg_dict,
+            internal_token=internal_token,
+            secure_cookie=bool(auth_cfg_dict.get("secure_cookie", True)),
+        )
         # strategies.default_device_id (config.yaml) llega al frontend vía
         # GET /api/config/default-serial -- así el operador lo configura una
         # sola vez (típicamente un serial de red "ip:5555" tras `adb tcpip
@@ -113,6 +163,10 @@ def register(cli) -> None:
         # Siempre 127.0.0.1: el subproceso corre en la misma máquina que este
         # comando sin importar en qué interfaz --host escuche el server real.
         engine.extra_env["NUTCRACKER_DASHBOARD_URL"] = f"http://127.0.0.1:{listen_port}"
+        if auth is not None:
+            # El subproceso manda este token en el header X-Nutcracker-Token
+            # para autenticar su poll del mailbox (ver frida_agent.py).
+            engine.extra_env["NUTCRACKER_DASHBOARD_TOKEN"] = internal_token
 
         # Keepalive del transporte adb-over-wifi (ver nutcracker_core/adb_transport.py).
         # El dashboard es justo el escenario donde más importa: el video WebUSB
@@ -132,13 +186,22 @@ def register(cli) -> None:
             scheduler = NutcrackerScheduler(engine, config)
             scheduler.start()
 
-        app = create_app(db_path=db_path, engine=engine, default_serial=default_serial)
+        app = create_app(db_path=db_path, engine=engine, default_serial=default_serial, auth=auth)
 
         console.print(
             f"[bold green]✔[/bold green] nutcracker dashboard — "
             f"[bold]http://{bind}:{listen_port}[/bold] "
-            f"(scheduler={'off' if no_scheduler else 'on'})"
+            f"(scheduler={'off' if no_scheduler else 'on'}, "
+            f"auth={'on' if auth is not None else 'off'})"
         )
+        if auth is None and bind not in ("127.0.0.1", "localhost", "::1"):
+            # Expuesto fuera de localhost sin login -- cualquiera con acceso de
+            # red puede operar el dashboard. Ver deploy/README.md.
+            console.print(
+                f"[bold yellow]⚠[/bold yellow]  Escuchando en {bind} SIN autenticación "
+                "— cualquiera con acceso de red puede operar el dashboard. "
+                "Configurá dashboard.auth para exigir login (ver deploy/README.md)."
+            )
         try:
             uvicorn.run(app, host=bind, port=listen_port, log_level="warning")
         finally:
