@@ -7,6 +7,7 @@ Fallback: apktool (produce ensamblador smali + recursos XML).
 
 from __future__ import annotations
 
+import platform
 import shutil
 import subprocess
 from pathlib import Path
@@ -47,12 +48,45 @@ def get_available_tool(config: dict | None = None) -> tuple[str, str] | tuple[No
 
 
 def install_instructions() -> str:
+    """Instrucciones para conseguir un decompilador -- antes asumía macOS
+    (`brew install jadx`) sin importar la plataforma real, lo cual es inútil
+    en Linux/WSL/un VPS (encontrado en vivo corriendo un job en una VM
+    Ubuntu). Ahora se ajusta al sistema operativo real, y siempre menciona el
+    toolbox de Docker primero -- es la opción que funciona en cualquier
+    plataforma sin instalar nada en el host, y la recomendada para un
+    servidor/VPS sin acceso interactivo."""
+    toolbox_hint = (
+        "  [bold]Opción recomendada para servidores/VPS[/bold]: activar el toolbox de\n"
+        "  Docker (jadx/apktool sandboxeados, sin instalar nada en el host) --\n"
+        "  ver deploy/README.md, sección del toolbox, o config.yaml.example\n"
+        "  (bloque `toolbox:`).\n\n"
+    )
+    system = platform.system()
+    if system == "Darwin":
+        native = (
+            "  [bold]jadx[/bold] (recomendado, produce Java/Kotlin):\n"
+            "    brew install jadx\n\n"
+            "  [bold]apktool[/bold] (produce smali + recursos):\n"
+            "    brew install apktool"
+        )
+    elif system == "Linux":
+        native = (
+            "  [bold]jadx[/bold] (recomendado, produce Java/Kotlin) -- release oficial:\n"
+            "    https://github.com/skylot/jadx/releases (descomprimir y agregar al PATH)\n\n"
+            "  [bold]apktool[/bold] (produce smali + recursos):\n"
+            "    https://apktool.org/docs/install (o `sudo apt install apktool` si tu\n"
+            "    distro lo empaqueta)"
+        )
+    else:
+        native = (
+            "  [bold]jadx[/bold] / [bold]apktool[/bold]: ver instrucciones de instalación en\n"
+            "    https://github.com/skylot/jadx/releases\n"
+            "    https://apktool.org/docs/install"
+        )
     return (
-        "No se encontró ningún decompilador. Instala uno:\n\n"
-        "  [bold]jadx[/bold] (recomendado, produce Java/Kotlin):\n"
-        "    brew install jadx\n\n"
-        "  [bold]apktool[/bold] (produce smali + recursos):\n"
-        "    brew install apktool"
+        "No se encontró ningún decompilador local instalado, ni el toolbox de\n"
+        "Docker está activado. Alguna de estas dos opciones:\n\n"
+        + toolbox_hint + native
     )
 
 
@@ -88,10 +122,7 @@ def decompile(
     dest_name = dest_name or apk_path.stem
 
     if tool is None:
-        raise DecompilerError(
-            "No se encontró jadx ni apktool en el sistema.\n"
-            "Instala jadx con: brew install jadx"
-        )
+        raise DecompilerError(install_instructions())
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

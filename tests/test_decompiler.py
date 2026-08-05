@@ -258,3 +258,46 @@ def test_decompile_without_toolbox_config_behaves_exactly_as_before(tmp_path, fa
 
     assert dest.name == "base"
     assert fake_jadx  # subprocess.run local sí se usó
+
+
+# ── install_instructions() ajustado por plataforma ──────────────────────────
+# Bug encontrado en vivo (2026-08-05, job real en una VM Ubuntu): el mensaje
+# de "no hay decompilador" sugería SIEMPRE "brew install jadx" (Homebrew,
+# macOS) sin importar la plataforma real -- inútil en Linux/WSL/un VPS.
+
+def test_install_instructions_macos_suggests_brew(monkeypatch):
+    monkeypatch.setattr(decompiler.platform, "system", lambda: "Darwin")
+    msg = decompiler.install_instructions()
+    assert "brew install jadx" in msg
+    assert "brew install apktool" in msg
+
+
+def test_install_instructions_linux_does_not_suggest_brew(monkeypatch):
+    monkeypatch.setattr(decompiler.platform, "system", lambda: "Linux")
+    msg = decompiler.install_instructions()
+    assert "brew install" not in msg
+    assert "github.com/skylot/jadx/releases" in msg
+
+
+def test_install_instructions_always_mentions_toolbox(monkeypatch):
+    """El toolbox de Docker es cross-platform -- debe sugerirse sin importar
+    el sistema operativo detectado, siempre como primera opción."""
+    for system in ("Darwin", "Linux", "Windows"):
+        monkeypatch.setattr(decompiler.platform, "system", lambda s=system: s)
+        msg = decompiler.install_instructions()
+        assert "toolbox" in msg.lower()
+        assert "docker" in msg.lower()
+
+
+def test_decompile_error_uses_install_instructions(tmp_path, monkeypatch):
+    """DecompilerError (sin ningún tool disponible) debe compartir el mismo
+    texto que install_instructions() -- no un mensaje hardcodeado aparte que
+    pueda quedar desactualizado."""
+    monkeypatch.setattr(decompiler.shutil, "which", lambda name: None)
+    apk = tmp_path / "app.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    with pytest.raises(decompiler.DecompilerError) as exc_info:
+        decompiler.decompile(apk, tmp_path / "decompiled")
+
+    assert str(exc_info.value) == decompiler.install_instructions()
