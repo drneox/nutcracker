@@ -3,10 +3,11 @@ a través de sus APIs públicas (QueueEngine), nunca reimplementa análisis."""
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -301,6 +302,66 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
         finally:
             conn.close()
         return dict(row)
+
+    @router.post("/api/apks/upload")
+    async def upload_apk(file: UploadFile = File(...)):
+        """Sube un .apk desde el navegador y lo guarda en ``downloads/`` --
+        pensado para el despliegue en VPS (deploy/README.md), donde el
+        operador no tiene una terminal en la máquina para dejar el archivo a
+        mano antes de encolar un job "analyze"/"dynamic" con un .apk local.
+
+        Devuelve ``path`` en el mismo formato que espera el campo "target" del
+        form de la cola (``downloads/<nombre>.apk``, relativo al cwd del
+        proceso del dashboard) -- ``_is_local_apk()`` (queue/engine.py) solo
+        chequea que ese path exista y termine en ``.apk``, así que alcanza con
+        pegar este valor tal cual en el campo target.
+        """
+        if not file.filename or not file.filename.lower().endswith(".apk"):
+            raise HTTPException(status_code=400, detail="el archivo debe tener extensión .apk")
+
+        # Nombre saneado: solo el basename (Path(...).name descarta cualquier
+        # componente de directorio, incluido "../../etc/passwd" -> "passwd"),
+        # y solo caracteres seguros -- nunca se usa el filename del cliente
+        # para construir la ruta de escritura sin pasar por acá primero.
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(file.filename).name)
+        if not safe_name.lower().endswith(".apk"):
+            safe_name += ".apk"
+
+        downloads_dir = Path("downloads")
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+
+        # No pisar un archivo existente con otro de mismo nombre -- numerar.
+        dest = downloads_dir / safe_name
+        if dest.exists():
+            stem, suffix = dest.stem, dest.suffix
+            i = 1
+            while dest.exists():
+                dest = downloads_dir / f"{stem}_{i}{suffix}"
+                i += 1
+
+        # Chequeo barato de que sea un ZIP/APK real (firma de magic bytes) --
+        # no es el punto de validación real (eso lo hace androguard/apktool
+        # más adelante en el pipeline), solo evita guardar basura obvia con
+        # extensión .apk falsa.
+        magic = await file.read(4)
+        if magic not in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
+            raise HTTPException(
+                status_code=400,
+                detail="el archivo no parece un APK/ZIP válido (firma incorrecta)",
+            )
+
+        size = len(magic)
+        try:
+            with open(dest, "wb") as out:
+                out.write(magic)
+                while chunk := await file.read(1024 * 1024):
+                    out.write(chunk)
+                    size += len(chunk)
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+
+        return {"path": str(dest), "filename": dest.name, "size": size}
 
     @router.get("/api/queue")
     def queue_list(status: str | None = None, limit: int = 100):

@@ -75,17 +75,21 @@ Copiar [`nutcracker.nginx.conf`](nutcracker.nginx.conf) a
 `/etc/nginx/conf.d/nutcracker.conf` (ese directorio ya se incluye desde el
 bloque `http{}` de nginx.conf por defecto en Ubuntu/Debian — no hace falta
 tocar nginx.conf). Trae rutas de ejemplo `/etc/nutcracker/tls/cert.pem`/
-`key.pem` (paso 0) — ajustalas si tus certs viven en otro lado. El usuario
-`www-data` (el que corre nginx) necesita permiso de lectura sobre esos
-archivos:
+`key.pem` (paso 0) — ajustalas si tus certs viven en otro lado.
 
 ```bash
 sudo cp deploy/nutcracker.nginx.conf /etc/nginx/conf.d/nutcracker.conf
-sudo chown root:www-data /etc/nutcracker/tls/cert.pem /etc/nutcracker/tls/key.pem
-sudo chmod 440 /etc/nutcracker/tls/cert.pem /etc/nutcracker/tls/key.pem
 sudo nginx -t   # valida la sintaxis antes de aplicar
-sudo systemctl reload nginx
+sudo systemctl reload nginx   # o `start` si nginx no estaba corriendo todavía
 ```
+
+No hace falta darle permiso a `www-data` sobre el cert/key (ni `chown` ni
+`chmod`): nginx lee `ssl_certificate`/`ssl_certificate_key` en su **proceso
+master, que corre como root** — root puede leer esos archivos sin importar su
+dueño/permisos actuales, antes de que los workers (que sí corren como
+`www-data`) arranquen. De hecho, dejarlos legibles SOLO por root (como suele
+venir por defecto) es más restrictivo/seguro que abrirle lectura a
+`www-data` — verificado en vivo: funciona sin tocar ownership/permisos.
 
 A diferencia de Caddy, nginx no maneja WebSocket "solo" — el archivo ya trae
 el bloque `map` y los `proxy_set_header Upgrade/Connection` necesarios para

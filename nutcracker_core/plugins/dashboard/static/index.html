@@ -102,6 +102,12 @@
 
   <section class="card">
     <h2>Cola de análisis</h2>
+    <div class="row" style="border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:10px">
+      <span style="font-size:12px;color:var(--dim)">Subir .apk (queda en <code>downloads/</code>, útil sin terminal en el servidor):</span>
+      <input type="file" id="apk-upload-file" accept=".apk">
+      <button class="secondary" onclick="uploadApk()" id="apk-upload-btn">Subir</button>
+      <span id="apk-upload-status" style="font-size:12px;color:var(--dim)"></span>
+    </div>
     <div class="row">
       <input id="q-target" placeholder="ruta .apk / URL / package id" style="flex:1;min-width:200px">
       <select id="q-kind"><option value="static">static</option><option value="dynamic">dynamic</option><option value="aipwn">aipwn</option></select>
@@ -348,6 +354,29 @@ async function deleteQueueJob(jobId){
     await refreshQueue();
   } catch (e) {
     alert(`No se pudo borrar el job #${jobId}: ${e.message || e}`);
+  }
+}
+
+async function uploadApk(){
+  const fileInput = document.getElementById('apk-upload-file');
+  const status = document.getElementById('apk-upload-status');
+  const btn = document.getElementById('apk-upload-btn');
+  if (!fileInput.files.length) return;
+  const form = new FormData();
+  form.append('file', fileInput.files[0]);
+  btn.disabled = true;
+  status.textContent = 'Subiendo...';
+  try {
+    // Sin Content-Type manual: el browser arma el boundary de
+    // multipart/form-data solo al ver que el body es un FormData.
+    const result = await j('/api/apks/upload', {method: 'POST', body: form});
+    document.getElementById('q-target').value = result.path;
+    status.textContent = `OK: ${result.filename} (${(result.size / 1e6).toFixed(1)} MB) -> campo "target" completado`;
+    fileInput.value = '';
+  } catch (e) {
+    status.textContent = `Error: ${e.message || e}`;
+  } finally {
+    btn.disabled = false;
   }
 }
 

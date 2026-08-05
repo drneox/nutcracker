@@ -4,6 +4,7 @@ levantar un servidor de verdad ni tocar la red."""
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 
@@ -805,3 +806,112 @@ def test_relay_rpc_logcat_round_trip(client, monkeypatch):
 def test_relay_rpc_logcat_404_without_connected_session(client):
     r = client.post("/api/relay/no-existe/rpc/logcat", json={})
     assert r.status_code == 404
+
+
+# ── POST /api/apks/upload ────────────────────────────────────────────────
+
+_FAKE_APK_BYTES = b"PK\x03\x04" + b"\x00" * 32
+
+
+def test_upload_apk_saves_to_downloads_and_returns_relative_path(monkeypatch, tmp_path, client):
+    monkeypatch.chdir(tmp_path)
+
+    r = client.post(
+        "/api/apks/upload",
+        files={"file": ("com.example.app.apk", _FAKE_APK_BYTES, "application/octet-stream")},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["path"] == "downloads/com.example.app.apk"
+    assert body["filename"] == "com.example.app.apk"
+    assert body["size"] == len(_FAKE_APK_BYTES)
+    saved = tmp_path / "downloads" / "com.example.app.apk"
+    assert saved.read_bytes() == _FAKE_APK_BYTES
+
+
+def test_upload_apk_rejects_non_apk_extension(monkeypatch, tmp_path, client):
+    monkeypatch.chdir(tmp_path)
+    r = client.post(
+        "/api/apks/upload",
+        files={"file": ("malware.exe", b"MZfake", "application/octet-stream")},
+    )
+    assert r.status_code == 400
+    assert not (tmp_path / "downloads").exists()
+
+
+def test_upload_apk_rejects_bad_magic_bytes(monkeypatch, tmp_path, client):
+    """Extensión .apk correcta pero contenido que no es un ZIP real -- no debe
+    quedar guardado en disco (ver también que no crea el archivo con nombre
+    "fake.apk" antes de validar la firma)."""
+    monkeypatch.chdir(tmp_path)
+    r = client.post(
+        "/api/apks/upload",
+        files={"file": ("fake.apk", b"esto no es un zip para nada", "application/octet-stream")},
+    )
+    assert r.status_code == 400
+    assert not (tmp_path / "downloads" / "fake.apk").exists()
+
+
+def test_upload_apk_sanitizes_path_traversal_in_filename(monkeypatch, tmp_path, client):
+    monkeypatch.chdir(tmp_path)
+    r = client.post(
+        "/api/apks/upload",
+        files={"file": ("../../../etc/passwd.apk", _FAKE_APK_BYTES, "application/octet-stream")},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["path"] == "downloads/passwd.apk"
+    assert ".." not in body["path"]
+    # No escribió nada fuera de tmp_path/downloads.
+    assert list((tmp_path / "downloads").iterdir()) == [tmp_path / "downloads" / "passwd.apk"]
+
+
+def test_upload_apk_does_not_clobber_existing_file(monkeypatch, tmp_path, client):
+    monkeypatch.chdir(tmp_path)
+    first = client.post(
+        "/api/apks/upload",
+        files={"file": ("app.apk", _FAKE_APK_BYTES, "application/octet-stream")},
+    )
+    second_bytes = _FAKE_APK_BYTES + b"more-content"
+    second = client.post(
+        "/api/apks/upload",
+        files={"file": ("app.apk", second_bytes, "application/octet-stream")},
+    )
+
+    assert first.json()["path"] == "downloads/app.apk"
+    assert second.json()["path"] == "downloads/app_1.apk"
+    # Ambos archivos coexisten con su contenido propio -- el segundo upload
+    # no pisó al primero.
+    assert (tmp_path / "downloads" / "app.apk").read_bytes() == _FAKE_APK_BYTES
+    assert (tmp_path / "downloads" / "app_1.apk").read_bytes() == second_bytes
+
+
+def test_upload_apk_sanitizes_unsafe_characters_in_filename(monkeypatch, tmp_path, client):
+    monkeypatch.chdir(tmp_path)
+    r = client.post(
+        "/api/apks/upload",
+        files={"file": ("mi app (v2) #raro!.apk", _FAKE_APK_BYTES, "application/octet-stream")},
+    )
+    assert r.status_code == 200
+    saved_name = r.json()["filename"]
+    assert re.fullmatch(r"[A-Za-z0-9._-]+\.apk", saved_name)
+
+
+def test_upload_apk_requires_auth_when_enabled(tmp_path, monkeypatch, db_path, engine):
+    from nutcracker_core.plugins.dashboard.auth import AuthConfig, hash_password
+    from nutcracker_core.plugins.dashboard.server import create_app
+
+    monkeypatch.chdir(tmp_path)
+    auth = AuthConfig.from_config(
+        {"enabled": True, "username": "admin", "password_hash": hash_password("pw"), "secret_key": "k"},
+        internal_token="itok", secure_cookie=False,
+    )
+    app = create_app(db_path=db_path, engine=engine, auth=auth)
+    protected_client = TestClient(app)
+
+    r = protected_client.post(
+        "/api/apks/upload",
+        files={"file": ("app.apk", _FAKE_APK_BYTES, "application/octet-stream")},
+    )
+    assert r.status_code == 401
