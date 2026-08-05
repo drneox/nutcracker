@@ -49,11 +49,20 @@ def _drain_in_background(engine: QueueEngine) -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
-def _drain_batch_in_background(engine: QueueEngine, then_aipwn: bool, serial: str | None) -> None:
+def _drain_batch_in_background(
+    engine: QueueEngine, then_aipwn: bool, serial: str | None,
+    relay_session_id: str | None = None, frida_host: str | None = None,
+) -> None:
     """Mismo patrón que cli/queue_cmd.py (`--then-aipwn`): drena los jobs
     estáticos recién encolados, acumula los packages cuyo job terminó OK, y
     encola+drena un job aipwn por cada uno -- corriendo en un hilo de fondo en
-    vez de bloquear la respuesta HTTP (ver `_drain_in_background`)."""
+    vez de bloquear la respuesta HTTP (ver `_drain_in_background`).
+
+    ``relay_session_id``/``frida_host`` (ya resueltos por el caller vía
+    ``_resolve_relay``) se propagan también al aipwn encadenado -- sin esto,
+    el batch estático podía correr bien vía relay pero el aipwn que dispara
+    después para cada package perdía el túnel, mismo síntoma silencioso que
+    el resto de los gaps de relay encontrados el 2026-08-05."""
     engine._dashboard_draining = True
 
     def _publish(o) -> None:  # noqa: ANN001
@@ -72,7 +81,8 @@ def _drain_batch_in_background(engine: QueueEngine, then_aipwn: bool, serial: st
 
             if pending_aipwn:
                 for pkg in pending_aipwn:
-                    engine.submit(pkg, kind="aipwn", serial=serial)
+                    engine.submit(pkg, kind="aipwn", serial=serial,
+                                   relay_session_id=relay_session_id, frida_host=frida_host)
                 engine.drain(on_result=_publish)
         finally:
             engine._dashboard_draining = False
@@ -135,6 +145,11 @@ class QueueBatchPayload(BaseModel):
     source: str | None = None
     serial: str | None = None
     then_aipwn: bool = True
+    # Igual que QueuePayload.relay: `serial` pasa a ser el session_id de una
+    # sesión de relay ya conectada (WebUSB) en vez de un serial adb directo --
+    # aplica tanto a los jobs estáticos del batch como al aipwn encadenado
+    # (then_aipwn=true) de cada package que termine OK.
+    relay: bool = False
 
 
 def _require_attached_relay_session(session_id: str):
@@ -478,34 +493,42 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
         )
         return {"stdout": result.get("stdout", "")}
 
+    def _resolve_relay(serial: str | None, relay: bool) -> tuple[str | None, str | None]:
+        """Valida y resuelve una sesión de relay conectada a partir de
+        ``serial`` (el session_id, ver docstring de QueuePayload.relay).
+        Devuelve ``(relay_session_id, frida_host)`` -- ambos None si
+        ``relay`` es False. Factorizado de ``queue_add`` para que
+        ``queue_batch`` (y el aipwn encadenado que dispara) compartan
+        exactamente la misma validación/mensajes, en vez de una copia
+        parcial que pueda desincronizarse."""
+        if not relay:
+            return None, None
+        if not serial:
+            raise HTTPException(
+                status_code=400,
+                detail="relay=true requiere 'serial' con el session_id de una "
+                       "sesión de relay conectada.",
+            )
+        session = relay_manager.get(serial)
+        if session is None or not session.attached:
+            raise HTTPException(
+                status_code=400,
+                detail=f"no hay un navegador con el relay conectado para '{serial}' "
+                       "-- abrí el dashboard, conectá el device por WebUSB, y "
+                       "activá el túnel antes de encolar este job.",
+            )
+        # `serial` NO se reescribe a una dirección de loopback -- queda
+        # como el session_id tal cual (ver Job.relay_session_id: el shim
+        # de adb lo ignora igual, y así is_network_serial() no lo confunde
+        # con un serial de red real). frida_host sí sigue siendo una
+        # dirección real -- el túnel TCP crudo de frida funciona bien
+        # (27042 no es el puerto de control de adbd, ver relay.py).
+        return serial, f"127.0.0.1:{session.ports['frida']}"
+
     @router.post("/api/queue")
     def queue_add(payload: QueuePayload):
         serial = payload.serial
-        frida_host = None
-        relay_session_id = None
-        if payload.relay:
-            if not serial:
-                raise HTTPException(
-                    status_code=400,
-                    detail="relay=true requiere 'serial' con el session_id de una "
-                           "sesión de relay conectada.",
-                )
-            session = relay_manager.get(serial)
-            if session is None or not session.attached:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"no hay un navegador con el relay conectado para '{serial}' "
-                           "-- abrí el dashboard, conectá el device por WebUSB, y "
-                           "activá el túnel antes de encolar este job.",
-                )
-            # `serial` NO se reescribe a una dirección de loopback -- queda
-            # como el session_id tal cual (ver Job.relay_session_id: el shim
-            # de adb lo ignora igual, y así is_network_serial() no lo confunde
-            # con un serial de red real). frida_host sí sigue siendo una
-            # dirección real -- el túnel TCP crudo de frida funciona bien
-            # (27042 no es el puerto de control de adbd, ver relay.py).
-            relay_session_id = serial
-            frida_host = f"127.0.0.1:{session.ports['frida']}"
+        relay_session_id, frida_host = _resolve_relay(serial, payload.relay)
         try:
             job = engine.submit(
                 payload.target, kind=payload.kind, serial=serial, source=payload.source,
@@ -556,9 +579,15 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
                 status_code=404,
                 detail=f"no hay sesión pendiente para reanudar de '{job['target']}'",
             )
+        # relay_session_id/frida_host de la fila original -- si el job que se
+        # está reanudando corrió vía relay, la reanudación tiene que usar el
+        # mismo túnel (ver store/db.py migración 3: antes de esa migración
+        # esto siempre daba None, así que un job relay-backed perdía el
+        # relay al reanudarse, mismo síntoma que el bug de _load_queued_from_db).
         new_job = engine.submit(
             job["target"], kind="aipwn", serial=job["serial"],
             aipwn_resume=True, aipwn_extra_iterations=extra_iterations,
+            relay_session_id=job["relay_session_id"], frida_host=job["frida_host"],
         )
         _drain_in_background(engine)
         return {"job_id": new_job.db_id}
@@ -571,9 +600,14 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
         ]
         if not targets:
             raise HTTPException(status_code=400, detail="no hay targets válidos en el batch")
+        relay_session_id, frida_host = _resolve_relay(payload.serial, payload.relay)
         for target in targets:
-            engine.submit(target, kind="static", serial=payload.serial, source=payload.source)
-        _drain_batch_in_background(engine, then_aipwn=payload.then_aipwn, serial=payload.serial)
+            engine.submit(target, kind="static", serial=payload.serial, source=payload.source,
+                           relay_session_id=relay_session_id, frida_host=frida_host)
+        _drain_batch_in_background(
+            engine, then_aipwn=payload.then_aipwn, serial=payload.serial,
+            relay_session_id=relay_session_id, frida_host=frida_host,
+        )
         return {"queued": len(targets)}
 
     @router.get("/api/chat/{package}/pending")

@@ -457,13 +457,16 @@ def test_resume_aipwn_enqueues_new_job_with_resume_flags(monkeypatch, client, en
     real_submit = engine.submit
 
     def spy_submit(target, kind="static", serial=None, priority=0, source=None,
-                    aipwn_resume=False, aipwn_extra_iterations=5):
+                    aipwn_resume=False, aipwn_extra_iterations=5,
+                    relay_session_id=None, frida_host=None):
         submitted.append({
             "target": target, "kind": kind, "serial": serial,
             "aipwn_resume": aipwn_resume, "aipwn_extra_iterations": aipwn_extra_iterations,
+            "relay_session_id": relay_session_id, "frida_host": frida_host,
         })
         return real_submit(target, kind=kind, serial=serial, priority=priority, source=source,
-                            aipwn_resume=aipwn_resume, aipwn_extra_iterations=aipwn_extra_iterations)
+                            aipwn_resume=aipwn_resume, aipwn_extra_iterations=aipwn_extra_iterations,
+                            relay_session_id=relay_session_id, frida_host=frida_host)
 
     monkeypatch.setattr(engine, "submit", spy_submit)
 
@@ -475,7 +478,35 @@ def test_resume_aipwn_enqueues_new_job_with_resume_flags(monkeypatch, client, en
     assert submitted == [{
         "target": "com.example.app", "kind": "aipwn", "serial": "ZY22GPM27J",
         "aipwn_resume": True, "aipwn_extra_iterations": 5,
+        "relay_session_id": None, "frida_host": None,
     }]
+
+
+def test_resume_aipwn_preserves_relay_session(monkeypatch, client, engine):
+    """Gap encontrado en vivo (2026-08-05): reanudar un job que corrió vía
+    relay perdía el túnel -- el fix de persistencia (store/db.py migración 3)
+    dejó relay_session_id/frida_host disponibles en la fila original, pero
+    resume-aipwn no los leía. Ahora sí."""
+    from nutcracker_core.plugins.dashboard import api as dashboard_api
+
+    session = _asyncio.run(_relay_manager.get_or_create("device-resume-1"))
+    session.attach_websocket(_FakeRelayWs())
+
+    r = client.post("/api/queue", json={
+        "target": "com.example.app", "kind": "aipwn",
+        "relay": True, "serial": "device-resume-1",
+    })
+    job_id = r.json()["job_id"]
+
+    monkeypatch.setattr(dashboard_api.agent_memory, "has_resume_state", lambda target: True)
+
+    r2 = client.post(f"/api/queue/{job_id}/resume-aipwn")
+    assert r2.status_code == 200
+    new_job_id = r2.json()["job_id"]
+
+    resumed = next(j for j in engine._pending if j.db_id == new_job_id)
+    assert resumed.relay_session_id == "device-resume-1"
+    assert resumed.frida_host == f"127.0.0.1:{session.ports['frida']}"
 
 
 def test_resume_aipwn_404_without_pending_session(monkeypatch, client, engine):
@@ -576,9 +607,11 @@ def test_queue_batch_propagates_source_and_serial_to_every_submit(monkeypatch, c
     calls = []
     real_submit = engine.submit
 
-    def spy_submit(target, kind="static", serial=None, priority=0, source=None):
+    def spy_submit(target, kind="static", serial=None, priority=0, source=None,
+                    relay_session_id=None, frida_host=None, **kw):
         calls.append({"target": target, "kind": kind, "serial": serial, "source": source})
-        return real_submit(target, kind=kind, serial=serial, priority=priority, source=source)
+        return real_submit(target, kind=kind, serial=serial, priority=priority, source=source,
+                            relay_session_id=relay_session_id, frida_host=frida_host, **kw)
 
     monkeypatch.setattr(engine, "submit", spy_submit)
 
@@ -598,6 +631,101 @@ def test_queue_batch_propagates_source_and_serial_to_every_submit(monkeypatch, c
     assert len(calls) == 2
     assert all(c["source"] == "device" for c in calls)
     assert all(c["serial"] == "ZY22GPM27J" for c in calls)
+
+
+# ── Relay para el batch (gap encontrado en vivo, 2026-08-05) ────────────────
+# El batch (y el aipwn que encadena con then_aipwn=true) no tenía forma de
+# usar el relay -- ni el campo en el payload, ni el checkbox en el frontend.
+# Mismos chequeos/mensajes que queue_add (comparten _resolve_relay).
+
+def test_queue_batch_relay_requires_serial(client):
+    r = client.post("/api/queue/batch", json={"targets": ["com.example.app"], "relay": True})
+    assert r.status_code == 400
+
+
+def test_queue_batch_relay_400_without_relay_session(client):
+    r = client.post("/api/queue/batch", json={
+        "targets": ["com.example.app"], "relay": True, "serial": "no-existe",
+    })
+    assert r.status_code == 400
+
+
+def test_queue_batch_relay_propagates_to_static_jobs(monkeypatch, client, engine):
+    session = _asyncio.run(_relay_manager.get_or_create("device-batch-1"))
+    session.attach_websocket(_FakeRelayWs())
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    r = client.post("/api/queue/batch", json={
+        "targets": ["com.app.one", "com.app.two"],
+        "relay": True, "serial": "device-batch-1", "then_aipwn": False,
+    })
+    assert r.status_code == 200
+    _wait_for_drain(engine)
+
+    conn = db.connect(engine.db_path)
+    try:
+        rows = repository.list_jobs(conn, limit=10)
+    finally:
+        conn.close()
+    batch_rows = [r for r in rows if r["target"] in ("com.app.one", "com.app.two")]
+    assert len(batch_rows) == 2
+    assert all(r["relay_session_id"] == "device-batch-1" for r in batch_rows)
+    assert all(r["frida_host"] == f"127.0.0.1:{session.ports['frida']}" for r in batch_rows)
+
+
+def test_queue_batch_relay_propagates_to_chained_aipwn(monkeypatch, client, engine):
+    """El aipwn que then_aipwn dispara después de cada static job OK también
+    tiene que llevar el mismo relay_session_id/frida_host -- si no, el batch
+    estático anda bien vía relay pero el aipwn encadenado pierde el túnel."""
+    session = _asyncio.run(_relay_manager.get_or_create("device-batch-2"))
+    session.attach_websocket(_FakeRelayWs())
+
+    calls = []
+    real_submit = engine.submit
+
+    def spy_submit(target, kind="static", **kw):
+        calls.append({"target": target, "kind": kind, **kw})
+        return real_submit(target, kind=kind, **kw)
+
+    monkeypatch.setattr(engine, "submit", spy_submit)
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        # Mismo mecanismo que test_queue_batch_chains_aipwn_after_each_
+        # successful_static_job -- el package de un job estático OK se
+        # resuelve vía link_job_run(), no parseando stdout.
+        if "scan" in cmd:
+            job_id = int(env["NUTCRACKER_QUEUE_JOB_ID"])
+            pkg = cmd[cmd.index("scan") + 1]
+            conn = db.connect(engine.db_path)
+            try:
+                run_id = repository.insert_run(conn, pkg, kind="static", status="done")
+                repository.link_job_run(conn, job_id, run_id, pkg)
+            finally:
+                conn.close()
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    r = client.post("/api/queue/batch", json={
+        "targets": ["com.app.one"], "relay": True, "serial": "device-batch-2", "then_aipwn": True,
+    })
+    assert r.status_code == 200
+    _wait_for_drain(engine)
+    # then_aipwn corre en un segundo hilo de fondo (después del primer
+    # drain) -- esperar un poco más a que también termine.
+    import time as _time
+    deadline = _time.monotonic() + 5
+    while not any(c["kind"] == "aipwn" for c in calls) and _time.monotonic() < deadline:
+        _time.sleep(0.05)
+
+    aipwn_calls = [c for c in calls if c["kind"] == "aipwn"]
+    assert aipwn_calls, "el aipwn encadenado nunca se encoló"
+    assert aipwn_calls[0]["relay_session_id"] == "device-batch-2"
+    assert aipwn_calls[0]["frida_host"] == f"127.0.0.1:{session.ports['frida']}"
 
 
 

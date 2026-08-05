@@ -128,7 +128,10 @@
         <option value="">fuente: store (default)</option>
         <option value="device">fuente: device instalado</option>
       </select>
-      <input id="batch-serial" placeholder="serial (si source=device)" style="width:180px">
+      <input id="batch-serial" placeholder="serial / session id de relay" style="width:180px">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) -- aplica también al aipwn encadenado.">
+        <input type="checkbox" id="batch-relay" style="width:auto"> vía relay
+      </label>
       <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
         <input type="checkbox" id="batch-then-aipwn" checked style="width:auto"> encadenar aipwn
       </label>
@@ -405,6 +408,7 @@ async function runBatch(){
     source: document.getElementById('batch-source').value || null,
     serial: document.getElementById('batch-serial').value.trim() || null,
     then_aipwn: document.getElementById('batch-then-aipwn').checked,
+    relay: document.getElementById('batch-relay').checked,
   };
   await j('/api/queue/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
   refreshQueue();
