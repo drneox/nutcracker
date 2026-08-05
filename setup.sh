@@ -24,12 +24,26 @@ else
             echo "    https://github.com/EFForg/apkeep/releases"
         fi
     else
-        APKEEP_VERSION="0.10.0"
-        APKEEP_URL="https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-musl"
+        # Resuelto en vivo, no fijo a mano -- una versión pineada rompió sola
+        # cuando apkeep cortó un major (0.10.0 -> 1.0.0) y borró el asset
+        # viejo del release (404). Fallback a un tag conocido si la API de
+        # GitHub no responde (rate limit, sin red).
+        APKEEP_VERSION="$(curl -fsSL https://api.github.com/repos/EFForg/apkeep/releases/latest \
+            | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+        if [[ -z "$APKEEP_VERSION" ]]; then
+            APKEEP_VERSION="1.0.0"
+            echo "    (no se pudo resolver la última versión vía GitHub API, usando ${APKEEP_VERSION} fijo)"
+        fi
+        APKEEP_URL="https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-gnu"
         echo "    Descargando apkeep ${APKEEP_VERSION}..."
-        curl -fsSL "$APKEEP_URL" -o /usr/local/bin/apkeep
-        chmod +x /usr/local/bin/apkeep
-        echo "    apkeep instalado en /usr/local/bin/apkeep"
+        if curl -fsSL "$APKEEP_URL" -o /usr/local/bin/apkeep; then
+            chmod +x /usr/local/bin/apkeep
+            echo "    apkeep instalado en /usr/local/bin/apkeep"
+        else
+            echo "    AVISO: no se pudo descargar apkeep ${APKEEP_VERSION} (¿cambió el nombre del"
+            echo "    asset de nuevo?). Instalalo a mano desde:"
+            echo "    https://github.com/EFForg/apkeep/releases"
+        fi
     fi
 fi
 
