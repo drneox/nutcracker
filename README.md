@@ -776,7 +776,7 @@ WebCodecs API. It's the project's first JS subproject
 
 ```bash
 cd nutcracker_core/plugins/dashboard/webusb
-npm install && npm run build
+corepack enable && pnpm install && pnpm run build
 ```
 
 This produces a self-contained bundle (the real `scrcpy-server` binary ends up embedded inside it

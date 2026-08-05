@@ -12,10 +12,21 @@ la misma librería que usa [app.webadb.com](https://app.webadb.com).
 
 ## ✅ Estado de esta copia
 
+**Migrado de npm a pnpm (2026-08-05)**: pnpm bloquea por defecto los scripts
+`postinstall` de las dependencias (justo el vector de varios ataques de
+supply-chain recientes en el ecosistema npm) — solo se aprobó explícitamente
+el de `esbuild` (necesario, baja el binario nativo de la plataforma; ver
+`pnpm-workspace.yaml`). Se activa vía `corepack` (viene con Node 16.9+), que
+fija la versión exacta de pnpm via el campo `packageManager` de
+`package.json` — instalación reproducible sin depender de qué pnpm tengas
+instalado global. Reverificado en vivo tras la migración: `pnpm install` (125
+paquetes) + `pnpm run build` produce un bundle **byte a byte idéntico** al
+que generaba npm, y `pnpm run check` (`tsc --noEmit`) sigue en 0 errores.
+
 Instalado, typechequeado y compilado de verdad (2026-07-27, con Node.js nativo
 instalado en WSL para esta sesión — ver sección de fricción más abajo):
-- `npm install`: 125 paquetes, sin errores.
-- `npm run check` (`tsc --noEmit` contra los `.d.ts` reales): **0 errores** en
+- `pnpm install`: 125 paquetes, sin errores.
+- `pnpm run check` (`tsc --noEmit` contra los `.d.ts` reales): **0 errores** en
   la segunda pasada. La primera pasada encontró 7 desajustes reales de API
   respecto a lo escrito de memoria (firma de `AdbScrcpyClient.start`/
   `pushServer`, `ScrcpyOptionsLatest` necesita `version` como segundo
@@ -24,7 +35,7 @@ instalado en WSL para esta sesión — ver sección de fricción más abajo):
   `Promise | undefined`, no un método) — corregidos leyendo los `.d.ts` reales
   en `node_modules/@yume-chan/*/esm/*.d.ts`, exactamente para eso sirve este
   paso antes de confiar en el código.
-- `npm run build`: bundle real de **315.21 KB** + chunk de worker de
+- `pnpm run build`: bundle real de **315.21 KB** + chunk de worker de
   **173.49 KB** (`static/webusb-video.bundle.js` + `static/assets/worker-*.js`)
   — coincide con el orden de magnitud documentado en `plan.md`
   (~290-294KB + ~174KB de worker).
@@ -52,19 +63,21 @@ Si en algún momento algo de esto deja de compilar (los paquetes `@yume-chan/*`
 son activamente desarrollados), el flujo de diagnóstico es siempre el mismo:
 
 ```bash
-npm install
-npm run check   # tsc --noEmit contra los tipos reales -- la fuente de verdad
+corepack enable   # una vez -- activa pnpm en la versión fijada por package.json
+pnpm install
+pnpm run check   # tsc --noEmit contra los tipos reales -- la fuente de verdad
 ```
 
-Si `@yume-chan/*` cambió su API desde que se escribió esto, `npm run check`
+Si `@yume-chan/*` cambió su API desde que se escribió esto, `pnpm run check`
 va a señalar exactamente qué import/firma ya no aplica.
 
 ## Build
 
 ```bash
 cd nutcracker_core/plugins/dashboard/webusb
-npm install
-npm run build
+corepack enable
+pnpm install
+pnpm run build
 ```
 
 Esto produce `../static/webusb-video.bundle.js` (+ un chunk de worker) — el
@@ -81,8 +94,8 @@ modo.
 
 ## Fricción conocida: Node/npm en WSL
 
-Si tu `node`/`npm` en WSL resuelven al `.exe` de Windows vía interop (typico si
-solo tenés Node instalado en Windows), `npm install` puede funcionar pero
+Si tu `node` en WSL resuelve al `.exe` de Windows vía interop (típico si
+solo tenés Node instalado en Windows), la instalación puede funcionar pero
 **`vite build` falla** resolviendo su propio paquete al cruzar el path UNC
 (`\\wsl.localhost\...`) — visto en vivo, dos veces, contra hardware real:
 
