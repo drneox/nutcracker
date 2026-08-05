@@ -28,17 +28,42 @@ else
         # cuando apkeep cortó un major (0.10.0 -> 1.0.0) y borró el asset
         # viejo del release (404). Fallback a un tag conocido si la API de
         # GitHub no responde (rate limit, sin red).
-        APKEEP_VERSION="$(curl -fsSL https://api.github.com/repos/EFForg/apkeep/releases/latest \
-            | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+        #
+        # OJO: curl se captura primero en una variable (command substitution
+        # lee hasta EOF) y RECIÉN DESPUÉS se le hace grep -m1 -- si el pipe
+        # fuera directo (curl | grep -m1 | sed), grep corta la lectura apenas
+        # encuentra el primer match y cierra su extremo del pipe, y curl
+        # termina en SIGPIPE a mitad de escritura -- imprime un
+        # "curl: (23) Failure writing output to destination" que parece un
+        # error real (confundió a un usuario en vivo) pero es cosmético: el
+        # valor ya estaba capturado igual. Evitado de raíz, no silenciado.
+        APKEEP_RELEASE_JSON="$(curl -fsSL https://api.github.com/repos/EFForg/apkeep/releases/latest)"
+        APKEEP_VERSION="$(echo "$APKEEP_RELEASE_JSON" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
         if [[ -z "$APKEEP_VERSION" ]]; then
             APKEEP_VERSION="1.0.0"
             echo "    (no se pudo resolver la última versión vía GitHub API, usando ${APKEEP_VERSION} fijo)"
         fi
         APKEEP_URL="https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-gnu"
         echo "    Descargando apkeep ${APKEEP_VERSION}..."
-        if curl -fsSL "$APKEEP_URL" -o /usr/local/bin/apkeep; then
-            chmod +x /usr/local/bin/apkeep
-            echo "    apkeep instalado en /usr/local/bin/apkeep"
+        # /usr/local/bin normalmente requiere root -- setup.sh corre como el
+        # usuario normal (a propósito, ver deploy/README.md: el dashboard no
+        # debe correr como root). Si /usr/local/bin es escribible (root, o un
+        # setup con permisos relajados) se usa igual; si no, cae a
+        # ~/.local/bin (estándar XDG, normalmente ya en el PATH de Ubuntu).
+        if [[ -w /usr/local/bin ]]; then
+            APKEEP_DEST="/usr/local/bin/apkeep"
+        else
+            mkdir -p "$HOME/.local/bin"
+            APKEEP_DEST="$HOME/.local/bin/apkeep"
+        fi
+        if curl -fsSL "$APKEEP_URL" -o "$APKEEP_DEST"; then
+            chmod +x "$APKEEP_DEST"
+            echo "    apkeep instalado en $APKEEP_DEST"
+            if [[ "$APKEEP_DEST" == "$HOME/.local/bin/apkeep" ]] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+                echo "    AVISO: ~/.local/bin no está en tu PATH todavía. Agregá a tu ~/.bashrc:"
+                echo "        export PATH=\"\$HOME/.local/bin:\$PATH\""
+                echo "    y abrí una terminal nueva (o corré ese export ahora mismo)."
+            fi
         else
             echo "    AVISO: no se pudo descargar apkeep ${APKEEP_VERSION} (¿cambió el nombre del"
             echo "    asset de nuevo?). Instalalo a mano desde:"
