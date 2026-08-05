@@ -6,6 +6,7 @@ interactivo de Frida en vez de un modo headless."""
 from __future__ import annotations
 
 import os
+import shutil
 
 from nutcracker_core import orchestrator as orch
 
@@ -424,3 +425,70 @@ def test_do_vuln_scan_leak_only_path_still_adds_comp_findings(monkeypatch, tmp_p
     assert scan_result is not None
     rule_ids = [f.rule_id for f in scan_result.findings]
     assert "COMP008" in rule_ids, "el hallazgo COMP del manifest se perdía en el camino sin vuln_scan"
+
+
+# ── toolbox de Docker ignorado en la detección de jadx (bug en vivo, VM real) ──
+# Reportado en vivo (2026-08-05): con toolbox.enabled=true en config.yaml y
+# SIN jadx instalado localmente en la VM, el job igual fallaba con "No se
+# encontró ningún decompilador" -- dos chequeos separados llamaban a
+# shutil.which("jadx")/get_available_tool() SIN pasarles el config, así que
+# nunca veían el toolbox como alternativa válida.
+
+def test_do_decompile_detects_toolbox_without_local_jadx(monkeypatch, tmp_path):
+    # auto.unattended + sast_scan/leak_scan en false: solo interesa que pase
+    # el chequeo de disponibilidad del decompilador, no ejercitar el resto del
+    # flujo (vuln-scan/manifest/OSINT), que no es lo que este test cubre.
+    monkeypatch.setattr(orch, "_CFG", {
+        "toolbox": {"enabled": True},
+        "auto": {"unattended": True},
+        "features": {"manifest_scan": False, "sast_scan": False, "leak_scan": False},
+    })
+    monkeypatch.setattr(shutil, "which", lambda name: None)  # nada instalado local
+
+    calls = []
+    fake_dest = tmp_path / "decompiled" / "pkg"
+    fake_dest.mkdir(parents=True)
+    monkeypatch.setattr(
+        orch, "decompile",
+        lambda apk_path, output_dir, dest_name=None, config=None: calls.append(config) or fake_dest,
+    )
+
+    apk = tmp_path / "app.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    orch._do_decompile(apk, "com.example.app")
+
+    # _do_decompile() devuelve el resultado del vuln-scan (None acá, porque
+    # sast_scan/leak_scan están apagados a propósito) -- lo que este test
+    # verifica es que SÍ llegó a invocar decompile() con el toolbox habilitado
+    # en vez de cortar antes con "no se encontró ningún decompilador".
+    assert calls, "decompile() nunca se invocó -- el chequeo de disponibilidad cortó antes de tiempo"
+    assert calls[0]["toolbox"] == {"enabled": True}
+    monkeypatch.setattr(orch, "_CFG", {})
+
+
+def test_do_decompile_without_toolbox_and_without_local_jadx_fails_as_before(monkeypatch, tmp_path, capsys):
+    """Retrocompatibilidad: sin toolbox y sin binario local, debe seguir
+    fallando limpio (no debe "inventar" disponibilidad de la nada)."""
+    monkeypatch.setattr(orch, "_CFG", {})
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    apk = tmp_path / "app.apk"
+    apk.write_bytes(b"PK\x03\x04")
+
+    result = orch._do_decompile(apk, "com.example.app")
+
+    assert result is None
+
+
+def test_validate_all_dependencies_accepts_toolbox_for_jadx(monkeypatch):
+    monkeypatch.setattr(orch, "_CFG", {
+        "toolbox": {"enabled": True},
+        "pipelines": {"unprotected": {"decompilation_jadx": True}},
+    })
+    monkeypatch.setattr(shutil, "which", lambda name: None if name != "adb" else "/usr/bin/adb")
+
+    ok = orch._validate_all_dependencies(protected=False)
+
+    assert ok is True, "con toolbox habilitado, jadx no debería reportarse como dependencia faltante"
+    monkeypatch.setattr(orch, "_CFG", {})

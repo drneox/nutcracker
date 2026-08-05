@@ -24,7 +24,9 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from nutcracker_core.analyzer import APKAnalyzer
 from nutcracker_core.config import get as cfg_get
-from nutcracker_core.decompiler import decompile, get_available_tool, install_instructions, DecompilerError
+from nutcracker_core.decompiler import (
+    decompile, get_available_tool, install_instructions, DecompilerError, _find_tool,
+)
 from nutcracker_core.deobfuscator import (
     apply_decrypt_map,
     check_adb,
@@ -392,7 +394,12 @@ def _validate_all_dependencies(protected: bool = True) -> bool:
     if decompilation_enabled:
         decompilation_mode = _pipeline_decompilation_mode(protected)
         if decompilation_mode == "jadx":
-            if not _shutil.which("jadx"):
+            # FIX (mismo bug reportado en vivo que _do_decompile, 2026-08-05):
+            # shutil.which("jadx") a secas ignora el toolbox de Docker por
+            # completo -- con toolbox.enabled=true en config.yaml, jadx "está
+            # disponible" vía el contenedor aunque no exista el binario local
+            # (ver decompiler._find_tool/toolbox.STATIC_TOOLS).
+            if not _find_tool("jadx", _CFG):
                 errors.append(t("cli_dep_jadx_missing"))
 
     # ── Desofuscación runtime ─────────────────────────────────────────────────
@@ -1184,7 +1191,13 @@ def _print_manifest_report(analysis) -> None:
 
 def _do_decompile(apk_path: Path, package: str) -> Path | None:
     """Ejecuta la decompilación con feedback en consola. Devuelve el directorio o None."""
-    tool, _ = get_available_tool()
+    # FIX (reportado en vivo, 2026-08-05): faltaba pasar config=_CFG acá --
+    # get_available_tool() sin config nunca ve el toolbox de Docker como
+    # disponible (toolbox.is_enabled(None) siempre da False), así que con
+    # toolbox.enabled=true en config.yaml este chequeo igual cortaba con
+    # "no hay decompilador" antes de llegar a la línea de abajo, que sí
+    # pasaba config=_CFG correctamente a decompile().
+    tool, _ = get_available_tool(config=_CFG)
     if tool is None:
         console.print(f"[red]✘[/red] {install_instructions()}")
         return None
