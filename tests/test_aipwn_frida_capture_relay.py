@@ -22,7 +22,85 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import patch
 
-from nutcracker_core.plugins.aipwn.frida_capture import launch_frida_capture, setup_frida_server
+from nutcracker_core.plugins.aipwn.frida_capture import (
+    _resolve_frida_server_path,
+    launch_frida_capture,
+    setup_frida_server,
+)
+
+
+# ── _resolve_frida_server_path -- mismatch cliente/server (bug real, 2026-08-21) ──
+#
+# Encontrado en vivo: el device tenía varias versiones de frida-server
+# guardadas (16.2.2, 16.2.3, 17.15.4, 17.16.4, 17.5.0), incluyendo una que
+# coincidía EXACTO con el cliente Frida del host (17.16.4) -- pero el código
+# siempre lanzaba /data/local/tmp/frida-server (sin sufijo, una versión
+# distinta), causando fallos de conexión silenciosos/confusos.
+
+def test_resolve_frida_server_path_uses_versioned_binary_when_present():
+    calls = []
+
+    def fake_shell(cmd: str) -> str:
+        calls.append(cmd)
+        return "/data/local/tmp/frida-server-17.16.4\n"
+
+    with patch("frida.__version__", "17.16.4", create=True):
+        path = _resolve_frida_server_path([], shell_fn=fake_shell)
+
+    assert path == "/data/local/tmp/frida-server-17.16.4"
+    assert "17.16.4" in calls[0]
+
+
+def test_resolve_frida_server_path_falls_back_without_versioned_match():
+    def fake_shell(cmd: str) -> str:
+        return ""  # ls no encontró nada -- ningún binario con esa versión
+
+    with patch("frida.__version__", "17.16.4", create=True):
+        path = _resolve_frida_server_path([], shell_fn=fake_shell)
+
+    assert path == "/data/local/tmp/frida-server"
+
+
+def test_resolve_frida_server_path_serial_mode_uses_adb_run(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return type("R", (), {"stdout": "/data/local/tmp/frida-server-17.16.4\n", "returncode": 0})()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    with patch("frida.__version__", "17.16.4", create=True):
+        path = _resolve_frida_server_path(["adb", "-s", "ABC"])
+
+    assert path == "/data/local/tmp/frida-server-17.16.4"
+    assert calls[0][:3] == ["adb", "-s", "ABC"]
+
+
+def test_resolve_frida_server_path_never_raises_on_shell_error():
+    def broken_shell(cmd: str) -> str:
+        raise RuntimeError("relay desconectado")
+
+    path = _resolve_frida_server_path([], shell_fn=broken_shell)
+
+    assert path == "/data/local/tmp/frida-server"
+
+
+def test_setup_frida_server_kills_by_pattern_not_just_exact_name():
+    """killall frida-server solo mata el proceso si su nombre es EXACTO --
+    si estaba corriendo como frida-server-17.16.4 (de un intento previo), el
+    pkill -f de respaldo (matchea por substring en el comando completo) sí
+    lo alcanza, evitando choque de puerto en el reinicio."""
+    calls = []
+
+    def fake_shell(cmd: str) -> str:
+        calls.append(cmd)
+        return ""
+
+    setup_frida_server(adb_args=[], package="com.example.app", shell_fn=fake_shell)
+
+    kill_cmd = next(c for c in calls if "killall" in c)
+    assert "pkill -f frida-server" in kill_cmd
 
 
 def test_setup_frida_server_with_shell_fn_never_touches_subprocess():
@@ -145,15 +223,19 @@ def test_launch_frida_capture_with_shell_fn_never_touches_subprocess_for_device(
 
 def test_setup_frida_server_without_shell_fn_keeps_old_behavior(monkeypatch):
     """Sin shell_fn (default None) -- comportamiento de siempre: shellea a un
-    adb real vía subprocess.run. Cero cambios para CLI/jobs existentes."""
+    adb real vía subprocess.run. Cero cambios de fondo para CLI/jobs
+    existentes (el único agregado es el `ls` de _resolve_frida_server_path,
+    que sin binario versionado listado cae al path de siempre)."""
     calls = []
     monkeypatch.setattr(
         "subprocess.run",
-        lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 0})(),
+        lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 0, "stdout": ""})(),
     )
 
     result = setup_frida_server(adb_args=["adb", "-s", "ABC"], package="com.example.app")
 
     assert result is True
-    assert len(calls) == 3  # killall, start server, force-stop
+    # ls (resolución de versión, sin match -> cae a default), killall, start server, force-stop
+    assert len(calls) == 4
     assert calls[0][:3] == ["adb", "-s", "ABC"]
+    assert "nohup /data/local/tmp/frida-server" in " ".join(calls[2])

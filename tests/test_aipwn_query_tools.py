@@ -357,6 +357,74 @@ def test_device_io_serial_logcat_returns_partial_output_on_timeout(monkeypatch):
     assert out == "partial logcat output\n"
 
 
+# ── get_logcat -- expone DeviceIO.logcat() directo al LLM sin necesidad de
+# escribir un script Frida (pedido explícito del usuario, 2026-08-21: la
+# plomería de logcat ya existía internamente para run_frida_script, pero
+# nunca se había expuesto como tool propia) ──────────────────────────────────
+
+def test_get_logcat_without_device_reports_error(tmp_path):
+    ctx = _make_ctx("com.example.app")
+    result = json.loads(dispatch_query_tool(
+        ctx, "get_logcat", {}, db_path=str(tmp_path / "x.db"), device=None,
+    ))
+    assert "error" in result
+
+
+def test_get_logcat_serial_clears_buffer_then_captures(monkeypatch, tmp_path):
+    shell_calls = []
+
+    def fake_run(cmd, **kw):
+        shell_calls.append(cmd)
+        return type("R", (), {"stdout": "", "returncode": 0})()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    class _FakeProc:
+        def communicate(self, timeout=None):
+            return ("line one\nline two\n", "")
+
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: _FakeProc())
+
+    ctx = _make_ctx("com.example.app")
+    device = DeviceIO(serial="ABC")
+
+    result = json.loads(dispatch_query_tool(
+        ctx, "get_logcat", {"duration_seconds": 5}, db_path=str(tmp_path / "x.db"), device=device,
+    ))
+
+    # logcat -c corrió primero, vía shell() (subprocess.run) -- no Popen.
+    assert any(c == ["adb", "-s", "ABC", "shell", "logcat -c"] for c in shell_calls)
+    assert result["line_count"] == 2
+    assert result["lines"] == ["line one", "line two"]
+
+
+def test_get_logcat_relay_uses_dedicated_rpc(tmp_path):
+    import asyncio
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        session = _FakeRelaySession()
+        device = DeviceIO(relay_session=session, loop=loop)
+        ctx = _make_ctx("com.example.app")
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            result = await loop.run_in_executor(
+                ex, lambda: dispatch_query_tool(
+                    ctx, "get_logcat", {"duration_seconds": 5, "filter_spec": "*:W SSL:E"},
+                    db_path="x.db", device=device,
+                ),
+            )
+
+        data = json.loads(result)
+        assert data["duration_seconds"] == 5
+        ops = [c[0] for c in session.calls]
+        assert ops == ["shell", "logcat"]  # clear (shell) primero, después la captura
+        assert session.calls[1][1]["args"] == ["*:W", "SSL:E"]
+
+    asyncio.run(_run())
+
+
 def test_dispatch_query_tool_ui_tap_without_device_reports_error(tmp_path):
     ctx = _make_ctx("com.example.app")
     result = json.loads(dispatch_query_tool(
