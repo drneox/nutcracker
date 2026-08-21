@@ -14,7 +14,9 @@ import pytest
 
 from nutcracker_core.plugins.aipwn.frida_agent_tools import ToolContext
 from nutcracker_core.plugins.aipwn.query_tools import (
+    _RUNTIME_DEVICE_TOOL_NAMES,
     DeviceIO,
+    _check_device_ready,
     dispatch_query_tool,
     tool_get_exploit_results,
     tool_get_finding_detail,
@@ -281,6 +283,8 @@ class _FakeRelaySession:
             return {"data_b64": base64.b64encode(b"\x89PNGrelaydata").decode()}
         if op == "shell":
             return {"stdout": "relay-output"}
+        if op == "logcat":
+            return {"stdout": "logcat-window-output"}
         raise AssertionError(f"unexpected op {op}")
 
 
@@ -306,6 +310,51 @@ def test_device_io_relay_screencap_and_shell(tmp_path):
         assert session.calls[1] == ("shell", {"command": "input keyevent 4"})
 
     asyncio.run(_run())
+
+
+def test_device_io_relay_logcat_uses_dedicated_rpc_op(tmp_path):
+    """logcat nunca termina solo -- va por un RPC dedicado con
+    duration_seconds, NO el "shell" genérico (mismo criterio que ya usa
+    toolbox/relay_adb_shim/adb::_cmd_logcat para jobs de la cola)."""
+    import asyncio
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        session = _FakeRelaySession()
+        device = DeviceIO(relay_session=session, loop=loop)
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            out = await loop.run_in_executor(ex, lambda: device.logcat(duration_seconds=5))
+
+        assert out == "logcat-window-output"
+        assert session.calls[0][0] == "logcat"
+        assert session.calls[0][1]["duration_seconds"] == 5
+
+    asyncio.run(_run())
+
+
+def test_device_io_serial_logcat_returns_partial_output_on_timeout(monkeypatch):
+    """adb logcat nunca termina solo -- a diferencia de shell(), el timeout
+    acá es el flujo esperado (se corta el proceso y se devuelve lo
+    capturado), no una excepción sin manejar."""
+    import subprocess as subprocess_mod
+
+    class _FakeProc:
+        def communicate(self, timeout=None):
+            if timeout is not None and not getattr(self, "_terminated", False):
+                raise subprocess_mod.TimeoutExpired(cmd="adb logcat", timeout=timeout)
+            return ("partial logcat output\n", "")
+
+        def terminate(self):
+            self._terminated = True
+
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: _FakeProc())
+    device = DeviceIO(serial="ABC123")
+
+    out = device.logcat(duration_seconds=2)
+
+    assert out == "partial logcat output\n"
 
 
 def test_dispatch_query_tool_ui_tap_without_device_reports_error(tmp_path):
@@ -347,3 +396,111 @@ def test_dispatch_query_tool_missing_required_arg_does_not_crash(tmp_path):
         ctx, "get_finding_detail", {}, db_path=str(tmp_path / "x.db"), device=None,
     ))
     assert "error" in result
+
+
+# ── Preflight uniforme de device (_check_device_ready) ───────────────────────
+#
+# Bug encontrado en vivo (2026-08-21, sesión real de "Pentest asistido"): sin
+# device configurado / sin `adb` instalado, cada tool dinámica reusada de
+# frida_agent_tools.py fallaba a su manera propia -- sniff_network_calls
+# enterraba "ERROR: adb no encontrado" en texto crudo, run_frida_script
+# devolvía app_running=False con una nota que ni mencionaba adb (parecía
+# detección anti-Frida), enumerate_runtime_classes lo envolvía en "no se pudo
+# parsear la respuesta de Frida". El LLM no podía reconocer que las tres eran
+# el mismo problema y reintentaba herramientas distintas a ciegas. Estos
+# tests cubren el preflight que unifica la señal ANTES de tocar adb/Frida.
+
+def test_check_device_ready_no_device_at_all(tmp_path):
+    ctx = _make_ctx("com.example.app")  # serial=None (default de _make_ctx)
+    error = _check_device_ready(ctx, device=None, name="run_frida_script")
+    assert error is not None
+    assert "no hay ningún dispositivo" in error
+
+
+def test_check_device_ready_missing_adb_binary(monkeypatch, tmp_path):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    ctx = _make_ctx("com.example.app")
+    device = DeviceIO(serial="ABC123")  # hay device, pero no adb en PATH
+
+    error = _check_device_ready(ctx, device, name="enumerate_runtime_classes")
+
+    assert error is not None
+    assert "adb" in error
+
+
+def test_check_device_ready_ok_when_device_and_adb_present(monkeypatch, tmp_path):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/adb")
+    ctx = ToolContext(
+        package="com.example.app", decompiled_dir=None, analysis_result=None,
+        serial="ABC123", capture_seconds=15, scripts_dir=Path("/tmp"),
+        on_frida_run=lambda script_js, rationale, iteration: None,
+    )
+    device = DeviceIO(serial="ABC123")
+
+    assert _check_device_ready(ctx, device, name="enumerate_runtime_classes") is None
+
+
+# ── Relay: TODAS las tools dinámicas del catálogo actual funcionan ──────────
+# (fix del 2026-08-21: _run_frida_query ya no exige adb con frida_host seteado
+# -- nunca lo usaba de verdad --, y ctx.device_shell/device_logcat cubren
+# launch_frida_capture + _run_frida_spawngated).
+
+def test_check_device_ready_relay_all_current_dynamic_tools_are_ready(tmp_path):
+    ctx = ToolContext(
+        package="com.example.app", decompiled_dir=None, analysis_result=None,
+        serial=None, frida_host="127.0.0.1:12345", capture_seconds=15, scripts_dir=Path("/tmp"),
+        on_frida_run=lambda script_js, rationale, iteration: None,
+    )
+    device = DeviceIO(relay_session=object(), loop=object())
+
+    for name in _RUNTIME_DEVICE_TOOL_NAMES:
+        assert _check_device_ready(ctx, device, name=name) is None, f"{name} debería estar listo en relay"
+
+
+def test_check_device_ready_relay_unknown_tool_still_reports_unsupported(tmp_path):
+    """Red de seguridad: una tool dinámica futura que no se agregue a
+    _RELAY_READY_REUSED_TOOL_NAMES/_OWN_DEVICE_TOOL_NAMES debe seguir
+    rechazándose con un mensaje claro en vez de dejarse pasar por descuido."""
+    ctx = ToolContext(
+        package="com.example.app", decompiled_dir=None, analysis_result=None,
+        serial=None, frida_host="127.0.0.1:12345", capture_seconds=15, scripts_dir=Path("/tmp"),
+        on_frida_run=lambda script_js, rationale, iteration: None,
+    )
+    device = DeviceIO(relay_session=object(), loop=object())
+
+    error = _check_device_ready(ctx, device, name="some_future_dynamic_tool")
+
+    assert error is not None
+    assert "no soporta el modo relay" in error
+
+
+def test_dispatch_query_tool_reused_runtime_tool_short_circuits_without_device(tmp_path, monkeypatch):
+    """run_frida_script (reusada de frida_agent_tools.py) NUNCA debe llegar a
+    tocar subprocess/adb si no hay device configurado -- antes de este fix,
+    delegaba directo a _aipwn_dispatch_tool y el error salía confuso."""
+    called = []
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: called.append(a) or (_ for _ in ()).throw(
+        AssertionError("no debería llamar a subprocess.run sin device configurado"),
+    ))
+    ctx = _make_ctx("com.example.app")
+
+    result = json.loads(dispatch_query_tool(
+        ctx, "run_frida_script", {"script_js": "console.log(1)", "rationale": "test"},
+        db_path=str(tmp_path / "x.db"), device=None,
+    ))
+
+    assert "error" in result
+    assert "no hay ningún dispositivo" in result["error"]
+    assert not called
+
+
+def test_dispatch_query_tool_get_frida_output_history_ignores_preflight(tmp_path):
+    """No es una tool de device -- debe funcionar (con su propio resultado
+    vacío/error de negocio) incluso sin device conectado, no debe pisarla el
+    preflight de _RUNTIME_DEVICE_TOOL_NAMES."""
+    ctx = _make_ctx("com.example.app")
+    result = dispatch_query_tool(
+        ctx, "get_frida_output_history", {}, db_path=str(tmp_path / "x.db"), device=None,
+    )
+    # No es el mensaje del preflight de device -- distinto código de error/negocio.
+    assert "no hay ningún dispositivo conectado a esta sesión de chat" not in result

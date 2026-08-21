@@ -115,6 +115,52 @@ def test_ask_llm_error_yields_error_event_and_stops(tmp_path):
     assert "boom" in events[0].data["text"]
 
 
+# ── _execute_frida: wiring de shell_fn/logcat_fn en modo relay ─────────────
+#
+# Bug encontrado en vivo (2026-08-21): en modo relay no hay ningún `adb`
+# local con ruta al device -- el mecanismo que lo arregla para jobs de la
+# cola (toolbox/relay_adb_shim/adb, PATH del SUBPROCESO) nunca se activa acá
+# porque QueryAgent corre in-process. _execute_frida debe inyectar
+# shell_fn/logcat_fn (respaldados por DeviceIO -> RPC del relay) en ese caso,
+# y NO inyectar nada en modo serial/sin device (comportamiento de siempre).
+
+def test_execute_frida_wires_shell_fn_in_relay_mode(tmp_path):
+    from nutcracker_core.plugins.aipwn.query_tools import DeviceIO
+
+    device = DeviceIO(relay_session=object(), loop=object())
+    agent = _make_agent(tmp_path, device=device)
+
+    captured = {}
+
+    def fake_launch(**kwargs):
+        captured.update(kwargs)
+        from nutcracker_core.plugins.aipwn.frida_capture import FridaRunResult
+        return FridaRunResult(iteration=1, script_js="", output="", logcat="")
+
+    with patch("nutcracker_core.plugins.aipwn.frida_capture.launch_frida_capture", fake_launch):
+        agent._execute_frida("console.log(1)", "test", 1)
+
+    assert captured["shell_fn"] == device.shell
+    assert callable(captured["logcat_fn"])
+
+
+def test_execute_frida_does_not_wire_shell_fn_without_relay(tmp_path):
+    agent = _make_agent(tmp_path, device=None)  # sin device -- modo estático/serial
+
+    captured = {}
+
+    def fake_launch(**kwargs):
+        captured.update(kwargs)
+        from nutcracker_core.plugins.aipwn.frida_capture import FridaRunResult
+        return FridaRunResult(iteration=1, script_js="", output="", logcat="")
+
+    with patch("nutcracker_core.plugins.aipwn.frida_capture.launch_frida_capture", fake_launch):
+        agent._execute_frida("console.log(1)", "test", 1)
+
+    assert captured["shell_fn"] is None
+    assert captured["logcat_fn"] is None
+
+
 def test_second_ask_call_continues_same_conversation(tmp_path):
     """Cada ``ask()`` agrega al mismo self.messages -- la conversación
     persiste entre turnos (a diferencia de una request/response sin estado)."""
