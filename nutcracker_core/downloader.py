@@ -412,6 +412,9 @@ def download_apk_from_config(
       - Si ``package`` es una URL directa a un .apk → DirectURLDownloader
       - Si ``source="device"`` → DeviceInstalledDownloader (``adb pull`` del APK
         ya instalado, sin tocar ninguna store -- ver ``serial``)
+      - Si ``source="device-or-store"`` → igual que "device", pero si el
+        dispositivo no está conectado o la app no está instalada, cae a la
+        store automáticamente en vez de fallar (ver batchero del dashboard)
       - Si ``source="google-play"`` o hay email configurado → GooglePlayDownloader
       - En caso contrario → APKPureDownloader (fallback sin autenticación)
 
@@ -419,8 +422,9 @@ def download_apk_from_config(
         package:           Package ID (ej. com.example.app), URL de Google Play
                            o URL directa a un .apk.
         config:            Diccionario de configuración (cargado desde config.yaml).
-        source:            Forzar fuente: ``"google-play"``, ``"apk-pure"``, ``"device"`` o
-                           ``None`` para auto-detección.
+        source:            Forzar fuente: ``"google-play"``, ``"apk-pure"``,
+                           ``"device"``, ``"device-or-store"`` o ``None`` para
+                           auto-detección.
         output_dir:        Directorio de salida para el APK descargado.
         use_cache:         Si True, reutiliza el APK si ya existe (solo URL directa).
         progress_callback: ``callable(downloaded_bytes, total_bytes | None)``
@@ -459,6 +463,22 @@ def download_apk_from_config(
         return DeviceInstalledDownloader(output_dir=output_dir, serial=serial).download(
             _extract_package_id(package)
         )
+
+    # ── Dispositivo con fallback a store (feature del batchero, 2026-08-05) ──
+    # Igual que "device", pero si el pull falla (dispositivo no conectado,
+    # app no instalada, adb no disponible) NO propaga el error -- cae al
+    # auto-selección de abajo (google-play/apk-pure) como si source=None.
+    # Pensado para listas de package IDs donde no se sabe de antemano cuáles
+    # ya están instalados en el device de pruebas y cuáles hay que bajar.
+    if source == "device-or-store":
+        if on_start:
+            on_start("Dispositivo conectado (adb pull), con fallback a store")
+        try:
+            return DeviceInstalledDownloader(output_dir=output_dir, serial=serial).download(
+                _extract_package_id(package)
+            )
+        except APKDownloadError:
+            source = None
 
     # ── Auto-selección de fuente ─────────────────────────────────────────────
     if source is None:

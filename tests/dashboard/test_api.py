@@ -504,9 +504,17 @@ def test_resume_aipwn_preserves_relay_session(monkeypatch, client, engine):
     assert r2.status_code == 200
     new_job_id = r2.json()["job_id"]
 
-    resumed = next(j for j in engine._pending if j.db_id == new_job_id)
-    assert resumed.relay_session_id == "device-resume-1"
-    assert resumed.frida_host == f"127.0.0.1:{session.ports['frida']}"
+    # Leído de la DB (no de engine._pending): resume-aipwn dispara
+    # _drain_in_background, que puede vaciar _pending en un hilo de fondo
+    # antes de que este assert corra -- carrera real, no del código de
+    # producción. La fila de SQLite es la fuente de verdad estable.
+    conn = db.connect(engine.db_path)
+    try:
+        resumed = repository.get_job(conn, new_job_id)
+    finally:
+        conn.close()
+    assert resumed["relay_session_id"] == "device-resume-1"
+    assert resumed["frida_host"] == f"127.0.0.1:{session.ports['frida']}"
 
 
 def test_resume_aipwn_404_without_pending_session(monkeypatch, client, engine):
@@ -548,7 +556,20 @@ def test_queue_batch_rejects_empty_target_list(client):
     assert r.status_code == 400
 
 
-def test_queue_batch_ignores_blank_lines_and_comments(client, engine):
+def test_queue_batch_ignores_blank_lines_and_comments(monkeypatch, client, engine):
+    # FIX (encontrado en vivo, 2026-08-05): este test nunca mockeó
+    # subprocess.run, a diferencia de sus vecinos -- dependía en silencio de
+    # que el subproceso real (scan real, red real a apkpure.com para un
+    # package inventado) terminara "rápido" dentro del timeout de
+    # _wait_for_drain. Con el fallback nuevo de source="device-or-store" por
+    # default (intenta adb antes de caer a la store), ese margen implícito
+    # dejó de alcanzar -- mockeado como el resto de los tests del batch, ya
+    # no depende de red ni de timing real.
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
     r = client.post("/api/queue/batch", json={
         "targets": ["com.app.one", "", "  # comentario", "com.app.two"],
         "then_aipwn": False,
@@ -726,6 +747,106 @@ def test_queue_batch_relay_propagates_to_chained_aipwn(monkeypatch, client, engi
     assert aipwn_calls, "el aipwn encadenado nunca se encoló"
     assert aipwn_calls[0]["relay_session_id"] == "device-batch-2"
     assert aipwn_calls[0]["frida_host"] == f"127.0.0.1:{session.ports['frida']}"
+
+
+# ── classify_batch_target -- fallback por-línea del batchero (2026-08-05) ───
+# Pedido del usuario: cada línea del .txt se resuelve sola según su formato
+# -- "algo.apk" busca en downloads/, un package id intenta el dispositivo con
+# fallback automático a la store, una URL sigue igual que antes.
+
+def test_classify_apk_line_found_in_downloads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "downloads").mkdir()
+    (tmp_path / "downloads" / "app.apk").write_bytes(b"PK\x03\x04")
+
+    target, source, error = api_mod.classify_batch_target("app.apk")
+
+    assert target == "downloads/app.apk"
+    assert source is None
+    assert error is None
+
+
+def test_classify_apk_line_not_found_reports_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "downloads").mkdir()
+
+    target, source, error = api_mod.classify_batch_target("noexiste.apk")
+
+    assert target == "noexiste.apk"  # sin modificar -- solo informativo
+    assert error is not None and "no se encontró" in error
+
+
+def test_classify_apk_line_sanitizes_path_traversal(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "downloads").mkdir()
+    (tmp_path / "downloads" / "evil.apk").write_bytes(b"PK\x03\x04")
+
+    target, source, error = api_mod.classify_batch_target("../../etc/evil.apk")
+
+    assert target == "downloads/evil.apk"
+    assert error is None
+
+
+def test_classify_package_id_defaults_to_device_or_store():
+    target, source, error = api_mod.classify_batch_target("sh.nutcracker.nutbank")
+    assert target == "sh.nutcracker.nutbank"
+    assert source == "device-or-store"
+    assert error is None
+
+
+def test_classify_package_id_respects_explicit_source_override():
+    target, source, error = api_mod.classify_batch_target(
+        "sh.nutcracker.nutbank", payload_source="device",
+    )
+    assert source == "device"  # NO se pisa con "device-or-store"
+
+
+def test_classify_url_line_unaffected():
+    url = "https://play.google.com/store/apps/details?id=com.example.app"
+    target, source, error = api_mod.classify_batch_target(url, payload_source="google-play")
+    assert target == url
+    assert source == "google-play"
+    assert error is None
+
+
+def test_queue_batch_mixed_targets_end_to_end(monkeypatch, tmp_path, client, engine):
+    """Un batch real con las tres formas de línea a la vez: .apk existente,
+    .apk faltante (debe saltarse, no tirar abajo el resto), y un package id
+    (debe encolarse con source=device-or-store)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "downloads").mkdir()
+    (tmp_path / "downloads" / "local.apk").write_bytes(b"PK\x03\x04")
+
+    calls = []
+    real_submit = engine.submit
+
+    def spy_submit(target, kind="static", **kw):
+        calls.append({"target": target, "source": kw.get("source")})
+        return real_submit(target, kind=kind, **kw)
+
+    monkeypatch.setattr(engine, "submit", spy_submit)
+
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+
+    r = client.post("/api/queue/batch", json={
+        "targets": ["local.apk", "missing.apk", "sh.nutcracker.nutbank"],
+        "then_aipwn": False,
+    })
+    _wait_for_drain(engine)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["queued"] == 2
+    assert body["skipped"] == [
+        {"target": "missing.apk", "reason": "no se encontró 'downloads/missing.apk' -- subilo primero o revisá el nombre"},
+    ]
+
+    by_target = {c["target"]: c["source"] for c in calls}
+    assert by_target["downloads/local.apk"] is None
+    assert by_target["sh.nutcracker.nutbank"] == "device-or-store"
 
 
 

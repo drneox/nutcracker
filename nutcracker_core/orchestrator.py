@@ -138,6 +138,12 @@ def build_job_cmd(
     no publicadas en ninguna store (mismo caso que motivó el fix de
     "re-analizar" — pero resuelto desde el origen para apps nunca antes
     analizadas localmente, no solo las que ya tienen un run previo).
+
+    ``source="device-or-store"``: igual que ``"device"``, pero con fallback
+    automático a la store si el pull falla (dispositivo no conectado, app no
+    instalada) -- ver ``downloader.download_apk_from_config``. Usado por el
+    batchero del dashboard para listas de package IDs donde no se sabe de
+    antemano cuáles ya están instalados en el device de pruebas.
     """
     entry = str(Path(__file__).resolve().parent.parent / "nutcracker.py")
     cmd = [sys.executable, entry]
@@ -165,7 +171,7 @@ def build_job_cmd(
         cmd += ["scan", target, "--config", config_path, "--keep-apk"]
         if source:
             cmd += ["--source", source]
-            if source == "device" and serial:
+            if source in ("device", "device-or-store") and serial:
                 cmd += ["--serial", serial]
     if static_only:
         cmd.append("--static-only")

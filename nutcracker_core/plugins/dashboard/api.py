@@ -28,6 +28,47 @@ from .events import bus
 from .relay import RelayError, RpcError, RpcTimeoutError, relay_manager
 
 
+def classify_batch_target(
+    target: str, payload_source: str | None = None, downloads_dir: Path | str = "downloads",
+) -> tuple[str, str | None, str | None]:
+    """Resuelve una línea del .txt del batchero según su formato (feature
+    pedida por el usuario, 2026-08-05):
+
+      - Termina en ``.apk`` (y no es una URL a un .apk remoto): se busca en
+        ``downloads/<basename>`` -- si existe, el target pasa a ser esa ruta
+        (local, ``_is_local_apk()`` lo detecta solo). Si NO existe, la línea
+        se rechaza (tercer valor del tuple = motivo del rechazo) en vez de
+        encolar algo que va a fallar de forma confusa más adelante.
+      - Cualquier otra cosa que no sea una URL (http/https): se asume
+        package id. Si el operador NO forzó una fuente explícita en el
+        dropdown del batch (``payload_source`` es None/vacío -- el "fuente:
+        store (default)" de la UI), se usa ``source="device-or-store"``:
+        intenta el dispositivo conectado primero vía ``adb pull``, y si no
+        está instalado ahí o no hay dispositivo, cae solo a la store (ver
+        ``downloader.download_apk_from_config``) -- no hace falta que el
+        operador sepa de antemano qué apps ya tiene instaladas el device de
+        pruebas y cuáles no. Si SÍ forzó algo explícito (p.ej. "device" a
+        secas, sin fallback, o una store puntual), se respeta tal cual --
+        este auto-fallback es el nuevo default, no reemplaza una elección
+        explícita del operador.
+      - URLs (Google Play, APKPure, .apk directo): sin cambios -- se dejan
+        pasar tal cual, mismo comportamiento que antes de este feature.
+
+    Devuelve ``(target_resuelto, source, error)`` -- ``error`` es None salvo
+    en el caso ".apk no encontrado en downloads/", donde ``target_resuelto``
+    es la línea original sin modificar (informativo únicamente, el caller no
+    debe encolarla).
+    """
+    if target.startswith(("http://", "https://")):
+        return target, payload_source, None
+    if target.lower().endswith(".apk"):
+        local_path = Path(downloads_dir) / Path(target).name
+        if not local_path.exists():
+            return target, None, f"no se encontró '{local_path}' -- subilo primero o revisá el nombre"
+        return str(local_path), None, None
+    return target, payload_source or "device-or-store", None
+
+
 def _drain_in_background(engine: QueueEngine) -> None:
     """Dispara engine.drain() en un hilo de fondo -- la respuesta HTTP de
     POST /api/queue no espera a que el job termine (puede tardar minutos); el
@@ -594,21 +635,31 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
 
     @router.post("/api/queue/batch")
     def queue_batch(payload: QueueBatchPayload):
-        targets = [
+        raw_targets = [
             t.strip() for t in payload.targets
             if t.strip() and not t.strip().startswith("#")
         ]
-        if not targets:
+        if not raw_targets:
             raise HTTPException(status_code=400, detail="no hay targets válidos en el batch")
         relay_session_id, frida_host = _resolve_relay(payload.serial, payload.relay)
-        for target in targets:
-            engine.submit(target, kind="static", serial=payload.serial, source=payload.source,
+
+        skipped: list[dict] = []
+        queued = 0
+        for raw_target in raw_targets:
+            resolved_target, resolved_source, error = classify_batch_target(raw_target, payload.source)
+            if error:
+                skipped.append({"target": raw_target, "reason": error})
+                continue
+            engine.submit(resolved_target, kind="static", serial=payload.serial, source=resolved_source,
                            relay_session_id=relay_session_id, frida_host=frida_host)
-        _drain_batch_in_background(
-            engine, then_aipwn=payload.then_aipwn, serial=payload.serial,
-            relay_session_id=relay_session_id, frida_host=frida_host,
-        )
-        return {"queued": len(targets)}
+            queued += 1
+
+        if queued:
+            _drain_batch_in_background(
+                engine, then_aipwn=payload.then_aipwn, serial=payload.serial,
+                relay_session_id=relay_session_id, frida_host=frida_host,
+            )
+        return {"queued": queued, "skipped": skipped}
 
     @router.get("/api/chat/{package}/pending")
     def chat_pending(package: str):

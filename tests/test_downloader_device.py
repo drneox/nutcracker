@@ -220,3 +220,105 @@ def test_download_apk_from_config_dispatches_to_device_downloader(monkeypatch, t
     assert calls["serial"] == "ZY22GPM27J"
     assert calls["package_id"] == "com.example.app"
     assert result.exists()
+
+
+# ── source="device-or-store" -- feature del batchero (2026-08-05) ──────────
+# Igual que "device", pero si el pull falla (device no conectado / app no
+# instalada) cae solo a la store en vez de propagar el error.
+
+def test_device_or_store_uses_device_when_available(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    device_calls = []
+
+    class _FakeDeviceDownloader:
+        def __init__(self, output_dir, serial=None):
+            pass
+
+        def download(self, package_id):
+            device_calls.append(package_id)
+            p = Path(tmp_path) / f"{package_id}.apk"
+            p.write_bytes(b"PK\x03\x04")
+            return p
+
+    def _store_should_not_be_called(*a, **kw):
+        raise AssertionError("no debería caer a la store si el device respondió OK")
+
+    monkeypatch.setattr("nutcracker_core.downloader.DeviceInstalledDownloader", _FakeDeviceDownloader)
+    monkeypatch.setattr("nutcracker_core.downloader.APKPureDownloader", _store_should_not_be_called)
+
+    result = download_apk_from_config(
+        "com.example.app", config={}, source="device-or-store", output_dir=str(tmp_path),
+    )
+
+    assert device_calls == ["com.example.app"]
+    assert result.exists()
+
+
+def test_device_or_store_falls_back_to_store_when_device_fails(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    class _FakeDeviceDownloader:
+        def __init__(self, output_dir, serial=None):
+            pass
+
+        def download(self, package_id):
+            raise APKDownloadError(f"'{package_id}' no está instalado en el dispositivo.")
+
+    store_calls = []
+
+    class _FakeApkPureDownloader:
+        def __init__(self, output_dir):
+            pass
+
+        def download(self, package_id):
+            store_calls.append(package_id)
+            p = Path(tmp_path) / f"{package_id}.apk"
+            p.write_bytes(b"PK\x03\x04")
+            return p
+
+    monkeypatch.setattr("nutcracker_core.downloader.DeviceInstalledDownloader", _FakeDeviceDownloader)
+    monkeypatch.setattr("nutcracker_core.downloader.APKPureDownloader", _FakeApkPureDownloader)
+
+    result = download_apk_from_config(
+        "com.example.app", config={}, source="device-or-store", output_dir=str(tmp_path),
+    )
+
+    assert store_calls == ["com.example.app"]
+    assert result.exists()
+
+
+def test_device_or_store_falls_back_to_google_play_if_configured(monkeypatch, tmp_path):
+    """Con credenciales de Google Play en config, el fallback usa Google Play
+    en vez de APKPure -- mismo criterio de auto-selección que source=None."""
+    from pathlib import Path
+
+    class _FakeDeviceDownloader:
+        def __init__(self, output_dir, serial=None):
+            pass
+
+        def download(self, package_id):
+            raise APKDownloadError("no instalado")
+
+    gplay_calls = []
+
+    class _FakeGooglePlayDownloader:
+        def __init__(self, email, aas_token, output_dir):
+            gplay_calls.append((email, aas_token))
+
+        def download(self, package_id):
+            p = Path(tmp_path) / f"{package_id}.apk"
+            p.write_bytes(b"PK\x03\x04")
+            return p
+
+    monkeypatch.setattr("nutcracker_core.downloader.DeviceInstalledDownloader", _FakeDeviceDownloader)
+    monkeypatch.setattr("nutcracker_core.downloader.GooglePlayDownloader", _FakeGooglePlayDownloader)
+
+    result = download_apk_from_config(
+        "com.example.app",
+        config={"google_play": {"email": "a@b.com", "aas_token": "tok123"}},
+        source="device-or-store", output_dir=str(tmp_path),
+    )
+
+    assert gplay_calls == [("a@b.com", "tok123")]
+    assert result.exists()

@@ -122,11 +122,11 @@
     </div>
 
     <div class="row" style="border-top:1px solid var(--border);padding-top:10px">
-      <span style="font-size:12px;color:var(--dim)">Batch desde archivo (.txt, un package por línea):</span>
+      <span style="font-size:12px;color:var(--dim)" title="Cada línea se resuelve sola según su formato: 'algo.apk' busca ese archivo en downloads/, un package id (com.example.app) intenta primero el dispositivo conectado y si no está instalado ahí (o no hay dispositivo) cae solo a la store -- una URL sigue igual que antes. El dropdown de fuente fuerza TODOS los package id de la lista a esa fuente, sin el fallback automático.">Batch desde archivo (.txt, un target por línea: .apk / package id / URL) ⓘ</span>
       <input type="file" id="batch-file" accept=".txt" style="flex:1;min-width:160px">
       <select id="batch-source">
-        <option value="">fuente: store (default)</option>
-        <option value="device">fuente: device instalado</option>
+        <option value="">fuente: auto por línea (default)</option>
+        <option value="device">fuente: forzar device (sin fallback)</option>
       </select>
       <input id="batch-serial" placeholder="serial / session id de relay" style="width:180px">
       <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) -- aplica también al aipwn encadenado.">
@@ -410,7 +410,11 @@ async function runBatch(){
     then_aipwn: document.getElementById('batch-then-aipwn').checked,
     relay: document.getElementById('batch-relay').checked,
   };
-  await j('/api/queue/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const result = await j('/api/queue/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  if (result.skipped && result.skipped.length){
+    const lines = result.skipped.map(s => `  - ${s.target}: ${s.reason}`).join('\n');
+    alert(`Encolados: ${result.queued}. Saltados (${result.skipped.length}):\n${lines}`);
+  }
   refreshQueue();
 }
 

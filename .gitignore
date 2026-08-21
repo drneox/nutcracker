@@ -24,6 +24,7 @@ logs/
 .semgrep/
 frida_scripts/
 node_modules/
+.igf/
 config.yaml
 test.yaml
 config*.yaml

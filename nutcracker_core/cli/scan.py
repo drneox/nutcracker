@@ -36,9 +36,11 @@ from . import cli
 @click.option(
     "--source", "-s",
     default=None,
-    type=click.Choice(["apk-pure", "google-play", "device"], case_sensitive=False),
+    type=click.Choice(["apk-pure", "google-play", "device", "device-or-store"], case_sensitive=False),
     help="Download source. \"device\" pulls the .apk already installed on a connected "
          "device via adb (see --serial) instead of downloading from any store. "
+         "\"device-or-store\" does the same but falls back to the store automatically "
+         "if the device isn't connected or the app isn't installed there. "
          "Default: google-play if credentials in config, else apk-pure.",
 )
 @click.option(
