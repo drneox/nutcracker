@@ -65,6 +65,13 @@
   #chatlog{height:180px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
   #chatlog .msg{margin-bottom:6px}
   #chatlog .op{color:var(--accent)}
+  #querylog{height:360px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
+  #querylog .qmsg{margin-bottom:8px;white-space:pre-wrap}
+  #querylog .qtool{color:var(--dim);font-style:italic}
+  #querylog .qassistant{color:var(--text)}
+  #querylog .qerror{color:var(--critical)}
+  #querylog .qimg{max-width:260px;border-radius:6px;border:1px solid var(--border);display:block;margin-top:4px}
+  .tab.disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
   svg.trend{width:100%;height:160px;overflow:visible}
   .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
   @media (max-width:600px){
@@ -151,6 +158,7 @@
       <div class="tab active" data-tab="logs">Logs en vivo</div>
       <div class="tab" data-tab="device">Dispositivo</div>
       <div class="tab" data-tab="agent">Agente / Chat</div>
+      <div class="tab" data-tab="query" id="tab-query-label">Pentest asistido</div>
     </div>
 
     <div class="tabpanel active" id="tab-logs">
@@ -201,6 +209,27 @@
       <div class="row">
         <input id="chat-text" placeholder="mensaje para el agente…" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
         <button onclick="sendChat()">Enviar</button>
+      </div>
+    </div>
+
+    <div class="tabpanel" id="tab-query">
+      <p style="font-size:12px;color:var(--dim)">
+        Co-piloto interactivo: preguntá sobre findings/componentes/secretos ya analizados
+        (funciona sin ningún job corriendo), o pedile en lenguaje natural que use Frida/ADB
+        con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
+      </p>
+      <div class="row">
+        <input id="query-package" placeholder="package id" style="width:220px">
+        <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px">
+        <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay)">
+          <input type="checkbox" id="query-relay" style="width:auto"> usar relay
+        </label>
+        <button class="secondary" onclick="connectQuery()">Conectar</button>
+      </div>
+      <div id="querylog"></div>
+      <div class="row">
+        <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
+        <button onclick="sendQuery()">Enviar</button>
       </div>
     </div>
   </section>
@@ -647,6 +676,61 @@ function sendChat(){
   input.value = '';
 }
 
+// ── Pentest asistido (co-piloto de consulta) ────────────────────────────
+async function checkQueryAvailable(){
+  try {
+    const data = await j('/api/query/available');
+    if (!data.available) {
+      const tab = document.getElementById('tab-query-label');
+      tab.classList.add('disabled');
+      tab.title = 'no disponible -- falta el plugin aipwn o el bloque llm: en config.yaml';
+    }
+  } catch(e){}
+}
+
+let querySocket = null;
+function _qAppend(cls, html){
+  const log = document.getElementById('querylog');
+  log.innerHTML += `<div class="qmsg ${cls}">${html}</div>`;
+  log.scrollTop = log.scrollHeight;
+}
+function connectQuery(){
+  const pkg = document.getElementById('query-package').value.trim();
+  if (!pkg) return;
+  if (querySocket) querySocket.close();
+  document.getElementById('querylog').innerHTML = '';
+  const serial = document.getElementById('query-serial').value.trim();
+  const relay = document.getElementById('query-relay').checked;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  querySocket = new WebSocket(`${proto}://${location.host}/ws/query/${encodeURIComponent(pkg)}`);
+  querySocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
+  querySocket.onopen = () => {
+    querySocket.send(JSON.stringify({serial: serial || null, relay}));
+    _qAppend('qassistant', `<b>conectado</b> a ${pkg}${relay ? ' (vía relay)' : serial ? ` (serial ${serial})` : ' (sin device -- modo estático)'}`);
+  };
+  querySocket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.kind === 'tool') {
+      _qAppend('qtool', `▸ ejecutando <b>${msg.data.name}</b>(${JSON.stringify(msg.data.arguments)})`);
+    } else if (msg.kind === 'tool_result') {
+      _qAppend('qtool', `  ↳ ${msg.data.name}: ${msg.data.result.slice(0, 400)}`);
+    } else if (msg.kind === 'image') {
+      _qAppend('qtool', `<img class="qimg" src="data:image/${msg.data.format};base64,${msg.data.b64}">`);
+    } else if (msg.kind === 'assistant') {
+      _qAppend('qassistant', msg.data.text.replace(/</g, '&lt;'));
+    } else if (msg.kind === 'error') {
+      _qAppend('qerror', `⚠ ${msg.data.text}`);
+    }
+  };
+}
+function sendQuery(){
+  const input = document.getElementById('query-text');
+  if (!querySocket || !input.value.trim()) return;
+  _qAppend('qassistant', `<span style="color:var(--accent)">[vos]</span> ${input.value.trim().replace(/</g, '&lt;')}`);
+  querySocket.send(input.value.trim());
+  input.value = '';
+}
+
 // ── Modal de detalle de app ──────────────────────────────────────────────
 function renderFindingsTable(findings){
   const tbody = document.getElementById('modal-findings');
@@ -831,6 +915,7 @@ async function reQueue(){
 
 refreshAll();
 setInterval(refreshAll, 5000);
+checkQueryAvailable();
 </script>
 </body>
 </html>

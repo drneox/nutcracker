@@ -218,7 +218,10 @@ async def _run_relay_rpc(session, op: str, **fields):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def create_router(db_path: str, engine: QueueEngine, default_serial: str | None = None) -> APIRouter:
+def create_router(
+    db_path: str, engine: QueueEngine, default_serial: str | None = None,
+    llm_config: dict | None = None,
+) -> APIRouter:
     """No toca ``engine.on_line`` a propósito: ese wiring (streaming de logs en
     vivo al EventBus) lo hace ``plugins/dashboard/__init__.py::dashboard()``
     sobre la ÚNICA instancia real de producción, antes de llamar a
@@ -672,5 +675,12 @@ def create_router(db_path: str, engine: QueueEngine, default_serial: str | None 
         except Exception:  # noqa: BLE001
             return {"available": False}
         return {"available": True, "prompt": _SYSTEM_PROMPT}
+
+    @router.get("/api/query/available")
+    def query_available():
+        """Si el co-piloto de consulta (/ws/query, pestaña "Pentest asistido")
+        puede usarse: requiere el plugin aipwn instalado y el bloque `llm:`
+        de config.yaml configurado (ver plugins/aipwn/query_agent.py)."""
+        return {"available": agent_memory is not None and bool(llm_config)}
 
     return router

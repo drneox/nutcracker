@@ -186,7 +186,17 @@ def register(cli) -> None:
             scheduler = NutcrackerScheduler(engine, config)
             scheduler.start()
 
-        app = create_app(db_path=db_path, engine=engine, default_serial=default_serial, auth=auth)
+        # Bloque `llm:` de config.yaml -- el mismo que usa aipwn (ver
+        # plugins/aipwn/__init__.py) -- reusado tal cual para el co-piloto de
+        # consulta (/ws/query, plugins/aipwn/query_agent.py) en vez de pedir
+        # una config de LLM aparte. Vacío/faltante = co-piloto no disponible
+        # (ver api.py::query_available), sin romper el resto del dashboard.
+        llm_config = cfg_get(config, "llm", default={}) or None
+
+        app = create_app(
+            db_path=db_path, engine=engine, default_serial=default_serial,
+            auth=auth, llm_config=llm_config,
+        )
 
         console.print(
             f"[bold green]✔[/bold green] nutcracker dashboard — "

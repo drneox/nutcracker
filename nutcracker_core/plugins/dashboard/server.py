@@ -34,14 +34,20 @@ def create_app(
     engine: QueueEngine,
     default_serial: str | None = None,
     auth: AuthConfig | None = None,
+    llm_config: dict | None = None,
 ) -> FastAPI:
     app = FastAPI(title="nutcracker dashboard")
 
     # ws.py necesita saber la config de auth para chequear el cookie en el
     # handshake WebSocket (defensa en profundidad además del middleware).
     ws.set_auth(auth)
+    # Config del co-piloto de consulta (/ws/query, ver plugins/aipwn/query_agent.py)
+    # -- ``llm_config`` es el mismo bloque `llm:` de config.yaml que ya usa aipwn.
+    ws.set_query_config(llm_config, db_path)
 
-    app.include_router(create_router(db_path=db_path, engine=engine, default_serial=default_serial))
+    app.include_router(create_router(
+        db_path=db_path, engine=engine, default_serial=default_serial, llm_config=llm_config,
+    ))
     app.include_router(ws.router)
 
     if auth is not None:
