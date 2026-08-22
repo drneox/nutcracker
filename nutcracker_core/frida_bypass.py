@@ -206,6 +206,22 @@ _HOOK_GOOGLE_PLAY = """\
       console.log('[Bypass] ✔ Google Play Store / GMS hooked (AOSP emulator)');
     } catch(e) { console.log('[Bypass] Google Play hook error: ' + e); }
 
+    // GMS ausente (AOSP sin Google Play Services, ej. emuladores de prueba) →
+    // los 4 bloques de abajo fallarían los 4 con la misma causa
+    // (ClassNotFoundException), ensuciando hooks_fallidos con ruido idéntico
+    // en cada corrida (encontrado en vivo, job 2823/sh.nutcracker.nutbank).
+    // Un solo chequeo con la clase "ancla" (GoogleApiAvailability -- si esa
+    // no está, las otras tampoco) evita repetir el mismo intento fallido 4
+    // veces.
+    var _gmsAvailable = true;
+    try {
+      Java.use('com.google.android.gms.common.GoogleApiAvailability');
+    } catch (e) {
+      _gmsAvailable = false;
+      console.log('[Bypass] Google Play Services no instalado (AOSP) -- se saltan los hooks GMS.');
+    }
+
+    if (_gmsAvailable) {
     // GoogleApiAvailability → SUCCESS (todos los overloads + métodos de error)
     try {
       var GmsAvail = Java.use('com.google.android.gms.common.GoogleApiAvailability');
@@ -241,7 +257,7 @@ _HOOK_GOOGLE_PLAY = """\
         });
       } catch(e) {}
       console.log('[Bypass] ✔ GoogleApiAvailability hooked');
-    } catch(e) { console.log('[Bypass] GoogleApiAvailability no disponible (AOSP): ' + e); }
+    } catch(e) { console.log('[Bypass] GoogleApiAvailability hook error: ' + e); }
 
     // GoogleApiAvailabilityLight → SUCCESS (la usada directamente por Firebase/GMS internals)
     try {
@@ -289,6 +305,7 @@ _HOOK_GOOGLE_PLAY = """\
       } catch(e) {}
       console.log('[Bypass] ✔ GooglePlayServicesUtilLight hooked');
     } catch(e) { console.log('[Bypass] GooglePlayServicesUtilLight hook error: ' + e); }
+    }
   })();
 """
 

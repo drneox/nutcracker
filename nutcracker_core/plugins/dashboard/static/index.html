@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nutcracker dashboard</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --border:#2a2f3a;
+    --text:#e6e8ec; --dim:#9aa4b2; --accent:#4c8dff;
+    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f4f5f7; --panel:#ffffff; --panel2:#f0f1f4; --border:#d9dce2;
+      --text:#1a1d24; --dim:#5b6472; --accent:#2f6fed;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel)}
+  header h1{font-size:16px;margin:0;font-weight:700}
+  header h1 span{color:var(--accent)}
+  .stats{display:flex;flex-wrap:wrap;gap:16px;margin-left:auto;font-size:12px;color:var(--dim)}
+  .stats b{color:var(--text);font-size:14px}
+  main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);margin:0 0 12px}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:12px}
+  .tab{padding:8px 14px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
+  .tab.active{color:var(--text);border-color:var(--accent)}
+  .tabpanel{display:none}
+  .tabpanel.active{display:block}
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  tr.clickable{cursor:pointer}
+  tr.clickable:hover{background:var(--panel2)}
+  .job-id-link{color:var(--accent);text-decoration:none;font-weight:600}
+  .job-id-link:hover{text-decoration:underline}
+  .badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+  .badge.good{background:color-mix(in srgb, var(--good) 18%, transparent);color:var(--good)}
+  .badge.warning{background:color-mix(in srgb, var(--warning) 20%, transparent);color:#8a5d00}
+  .badge.serious{background:color-mix(in srgb, var(--serious) 20%, transparent);color:var(--serious)}
+  .badge.critical{background:color-mix(in srgb, var(--critical) 20%, transparent);color:var(--critical)}
+  .badge.neutral{background:var(--panel2);color:var(--dim)}
+  input,select,button{font:inherit;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px}
+  button{cursor:pointer;background:var(--accent);color:#fff;border:none;font-weight:600}
+  button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  #log{background:#05070a;color:#c9d1d9;padding:12px;border-radius:8px;height:320px;overflow:auto;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
+  #webusb-canvas{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;min-height:280px;display:block}
+  .device-status{font-size:12px;color:var(--dim);margin:6px 0}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
+  .modal-backdrop.open{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;max-width:820px;width:100%;padding:20px}
+  .modal h3{margin-top:0}
+  .kpis{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+  .kpi{background:var(--panel2);border-radius:8px;padding:10px 14px;min-width:120px}
+  .kpi b{display:block;font-size:18px}
+  .kpi span{color:var(--dim);font-size:11px;text-transform:uppercase}
+  .close-x{float:right;cursor:pointer;color:var(--dim);font-size:20px;line-height:1}
+  #chatlog{height:180px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
+  #chatlog .msg{margin-bottom:6px}
+  #chatlog .op{color:var(--accent)}
+  #querylog{height:360px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
+  #querylog .qmsg{margin-bottom:8px;white-space:pre-wrap}
+  #querylog .qtool{color:var(--dim);font-style:italic}
+  #querylog .qassistant{color:var(--text)}
+  #querylog .qerror{color:var(--critical)}
+  #querylog .qimg{max-width:260px;border-radius:6px;border:1px solid var(--border);display:block;margin-top:4px}
+  .tab.disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+  svg.trend{width:100%;height:160px;overflow:visible}
+  .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
+  @media (max-width:600px){
+    header{padding:10px 14px}
+    main{padding:10px;gap:10px}
+    .card{padding:12px}
+    th,td{padding:6px 7px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>nutcracker</span> dashboard</h1>
+  <div class="stats" id="stats">
+    <div><b id="s-apps">–</b> apps</div>
+    <div><b id="s-runs">–</b> runs</div>
+    <div><b id="s-findings">–</b> findings</div>
+    <div><b id="s-jobs">–</b> active jobs</div>
+  </div>
+  <button class="secondary" id="logout-btn" style="margin-left:12px" onclick="logout()">Salir</button>
+</header>
+
+<main>
+
+  <section class="card">
+    <h2>Apps</h2>
+    <div class="table-scroll">
+      <table id="apps-table">
+        <thead><tr><th>Package</th><th>Veredicto</th><th>MASVS</th><th>Próxima revisión</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Cola de análisis</h2>
+    <div class="row" style="border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:10px">
+      <span style="font-size:12px;color:var(--dim)">Subir .apk (queda en <code>downloads/</code>, útil sin terminal en el servidor):</span>
+      <input type="file" id="apk-upload-file" accept=".apk">
+      <button class="secondary" onclick="uploadApk()" id="apk-upload-btn">Subir</button>
+      <span id="apk-upload-status" style="font-size:12px;color:var(--dim)"></span>
+    </div>
+    <div class="row">
+      <input id="q-target" placeholder="ruta .apk / URL / package id" style="flex:1;min-width:200px">
+      <select id="q-kind"><option value="static">static</option><option value="dynamic">dynamic</option><option value="aipwn">aipwn</option></select>
+      <input id="q-serial" placeholder="serial (opcional) / session id si usás relay" style="width:220px">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo 'serial' de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) en vez de un serial adb directo.">
+        <input type="checkbox" id="q-relay" style="width:auto"> vía relay
+      </label>
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="q-run-now" style="width:auto"> correr ahora
+      </label>
+      <button onclick="submitQueue()">Encolar</button>
+    </div>
+
+    <div class="row" style="border-top:1px solid var(--border);padding-top:10px">
+      <span style="font-size:12px;color:var(--dim)" title="Cada línea se resuelve sola según su formato: 'algo.apk' busca ese archivo en downloads/, un package id (com.example.app) intenta primero el dispositivo conectado y si no está instalado ahí (o no hay dispositivo) cae solo a la store -- una URL sigue igual que antes. El dropdown de fuente fuerza TODOS los package id de la lista a esa fuente, sin el fallback automático.">Batch desde archivo (.txt, un target por línea: .apk / package id / URL) ⓘ</span>
+      <input type="file" id="batch-file" accept=".txt" style="flex:1;min-width:160px">
+      <select id="batch-source">
+        <option value="">fuente: auto por línea (default)</option>
+        <option value="device">fuente: forzar device (sin fallback)</option>
+      </select>
+      <input id="batch-serial" placeholder="serial / session id de relay" style="width:180px">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) -- aplica también al aipwn encadenado.">
+        <input type="checkbox" id="batch-relay" style="width:auto"> vía relay
+      </label>
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="batch-then-aipwn" checked style="width:auto"> encadenar aipwn
+      </label>
+      <button class="secondary" onclick="runBatch()">Batch</button>
+    </div>
+
+    <div class="table-scroll">
+      <table id="queue-table">
+        <thead><tr><th>#</th><th>Kind</th><th>Target</th><th>Estado</th><th>Package</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="tabs">
+      <div class="tab active" data-tab="logs">Logs en vivo</div>
+      <div class="tab" data-tab="device">Dispositivo</div>
+      <div class="tab" data-tab="agent">Agente / Chat</div>
+      <div class="tab" data-tab="query" id="tab-query-label">Pentest asistido</div>
+    </div>
+
+    <div class="tabpanel active" id="tab-logs">
+      <div class="row">
+        <input id="log-job-id" placeholder="job id" style="width:100px">
+        <button class="secondary" onclick="connectJobLog()">Ver logs</button>
+      </div>
+      <pre id="log">(elegí un job id de la cola de arriba)</pre>
+    </div>
+
+    <div class="tabpanel" id="tab-device">
+      <div class="row">
+        <button id="webusb-btn" class="secondary" style="display:none" onclick="connectWebUsb()">🔌 USB directo (fluido)</button>
+        <button id="webusb-stop-btn" class="secondary" style="display:none" onclick="disconnectWebUsb()">⏏ Soltar USB</button>
+        <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB">🔪 adb kill-server</button>
+      </div>
+      <div class="device-status" id="device-status">cargando…</div>
+      <canvas id="webusb-canvas" width="720" height="1600"></canvas>
+
+      <h3 style="margin-top:16px">Relay (frida/adb desde un backend remoto)</h3>
+      <p style="font-size:12px;color:var(--muted,#888)">
+        Puentea `frida`/`adb` corriendo en este backend hacia el device conectado
+        acá. `adb` (shell/install/pull/screencap) reusa la misma conexión USB de
+        arriba (conectá "USB directo" primero). `frida` va por un WebSocket nativo
+        directo a la IP de LAN del device (Tango no sostiene bien el handshake
+        WebSocket que usa frida moderno, verificado en vivo — ver plan.md) —
+        necesita que ESTA PC tenga alcance de red al device, y puede pedir el
+        permiso "Acceso a Red Local" de Chrome la primera vez.
+      </p>
+      <div class="row">
+        <input id="relay-session-id" placeholder="session id (ej. el serial del device)" style="width:220px">
+        <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" style="width:220px">
+        <button id="relay-btn" class="secondary" onclick="connectRelay()">🌐 Activar relay</button>
+        <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()">⏏ Detener relay</button>
+      </div>
+      <div class="device-status" id="relay-status"></div>
+    </div>
+
+    <div class="tabpanel" id="tab-agent">
+      <h2 style="margin-top:0">System prompt del agente aipwn</h2>
+      <pre id="agent-prompt" style="max-height:200px;overflow:auto;background:var(--panel2);padding:10px;border-radius:8px;font-size:11px">cargando…</pre>
+      <h2>Chat</h2>
+      <div class="row">
+        <input id="chat-package" placeholder="package id" style="width:220px">
+        <button class="secondary" onclick="connectChat()">Conectar</button>
+      </div>
+      <div id="chatlog"></div>
+      <div class="row">
+        <input id="chat-text" placeholder="mensaje para el agente…" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
+        <button onclick="sendChat()">Enviar</button>
+      </div>
+    </div>
+
+    <div class="tabpanel" id="tab-query">
+      <p style="font-size:12px;color:var(--dim)">
+        Co-piloto interactivo: preguntá sobre findings/componentes/secretos ya analizados
+        (funciona sin ningún job corriendo), o pedile en lenguaje natural que use Frida/ADB
+        con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
+      </p>
+      <div class="row">
+        <input id="query-package" placeholder="package id" style="width:220px">
+        <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px">
+        <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay)">
+          <input type="checkbox" id="query-relay" style="width:auto"> usar relay
+        </label>
+        <button class="secondary" onclick="connectQuery()">Conectar</button>
+      </div>
+      <div id="querylog"></div>
+      <div class="row">
+        <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
+        <button onclick="sendQuery()">Enviar</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="modal-backdrop" id="app-modal">
+  <div class="modal">
+    <span class="close-x" onclick="closeAppModal()">&times;</span>
+    <h3 id="modal-pkg">-</h3>
+    <div class="kpis">
+      <div class="kpi"><b id="modal-verdict">-</b><span>Veredicto</span></div>
+      <div class="kpi"><b id="modal-score">-</b><span>Score / Grade</span></div>
+      <div class="kpi"><b id="modal-due">-</b><span>Próxima revisión</span></div>
+    </div>
+    <div class="row">
+      <button class="secondary" onclick="reQueue()">Re-analizar</button>
+    </div>
+    <h4>Tendencia MASVS</h4>
+    <svg class="trend" id="trend-svg" viewBox="0 0 600 160" preserveAspectRatio="none"></svg>
+    <h4>Programar revisión</h4>
+    <div class="row">
+      <input type="number" id="sched-days" min="1" value="30" style="width:100px"> días
+      <button class="secondary" onclick="saveSchedule()">Guardar</button>
+      <span id="sched-saved" style="color:var(--good);display:none">✔ guardado</span>
+    </div>
+    <h4 id="modal-findings-title">Hallazgos del último run</h4>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Regla</th><th>Severidad</th><th>MASVS</th><th>MASWE</th><th>CWE</th><th>Ubicación</th></tr></thead>
+        <tbody id="modal-findings"></tbody>
+      </table>
+    </div>
+    <h4>Historial de análisis <span style="font-weight:400;color:var(--dim);font-size:11px">(clic en una fila para ver sus hallazgos)</span></h4>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Fecha</th><th>Veredicto</th><th>Score</th><th>Hallazgos</th><th>Reporte</th></tr></thead>
+        <tbody id="modal-history"></tbody>
+      </table>
+    </div>
+    <h4>Hallazgos consolidados <span style="font-weight:400;color:var(--dim);font-size:11px">(deduplicados de todas las corridas)</span></h4>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Estado</th><th>Regla</th><th>Severidad</th><th>Ubicación</th><th>Visto en</th><th>Primera vez</th><th>Última vez</th></tr></thead>
+        <tbody id="modal-consolidated"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="tooltip-fixed" id="trend-tooltip"></div>
+
+<script>
+const SEV_CLASS = {critical:'critical', high:'serious', medium:'warning', low:'good', info:'neutral'};
+const SEV_ICON  = {critical:'✖', high:'▲', medium:'●', low:'●', info:'·'};
+
+function sevBadge(sev){
+  sev = (sev||'info').toLowerCase();
+  const cls = SEV_CLASS[sev] || 'neutral';
+  const icon = SEV_ICON[sev] || '·';
+  return `<span class="badge ${cls}">${icon} ${sev.toUpperCase()}</span>`;
+}
+function verdictBadge(v){
+  if (v === 'protection_broken') return `<span class="badge critical">⚡ BYPASSED</span>`;
+  if (v === 'protected') return `<span class="badge good">✔ PROTECTED</span>`;
+  if (v === 'not_protected') return `<span class="badge warning">✘ NO PROTECTION</span>`;
+  return `<span class="badge neutral">–</span>`;
+}
+function findingStatusBadge(status){
+  return status === 'present'
+    ? `<span class="badge warning">● presente</span>`
+    : `<span class="badge good">✔ resuelto</span>`;
+}
+function redirectToLogin(){
+  const next = encodeURIComponent(location.pathname + location.search);
+  location.href = '/login?next=' + next;
+}
+async function j(url, opts){
+  const r = await fetch(url, opts);
+  if (r.status === 401){ redirectToLogin(); throw new Error('unauthorized'); }
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function logout(){
+  try { await fetch('/api/logout', {method:'POST'}); } catch(e){}
+  location.href = '/login';
+}
+
+let currentApp = null;
+
+async function refreshAll(){
+  try {
+    const s = await j('/api/summary');
+    document.getElementById('s-apps').textContent = s.apps;
+    document.getElementById('s-runs').textContent = s.runs;
+    document.getElementById('s-findings').textContent = s.findings;
+    document.getElementById('s-jobs').textContent = s.active_jobs;
+  } catch(e){}
+  await refreshApps();
+  await refreshQueue();
+}
+
+async function refreshApps(){
+  const apps = await j('/api/apps');
+  const tbody = document.querySelector('#apps-table tbody');
+  tbody.innerHTML = apps.map(a => `
+    <tr class="clickable" onclick="openApp('${a.package}')">
+      <td>${a.package}</td>
+      <td>${verdictBadge(a.last_verdict)}</td>
+      <td>${a.masvs_score ?? '–'} ${a.grade ? '('+a.grade+')' : ''}</td>
+      <td>${a.next_due_at ? a.next_due_at.slice(0,10) : '–'}</td>
+      <td>–</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="color:var(--dim)">(sin apps todavía)</td></tr>';
+}
+
+async function refreshQueue(){
+  const jobs = await j('/api/queue');
+  const tbody = document.querySelector('#queue-table tbody');
+  tbody.innerHTML = jobs.map(job => `
+    <tr>
+      <td><a href="#" class="job-id-link" onclick="goToJobLog(${job.id}); return false"
+             title="Ver logs del job #${job.id}">#${job.id}</a></td>
+      <td>${job.kind}</td><td>${job.target}</td>
+      <td>${job.status}</td><td>${job.package || '–'}</td>
+      <td>
+        ${job.status === 'queued'
+          ? `<button class="secondary" onclick="deleteQueueJob(${job.id})" title="Borrar job pendiente">🗑</button>`
+          : ''}
+        ${job.resumable
+          ? `<button class="secondary" onclick="resumeAipwnJob(${job.id})"
+               title="Continuar esta sesión de aipwn con 5 iteraciones más, recordando lo que hizo hasta ahora">▶ +5 iteraciones</button>`
+          : ''}
+      </td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(cola vacía)</td></tr>';
+}
+
+// Botón "▶ +5 iteraciones": el job aipwn terminó sin conclusión (límite de
+// iteraciones, o el LLM se quedó sin margen a mitad de razonamiento) y quedó
+// una sesión guardada (ver agent_memory.save_resume_state en el backend) --
+// esto encola una corrida NUEVA que continúa esa conversación tal cual, con
+// más presupuesto, en vez de empezar de cero.
+async function resumeAipwnJob(jobId){
+  try {
+    await j(`/api/queue/${jobId}/resume-aipwn`, {method: 'POST'});
+    await refreshQueue();
+  } catch (e) {
+    alert(`No se pudo reanudar el job #${jobId}: ${e.message || e}`);
+  }
+}
+
+async function deleteQueueJob(jobId){
+  try {
+    await j(`/api/queue/${jobId}`, { method: 'DELETE' });
+    await refreshQueue();
+  } catch (e) {
+    alert(`No se pudo borrar el job #${jobId}: ${e.message || e}`);
+  }
+}
+
+async function uploadApk(){
+  const fileInput = document.getElementById('apk-upload-file');
+  const status = document.getElementById('apk-upload-status');
+  const btn = document.getElementById('apk-upload-btn');
+  if (!fileInput.files.length) return;
+  const form = new FormData();
+  form.append('file', fileInput.files[0]);
+  btn.disabled = true;
+  status.textContent = 'Subiendo...';
+  try {
+    // Sin Content-Type manual: el browser arma el boundary de
+    // multipart/form-data solo al ver que el body es un FormData.
+    const result = await j('/api/apks/upload', {method: 'POST', body: form});
+    document.getElementById('q-target').value = result.path;
+    status.textContent = `OK: ${result.filename} (${(result.size / 1e6).toFixed(1)} MB) -> campo "target" completado`;
+    fileInput.value = '';
+  } catch (e) {
+    status.textContent = `Error: ${e.message || e}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function submitQueue(){
+  const target = document.getElementById('q-target').value.trim();
+  if (!target) return;
+  const payload = {
+    target,
+    kind: document.getElementById('q-kind').value,
+    serial: document.getElementById('q-serial').value.trim() || null,
+    run_now: document.getElementById('q-run-now').checked,
+    relay: document.getElementById('q-relay').checked,
+  };
+  await j('/api/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  document.getElementById('q-target').value = '';
+  refreshQueue();
+}
+
+async function runBatch(){
+  const fileInput = document.getElementById('batch-file');
+  if (!fileInput.files.length) return;
+  const text = await fileInput.files[0].text();
+  const targets = text.split('\n');
+  const payload = {
+    targets,
+    source: document.getElementById('batch-source').value || null,
+    serial: document.getElementById('batch-serial').value.trim() || null,
+    then_aipwn: document.getElementById('batch-then-aipwn').checked,
+    relay: document.getElementById('batch-relay').checked,
+  };
+  const result = await j('/api/queue/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  if (result.skipped && result.skipped.length){
+    const lines = result.skipped.map(s => `  - ${s.target}: ${s.reason}`).join('\n');
+    alert(`Encolados: ${result.queued}. Saltados (${result.skipped.length}):\n${lines}`);
+  }
+  refreshQueue();
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────
+function activateTab(name){
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'agent') loadAgentPrompt();
+}
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => activateTab(tab.dataset.tab));
+});
+
+// ── Logs en vivo ─────────────────────────────────────────────────────────
+let logSocket = null;
+function connectJobLog(){
+  const id = document.getElementById('log-job-id').value.trim();
+  if (!id) return;
+  if (logSocket) logSocket.close();
+  const log = document.getElementById('log');
+  log.textContent = '';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  logSocket = new WebSocket(`${proto}://${location.host}/ws/jobs/${id}`);
+  logSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
+  logSocket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    const line = msg.kind === 'status' ? `\n[status] ${JSON.stringify(msg.data)}\n` : (msg.data + '\n');
+    log.textContent += line;
+    log.scrollTop = log.scrollHeight;
+  };
+}
+
+// Click en el "#id" de un job (tabla de la cola) -- lleva directo a "Logs en
+// vivo" con ese job ya cargado, sin tener que copiar el id a mano al campo de
+// texto de al lado.
+function goToJobLog(jobId){
+  document.getElementById('log-job-id').value = jobId;
+  activateTab('logs');
+  connectJobLog();
+}
+
+// ── Dispositivo ──────────────────────────────────────────────────────────
+// Único modo de video: WebUSB + WebCodecs ("USB directo (fluido)"), 100%
+// opt-in vía su propio botón -- no hay fallback de screenshots/scrcpy, a
+// pedido explícito del usuario. Import perezoso: si el bundle no existe
+// porque nadie corrió `npm run build` en webusb/, o el navegador no soporta
+// WebUSB, el botón simplemente no aparece.
+// Reconexión tras F5: se guarda en sessionStorage (NO localStorage) el serial
+// del device que el usuario conectó a mano. sessionStorage tiene justo la vida
+// útil que queremos -- sobrevive a un reload, muere al cerrar la pestaña -- así
+// que la reconexión automática ocurre SOLO en la pestaña donde el usuario ya
+// había pedido video explícitamente. Abrir el dashboard de cero nunca toca el
+// USB solo: el cable es exclusivo (mientras el navegador lo tiene, adb no puede
+// usarlo), así que reclamarlo sin que lo pidan rompería los jobs de la cola.
+const WEBUSB_SESSION_KEY = 'nutcracker.webusb.serial';
+
+function rememberWebUsbSerial(serial){
+  try { serial ? sessionStorage.setItem(WEBUSB_SESSION_KEY, serial)
+               : sessionStorage.removeItem(WEBUSB_SESSION_KEY); } catch (e) { /* modo privado */ }
+}
+function rememberedWebUsbSerial(){
+  try { return sessionStorage.getItem(WEBUSB_SESSION_KEY); } catch (e) { return null; }
+}
+function setWebUsbConnectedUi(connected){
+  document.getElementById('webusb-btn').style.display = connected ? 'none' : '';
+  document.getElementById('webusb-stop-btn').style.display = connected ? '' : 'none';
+}
+
+// Import perezoso: si el bundle no existe porque nadie corrió `npm run build`
+// en webusb/, o el navegador no soporta WebUSB, el botón simplemente no aparece.
+(async () => {
+  const status = document.getElementById('device-status');
+  try {
+    const mod = await import('/static/webusb-video.bundle.js');
+    if (mod.isSupported && mod.isSupported()) {
+      window.__nutcrackerWebUsb = mod;
+      setWebUsbConnectedUi(false);
+      status.textContent = 'Clic en "🔌 USB directo (fluido)" para conectar por USB.';
+
+      const previous = rememberedWebUsbSerial();
+      if (previous) {
+        const canvas = document.getElementById('webusb-canvas');
+        const serial = await mod.reconnect(canvas, (s) => { status.textContent = s; }, previous);
+        rememberWebUsbSerial(serial);
+        setWebUsbConnectedUi(!!serial);
+      }
+      return;
+    }
+  } catch (e) { /* bundle no compilado o navegador sin soporte -- no-op */ }
+  status.textContent = 'WebUSB no disponible (necesita Chrome/Edge y el bundle compilado — ver nutcracker_core/plugins/dashboard/webusb/README.md).';
+})();
+
+async function connectWebUsb(){
+  const mod = window.__nutcrackerWebUsb;
+  if (!mod) return;
+  const canvas = document.getElementById('webusb-canvas');
+  const status = document.getElementById('device-status');
+  try {
+    // mod.connect() ya captura sus propios errores internamente y los reporta
+    // vía onStatus (ver webusb/src/main.ts) -- este try/catch es defensa en
+    // profundidad por si algo se escapa (p.ej. el propio import/bundle).
+    const serial = await mod.connect(canvas, (s) => { status.textContent = s; });
+    rememberWebUsbSerial(serial);
+    setWebUsbConnectedUi(!!serial);
+  } catch (e) {
+    console.error('connectWebUsb falló:', e);
+    status.textContent = `Error con USB directo: ${e.message || e}`;
+  }
+}
+
+async function disconnectWebUsb(){
+  const mod = window.__nutcrackerWebUsb;
+  if (!mod) return;
+  const status = document.getElementById('device-status');
+  // Se olvida el serial ANTES de cerrar: si el cierre falla a mitad, no queremos
+  // que el próximo F5 vuelva a reclamar el cable por su cuenta.
+  rememberWebUsbSerial(null);
+  setWebUsbConnectedUi(false);
+  try {
+    await mod.disconnect((s) => { status.textContent = s; });
+  } catch (e) {
+    console.error('disconnectWebUsb falló:', e);
+    status.textContent = `Error soltando el USB: ${e.message || e}`;
+  }
+}
+
+// Mata el daemon adb por las dos vías (WSL + Windows, ver
+// adb_transport.kill_server()) -- pensado para correr ANTES de "🔌 USB directo
+// (fluido)": mientras el daemon esté vivo, tiene el cable reclamado y WebUSB
+// no puede tomarlo (ver plan.md).
+async function adbKillServer(){
+  const status = document.getElementById('device-status');
+  status.textContent = 'Matando adb (WSL + Windows)…';
+  try {
+    const r = await j('/api/adb/kill-server', {method: 'POST'});
+    const parts = [];
+    if (r.wsl) parts.push(`WSL: ${r.wsl.ok ? 'OK' : 'falló'}`);
+    if (r.windows) parts.push(`Windows: ${r.windows.ok ? 'OK' : 'falló'}`);
+    else parts.push('Windows: n/a (no es WSL)');
+    status.textContent = `adb kill-server — ${parts.join(' · ')}`;
+  } catch (e) {
+    console.error('adbKillServer falló:', e);
+    status.textContent = `Error matando adb: ${e.message || e}`;
+  }
+}
+
+// ── Relay (browser-as-bridge, plan.md) ──────────────────────────────────
+// Puentea frida/adb reales del backend hacia el device de ESTA pestaña,
+// reusando el mismo handle Adb ya autenticado que usa el video de arriba
+// (mod.getAdb() -- ver webusb/src/main.ts/relay.ts). No abre una segunda
+// conexión USB: eso pisaría a la del video (WebUSB es exclusivo por interfaz).
+let relayClient = null;
+
+function setRelayConnectedUi(connected){
+  document.getElementById('relay-btn').style.display = connected ? 'none' : '';
+  document.getElementById('relay-stop-btn').style.display = connected ? '' : 'none';
+}
+
+async function connectRelay(){
+  const mod = window.__nutcrackerWebUsb;
+  const status = document.getElementById('relay-status');
+  if (!mod) { status.textContent = 'Bundle WebUSB no disponible.'; return; }
+  const adb = mod.getAdb && mod.getAdb();
+  if (!adb) {
+    status.textContent = 'Conectá "🔌 USB directo (fluido)" primero -- el relay reusa esa conexión.';
+    return;
+  }
+  const sessionId = document.getElementById('relay-session-id').value.trim();
+  if (!sessionId) { status.textContent = 'Poné un session id (ej. el serial del device).'; return; }
+  const deviceIp = document.getElementById('relay-device-ip').value.trim();
+  // fridaWsUrl null si no hay IP -- el túnel de frida simplemente no vuelve a
+  // abrir (ver openFridaWsChannel), pero adb (shell/install/pull/screencap)
+  // sigue funcionando igual.
+  const fridaWsUrl = deviceIp ? `ws://${deviceIp}:27042/ws` : null;
+  try {
+    relayClient = new mod.RelayClient(adb, sessionId, (s) => { status.textContent = s; }, fridaWsUrl);
+    await relayClient.start();
+    setRelayConnectedUi(true);
+  } catch (e) {
+    console.error('connectRelay falló:', e);
+    status.textContent = `Error activando el relay: ${e.message || e}`;
+    relayClient = null;
+  }
+}
+
+async function disconnectRelay(){
+  const status = document.getElementById('relay-status');
+  setRelayConnectedUi(false);
+  if (!relayClient) return;
+  try {
+    await relayClient.stop();
+  } catch (e) {
+    console.error('disconnectRelay falló:', e);
+    status.textContent = `Error deteniendo el relay: ${e.message || e}`;
+  } finally {
+    relayClient = null;
+  }
+}
+
+// ── Agente / Chat ────────────────────────────────────────────────────────
+async function loadAgentPrompt(){
+  const data = await j('/api/agent/prompt');
+  document.getElementById('agent-prompt').textContent =
+    data.available ? data.prompt : '(plugin aipwn no instalado/disponible en este entorno)';
+}
+
+let chatSocket = null;
+function connectChat(){
+  const pkg = document.getElementById('chat-package').value.trim();
+  if (!pkg) return;
+  if (chatSocket) chatSocket.close();
+  document.getElementById('chatlog').innerHTML = '';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  chatSocket = new WebSocket(`${proto}://${location.host}/ws/chat/${encodeURIComponent(pkg)}`);
+  chatSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
+  chatSocket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    const log = document.getElementById('chatlog');
+    log.innerHTML += `<div class="msg"><span class="op">[${msg.data.from}]</span> ${msg.data.text}</div>`;
+    log.scrollTop = log.scrollHeight;
+  };
+}
+function sendChat(){
+  const input = document.getElementById('chat-text');
+  if (!chatSocket || !input.value.trim()) return;
+  chatSocket.send(input.value.trim());
+  input.value = '';
+}
+
+// ── Pentest asistido (co-piloto de consulta) ────────────────────────────
+async function checkQueryAvailable(){
+  try {
+    const data = await j('/api/query/available');
+    if (!data.available) {
+      const tab = document.getElementById('tab-query-label');
+      tab.classList.add('disabled');
+      tab.title = 'no disponible -- falta el plugin aipwn o el bloque llm: en config.yaml';
+    }
+  } catch(e){}
+}
+
+let querySocket = null;
+function _qAppend(cls, html){
+  const log = document.getElementById('querylog');
+  log.innerHTML += `<div class="qmsg ${cls}">${html}</div>`;
+  log.scrollTop = log.scrollHeight;
+}
+function connectQuery(){
+  const pkg = document.getElementById('query-package').value.trim();
+  if (!pkg) return;
+  if (querySocket) querySocket.close();
+  document.getElementById('querylog').innerHTML = '';
+  const serial = document.getElementById('query-serial').value.trim();
+  const relay = document.getElementById('query-relay').checked;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  querySocket = new WebSocket(`${proto}://${location.host}/ws/query/${encodeURIComponent(pkg)}`);
+  querySocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
+  querySocket.onopen = () => {
+    querySocket.send(JSON.stringify({serial: serial || null, relay}));
+    _qAppend('qassistant', `<b>conectado</b> a ${pkg}${relay ? ' (vía relay)' : serial ? ` (serial ${serial})` : ' (sin device -- modo estático)'}`);
+  };
+  querySocket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.kind === 'tool') {
+      _qAppend('qtool', `▸ ejecutando <b>${msg.data.name}</b>(${JSON.stringify(msg.data.arguments)})`);
+    } else if (msg.kind === 'tool_result') {
+      _qAppend('qtool', `  ↳ ${msg.data.name}: ${msg.data.result.slice(0, 400)}`);
+    } else if (msg.kind === 'image') {
+      _qAppend('qtool', `<img class="qimg" src="data:image/${msg.data.format};base64,${msg.data.b64}">`);
+    } else if (msg.kind === 'assistant') {
+      _qAppend('qassistant', msg.data.text.replace(/</g, '&lt;'));
+    } else if (msg.kind === 'error') {
+      _qAppend('qerror', `⚠ ${msg.data.text}`);
+    }
+  };
+}
+function sendQuery(){
+  const input = document.getElementById('query-text');
+  if (!querySocket || !input.value.trim()) return;
+  _qAppend('qassistant', `<span style="color:var(--accent)">[vos]</span> ${input.value.trim().replace(/</g, '&lt;')}`);
+  querySocket.send(input.value.trim());
+  input.value = '';
+}
+
+// ── Modal de detalle de app ──────────────────────────────────────────────
+function renderFindingsTable(findings){
+  const tbody = document.getElementById('modal-findings');
+  tbody.innerHTML = (findings || []).map(f => `
+    <tr>
+      <td>${f.rule_id}</td><td>${sevBadge(f.severity)}</td>
+      <td>${f.masvs || '–'}</td><td>${f.maswe || '–'}</td><td>${f.cwe || '–'}</td>
+      <td>${f.file ? f.file + ':' + (f.line||0) : '–'}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(sin hallazgos)</td></tr>';
+}
+
+// Clic en una fila del historial -- carga los hallazgos de ESE run puntual en
+// la tabla de arriba (antes solo mostraba el run más reciente, sin forma de
+// inspeccionar corridas viejas).
+async function loadRunFindings(runId, dateLabel){
+  const run = await j(`/api/runs/${runId}`);
+  document.getElementById('modal-findings-title').textContent =
+    `Hallazgos del run #${runId}` + (dateLabel ? ` (${dateLabel})` : '');
+  renderFindingsTable(run.findings);
+}
+
+async function openApp(pkg){
+  currentApp = pkg;
+  document.getElementById('modal-pkg').textContent = pkg;
+  const apps = await j('/api/apps');
+  const app = apps.find(a => a.package === pkg) || {};
+  document.getElementById('modal-verdict').innerHTML = verdictBadge(app.last_verdict);
+  document.getElementById('modal-score').textContent = (app.masvs_score ?? '–') + (app.grade ? ' ('+app.grade+')' : '');
+  document.getElementById('modal-due').textContent = app.next_due_at ? app.next_due_at.slice(0,10) : '–';
+  document.getElementById('modal-findings-title').textContent = 'Hallazgos del último run';
+
+  if (app.last_run_id) {
+    const run = await j(`/api/runs/${app.last_run_id}`);
+    renderFindingsTable(run.findings);
+  } else {
+    renderFindingsTable([]);
+  }
+
+  const trend = await j(`/api/apps/${encodeURIComponent(pkg)}/trend`);
+  renderTrend(trend);
+
+  const history = await j(`/api/apps/${encodeURIComponent(pkg)}/runs`);
+  renderHistory(history, app.last_run_id);
+
+  const consolidated = await j(`/api/apps/${encodeURIComponent(pkg)}/findings`);
+  renderConsolidatedFindings(consolidated);
+
+  document.getElementById('app-modal').classList.add('open');
+}
+function closeAppModal(){
+  document.getElementById('app-modal').classList.remove('open');
+}
+
+// Historial de análisis de la app (GET /api/apps/{pkg}/runs), con descarga de
+// reportes por run. El PDF es un archivo canónico por PAQUETE (reporter.py lo
+// sobreescribe en cada análisis, no genera uno por run) -- mostrarlo en runs
+// viejos daría a entender que ese PDF corresponde a ESE análisis puntual,
+// cuando en realidad sería el más reciente. Por eso el botón de PDF solo
+// aparece en el run más reciente; el JSON sí es único por run (nombre con
+// timestamp) y se muestra siempre que exista.
+function renderHistory(runs, lastRunId){
+  const tbody = document.getElementById('modal-history');
+  tbody.innerHTML = runs.map(r => {
+    const dateLabel = (r.finished_at || r.started_at || '–').slice(0,16).replace('T',' ');
+    const buttons = [];
+    if (r.artifacts && r.artifacts.json) {
+      buttons.push(`<a href="/api/runs/${r.id}/download/json" class="job-id-link" title="Descargar JSON">JSON</a>`);
+    }
+    if (r.artifacts && r.artifacts.pdf && r.id === lastRunId) {
+      buttons.push(`<a href="/api/runs/${r.id}/download/pdf" class="job-id-link" title="Descargar PDF">PDF</a>`);
+    }
+    return `
+      <tr class="clickable" onclick="loadRunFindings(${r.id}, '${dateLabel}')" title="Ver hallazgos del run #${r.id}">
+        <td>${dateLabel}</td>
+        <td>${verdictBadge(r.verdict)}</td>
+        <td>${r.masvs_score ?? '–'}${r.grade ? ' ('+r.grade+')' : ''}</td>
+        <td>${r.findings_count}</td>
+        <td>${buttons.join(' · ') || '<span style="color:var(--dim)">–</span>'}</td>
+      </tr>`;
+  }).join('') || '<tr><td colspan="5" style="color:var(--dim)">(sin historial)</td></tr>';
+}
+
+function renderConsolidatedFindings(findings){
+  const tbody = document.getElementById('modal-consolidated');
+  tbody.innerHTML = (findings || []).map(f => `
+    <tr>
+      <td>${findingStatusBadge(f.status)}</td>
+      <td>${f.rule_id}</td>
+      <td>${sevBadge(f.severity)}</td>
+      <td>${f.file ? f.file + ':' + (f.line||0) : '–'}</td>
+      <td>${f.seen_in_runs}</td>
+      <td>${(f.first_seen_at || '–').slice(0,10)}</td>
+      <td>${(f.last_seen_at || '–').slice(0,10)}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--dim)">(sin hallazgos en ninguna corrida)</td></tr>';
+}
+
+function renderTrend(points){
+  const svg = document.getElementById('trend-svg');
+  const W = 600, H = 160, PAD = 24;
+  svg.innerHTML = '';
+  if (!points.length) {
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" fill="var(--dim)" font-size="12" text-anchor="middle">(sin historial)</text>`;
+    return;
+  }
+  const gradeColor = {A:'var(--good)', B:'var(--good)', C:'var(--warning)', D:'var(--serious)', F:'var(--critical)'};
+  const n = points.length;
+  const x = (i) => PAD + (i/(Math.max(n-1,1))) * (W - 2*PAD);
+  const y = (score) => H - PAD - (score/100) * (H - 2*PAD);
+
+  let svgHtml = '';
+  [0,25,50,75,100].forEach(v => {
+    svgHtml += `<line x1="${PAD}" y1="${y(v)}" x2="${W-PAD}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>`;
+    svgHtml += `<text x="2" y="${y(v)+4}" font-size="9" fill="var(--dim)">${v}</text>`;
+  });
+  let path = points.map((p,i) => `${i===0?'M':'L'} ${x(i)} ${y(p.masvs_score)}`).join(' ');
+  svgHtml += `<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
+  points.forEach((p,i) => {
+    const color = gradeColor[p.grade] || 'var(--dim)';
+    svgHtml += `<circle cx="${x(i)}" cy="${y(p.masvs_score)}" r="5" fill="${color}"
+      onmouseenter="showTrendTip(event,'${(p.finished_at||'').slice(0,10)} — Score ${p.masvs_score} (${p.grade||'?'})')"
+      onmouseleave="hideTrendTip()" style="cursor:pointer"/>`;
+  });
+  if (n) {
+    svgHtml += `<text x="${x(0)}" y="${H-4}" font-size="9" fill="var(--dim)">${(points[0].finished_at||'').slice(0,10)}</text>`;
+    svgHtml += `<text x="${x(n-1)}" y="${H-4}" font-size="9" fill="var(--dim)" text-anchor="end">${(points[n-1].finished_at||'').slice(0,10)}</text>`;
+  }
+  svg.innerHTML = svgHtml;
+}
+function showTrendTip(ev, text){
+  const tip = document.getElementById('trend-tooltip');
+  tip.textContent = text;
+  tip.style.left = (ev.clientX + 12) + 'px';
+  tip.style.top = (ev.clientY + 12) + 'px';
+  tip.style.display = 'block';
+}
+function hideTrendTip(){
+  document.getElementById('trend-tooltip').style.display = 'none';
+}
+
+async function saveSchedule(){
+  const days = parseInt(document.getElementById('sched-days').value, 10) || 30;
+  await j(`/api/schedule/${encodeURIComponent(currentApp)}`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({interval_days: days, enabled: true}),
+  });
+  const ok = document.getElementById('sched-saved');
+  ok.style.display = 'inline';
+  setTimeout(() => ok.style.display = 'none', 1500);
+  refreshApps();
+}
+
+async function reQueue(){
+  const apps = await j('/api/apps');
+  const app = apps.find(a => a.package === currentApp) || {};
+  // FIX (2026-07-27): si la app se analizó desde un .apk local (nunca publicada
+  // en ninguna store), re-descargarla por package id siempre falla -- usar la
+  // ruta local guardada en apps.source (ver store/hooks.py::_persist_after_analysis).
+  const target = (app.source && app.source.startsWith('local:')) ? app.source.slice(6) : currentApp;
+  await j('/api/queue', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({target, kind:'static', run_now:true}),
+  });
+  closeAppModal();
+  refreshQueue();
+}
+
+// Precarga los campos de serial (cola/batch) con strategies.default_device_id
+// de config.yaml -- típicamente un serial de red ("ip:5555" tras `adb tcpip
+// 5555`) para no tener que escribirlo a mano y para que no compita por el
+// cable USB con el video WebUSB. Solo si el campo está vacío -- no pisa lo
+// que el operador ya haya escrito.
+(async () => {
+  try {
+    const { serial } = await j('/api/config/default-serial');
+    if (!serial) return;
+    for (const id of ['q-serial', 'batch-serial']) {
+      const el = document.getElementById(id);
+      if (el && !el.value) el.value = serial;
+    }
+  } catch (e) { /* config no disponible -- no-op, los campos quedan vacíos */ }
+})();
+
+refreshAll();
+setInterval(refreshAll, 5000);
+checkQueryAvailable();
+</script>
+</body>
+</html>

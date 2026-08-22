@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from nutcracker_core import toolbox
+
 from .vuln_scanner import VulnFinding
 from .i18n import t as _t
 
@@ -290,59 +292,78 @@ def _extract_so_files(apk_path: Path, work_dir: Path) -> list[Path]:
     return extracted
 
 
-def _get_imported_symbols(so_path: Path) -> list[str]:
+def _run_native_tool(
+    tool_name: str, args: list[str], config: dict | None, timeout: int,
+) -> subprocess.CompletedProcess | None:
+    """Corre ``tool_name`` (nm/objdump/strings) local o vía el toolbox de
+    Docker (ver nutcracker_core/toolbox/) -- opt-in vía ``toolbox.enabled``
+    en config.yaml. Devuelve None si la herramienta no está disponible por
+    ningún lado (no es un error -- los llamadores ya toleraban "no
+    encontrada" devolviendo lista vacía, mismo comportamiento de antes)."""
+    if toolbox.is_enabled(config):
+        try:
+            return toolbox.run(tool_name, args, config=config, timeout=timeout)
+        except toolbox.ToolboxError:
+            return None
+
+    local_bin = shutil.which(tool_name)
+    if not local_bin and tool_name == "nm":
+        local_bin = shutil.which("arm-linux-androideabi-nm")
+    if not local_bin and tool_name == "objdump":
+        local_bin = shutil.which("llvm-objdump")
+    if not local_bin:
+        return None
+    return subprocess.run([local_bin, *args], capture_output=True, text=True, timeout=timeout)
+
+
+def _get_imported_symbols(so_path: Path, config: dict | None = None) -> list[str]:
     """
     Devuelve la lista de símbolos importados (undefined) del .so usando nm o objdump.
     Prefiere nm (más universal), fallback a objdump.
     """
-    nm = shutil.which("nm") or shutil.which("arm-linux-androideabi-nm")
-    if nm:
-        try:
-            result = subprocess.run(
-                [nm, "-D", "--undefined-only", str(so_path)],
-                capture_output=True, text=True, timeout=15,
-            )
-            symbols: list[str] = []
-            for line in result.stdout.splitlines():
+    try:
+        result = _run_native_tool(
+            "nm", ["-D", "--undefined-only", str(so_path.resolve())], config, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        result = None
+    if result is not None:
+        symbols: list[str] = []
+        for line in result.stdout.splitlines():
+            parts = line.strip().split()
+            if parts:
+                symbols.append(parts[-1].lstrip("_"))
+        return symbols
+
+    try:
+        result = _run_native_tool(
+            "objdump", ["-T", str(so_path.resolve())], config, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        result = None
+    if result is not None:
+        symbols = []
+        for line in result.stdout.splitlines():
+            if "*UND*" in line or "UND" in line:
                 parts = line.strip().split()
                 if parts:
                     symbols.append(parts[-1].lstrip("_"))
-            return symbols
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-
-    objdump = shutil.which("objdump") or shutil.which("llvm-objdump")
-    if objdump:
-        try:
-            result = subprocess.run(
-                [objdump, "-T", str(so_path)],
-                capture_output=True, text=True, timeout=15,
-            )
-            symbols = []
-            for line in result.stdout.splitlines():
-                if "*UND*" in line or "UND" in line:
-                    parts = line.strip().split()
-                    if parts:
-                        symbols.append(parts[-1].lstrip("_"))
-            return symbols
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        return symbols
 
     return []
 
 
-def _get_strings(so_path: Path, min_len: int = 8) -> list[str]:
-    """Extrae strings imprimibles del .so. Usa el comando `strings` si está disponible."""
-    strings_bin = shutil.which("strings")
-    if strings_bin:
-        try:
-            result = subprocess.run(
-                [strings_bin, "-n", str(min_len), str(so_path)],
-                capture_output=True, text=True, timeout=20,
-            )
-            return result.stdout.splitlines()
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+def _get_strings(so_path: Path, min_len: int = 8, config: dict | None = None) -> list[str]:
+    """Extrae strings imprimibles del .so. Usa el comando `strings` si está disponible
+    (local o vía el toolbox de Docker)."""
+    try:
+        result = _run_native_tool(
+            "strings", ["-n", str(min_len), str(so_path.resolve())], config, timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        result = None
+    if result is not None:
+        return result.stdout.splitlines()
 
     # Fallback Python puro: extraer secuencias ASCII imprimibles
     found: list[str] = []
@@ -370,6 +391,7 @@ def scan_native_libs(
     work_dir: Path,
     progress_callback: Callable[[str], None] | None = None,
     abi_filter: str | None = "arm64-v8a",
+    config: dict | None = None,
 ) -> list[VulnFinding]:
     """
     Extrae los .so del APK y aplica reglas NAT001-NAT008.
@@ -380,6 +402,8 @@ def scan_native_libs(
         progress_callback: Función(str) para mensajes de progreso.
         abi_filter:        Si se especifica, solo escanear .so de esa ABI.
                            None = escanear todas las ABIs.
+        config:            Config de nutcracker -- habilita nm/objdump/strings
+                           vía el toolbox de Docker si ``toolbox.enabled: true``.
 
     Returns:
         Lista de VulnFinding compatible con ScanResult.findings.
@@ -417,10 +441,10 @@ def scan_native_libs(
         lib_name = so_path.name
         _cb(f"  → {lib_name}")
 
-        imported_syms = _get_imported_symbols(so_path)
+        imported_syms = _get_imported_symbols(so_path, config)
         imported_set = {s.lower() for s in imported_syms}
 
-        all_strings = _get_strings(so_path)
+        all_strings = _get_strings(so_path, config=config)
         strings_lower = [s.lower() for s in all_strings]
 
         # Agrupar hallazgos por regla para este .so (evitar duplicados masivos)

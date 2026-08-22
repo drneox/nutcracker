@@ -60,11 +60,62 @@ All results are consolidated into a technical PDF report ready for reporting.
 - Optional OSINT module: subdomains via crt.sh, public leaks on GitHub/Postman/FOFA/Shodan/Wayback, false-positive filter and optional web searches via DuckDuckGo
 - **AI Review** (`ai-review`): LLM-powered false positive filter — reviews each finding, tags FPs with `_fp: true` (preserved in JSON for audit), downgrades low-confidence findings severity; auto-regenerates PDF
 - AndroidManifest.xml analysis: dangerous permissions, exported components, `network security config` and insecure configurations
-- MASVS v2 compliance scoring: 24-control evaluation with numeric pass/fail count (e.g. `10/24 controls`)
+- MASVS v2.1 compliance scoring, backed by a deterministic check registry mapped to **MASVS + MASWE + CWE** (see [OWASP MAS Alignment](#owasp-mas-alignment-masvs--maswe--cwe))
 - Complete PDF report: cover page, MASVS compliance, protections, misconfigurations, OSINT, leaks, and SAST vulnerabilities
-- Batch mode to scan multiple apps in sequence
+- Batch mode to scan multiple apps, backed by a **job queue** with configurable static parallelism and per-device serialization for dynamic jobs (see [Mass Execution](#mass-execution-queue--scheduler))
+- Built-in **scheduler** that re-queues every app for periodic re-review (default ≥1/month), driven by `nutcracker serve`
+- Local **web dashboard** (`nutcracker dashboard`): apps overview, live job logs, fluid WebUSB device video, MASVS trend per app, and an inline schedule editor — SQLite-backed, no external services (see [Web Dashboard](#web-dashboard))
 - Modules controllable via feature flags in `config.yaml`
 - `decompilation: jadx` pipeline option forces static-only analysis — disables Frida/emulator even when DexGuard is detected
+
+---
+
+## Quick Deploy Guide
+
+Fastest path from a clean machine to a working scan.
+
+**1. Clone and set up the Python environment**
+
+```bash
+git clone <repo>
+cd nutcracker
+./setup.sh
+# or manually:
+#   python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+```
+
+**2. Get the analysis tools — pick one**
+
+- **Install locally** (jadx, apktool, semgrep, gitleaks, apkleaks, apkid, adb, Android SDK
+  build-tools) — see [System Requirements](#system-requirements) for the exact commands per OS.
+- **Or skip the local install entirely: enable the Docker toolbox.** If Docker is available,
+  none of those tools need to be on the host — they run sandboxed in a container. See
+  [Static Analysis Toolbox](#static-analysis-toolbox-docker-optional) below.
+
+  ```yaml
+  # config.yaml
+  toolbox:
+    enabled: true
+  ```
+
+`adb`/`frida` always run on the host either way — they need to talk to a real device or emulator,
+so they're out of scope for the toolbox (see that section for why).
+
+**3. Configure**
+
+```bash
+cp config.yaml.example config.yaml
+# fill in google_play.email/aas_token if you'll download from Google Play (see
+# "Obtaining the Google Play AAS Token" below), and the llm: block if you use
+# ai-review.
+```
+
+**4. Run your first scan**
+
+```bash
+python nutcracker.py analyze path/to/app.apk         # local APK
+python nutcracker.py scan com.example.app            # download + analyze
+```
 
 ---
 
@@ -143,6 +194,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Every command in this README also works as `python nutcracker.py <command>` (script mode, no
+install needed). Alternatively, install it as a package to get a `nutcracker` console command:
+
+```bash
+pip install -e .              # editable install; entry point: nutcracker = nutcracker_core.cli:cli
+pip install -e ".[dashboard]" # + fastapi/uvicorn for `nutcracker dashboard`
+nutcracker --help
+```
+
 ### Python Dependencies (requirements.txt)
 
 | Package | Purpose |
@@ -159,6 +219,52 @@ pip install -r requirements.txt
 > system tools (pip or Homebrew), not project dependencies.
 > They are validated with `shutil.which()` before use; if not installed,
 > the corresponding module is skipped with a warning.
+
+---
+
+## Static Analysis Toolbox (Docker, optional)
+
+Not to be confused with [Docker Usage (hybrid)](#docker-usage-hybrid) below — that mode runs the
+whole `nutcracker` process inside a container. This is different: it's a uniform access layer that
+sandboxes only the *static* analysis tools (`nutcracker_core/toolbox/`), while `nutcracker` itself
+keeps running directly on the host.
+
+**Why Docker only for static tools:** jadx/apktool/radare2/etc. decompile third-party content
+(APKs of real, potentially malicious apps) — the container isolates any attempt to exploit a bug in
+the decompiler itself from the rest of the host. It also sidesteps installing 8+ separate tools
+per-OS (see [System Requirements](#system-requirements)) — useful on a machine that doesn't have
+them and won't otherwise need them.
+
+**Why not `adb`/`frida` too:** they need to talk directly to a physical device or emulator attached
+to the host. Putting them in a container would add a network/USB layer to solve without gaining real
+isolation — that isolation comes from having a dedicated test device, not from the process that
+controls it.
+
+Tools included: `aapt`, `aapt2`, `apktool`, `baksmali`, `smali`, `jadx`, `r2` (radare2), `readelf`,
+`nm`, `objdump`, `strings`, `blint`, `gitleaks`, `apkid`, `apksigner`, `apkleaks` — all verified
+running for real inside the built image, not just assumed from the Dockerfile.
+
+**Enable it** in `config.yaml`:
+
+```yaml
+toolbox:
+  enabled: false   # true = decompile/scan via Docker instead of local binaries
+  image: 'nutcracker-toolbox-static:latest'
+```
+
+With `enabled: false` (the default), nothing changes — every module still calls local binaries via
+`shutil.which()` exactly as before. Currently wired into `decompiler.py` (jadx/apktool),
+`native_scanner.py` (nm/objdump/strings) and `leak_scanner.py` (gitleaks/apkleaks).
+
+**Build the image** (optional — it builds itself automatically the first time it's needed):
+
+```bash
+docker build -f nutcracker_core/toolbox/docker/Dockerfile.static \
+    -t nutcracker-toolbox-static:latest nutcracker_core/toolbox/docker
+```
+
+See [`nutcracker_core/toolbox/README.md`](nutcracker_core/toolbox/README.md) for the full design
+(volume mounting, the `--user` UID/GID fix, known limitations).
 
 ---
 
@@ -287,6 +393,71 @@ The command:
 
 ---
 
+## Mass Execution: Queue & Scheduler
+
+`batch` (and every job submitted through `queue add`) runs on a shared job queue instead of an
+in-process loop: **static** analyses (decompile, SAST, OSINT) run in parallel across
+`queue.static_workers` threads, while **dynamic** analyses (Frida/ADB on a physical device) are
+always serialized per device serial — two dynamic jobs never touch the same phone at once, even
+if `queue.dynamic_workers > 1` (that setting controls parallelism *across different* devices).
+Every job runs as an isolated subprocess (the same `analyze`/`scan` CLI path), so a crash in one
+target can never corrupt another's in-process state.
+
+```bash
+# Enqueue a single target (path, URL, package id) and run the queue immediately:
+python nutcracker.py queue add com.example.app --run
+
+# Enqueue a dynamic job (requires a local .apk and a connected device):
+python nutcracker.py queue add downloads/app.apk --dynamic --serial emulator-5554 --run
+
+# Batch a .txt file of package ids: static analysis for every line, chaining an
+# aipwn bypass run after each one that finishes OK (list_file: one package id
+# per line, blank lines/#comments ignored, same format as `batch`):
+python nutcracker.py queue add packages.txt --then-aipwn --serial emulator-5554 --run
+
+# Same, but pull each .apk from the app already installed on the device
+# instead of downloading it from a store (--source device is a single global
+# flag for the whole file, not per line):
+python nutcracker.py queue add packages.txt --then-aipwn --source device --serial emulator-5554 --run
+
+# List recent jobs:
+python nutcracker.py queue ls
+python nutcracker.py queue ls --status error --limit 50
+
+# Schedule a periodic review (default: every 30 days, i.e. ≥1/month):
+python nutcracker.py schedule set com.example.app --every 30
+python nutcracker.py schedule ls
+python nutcracker.py schedule set com.example.app --disable
+
+# Long-running daemon: re-queues every app whose schedule is due, on a poll
+# interval (config.yaml → scheduler.poll_interval_minutes, default 60min).
+python nutcracker.py serve
+```
+
+Any app that goes through `batch`, `queue add`, or `analyze`/`scan` is auto-scheduled for
+periodic re-review — the "≥1 review/month" guarantee applies without extra setup, using
+`scheduler.default_interval_days` (default `30`) unless overridden per app via `schedule set`.
+
+Configure parallelism and cadence in `config.yaml`:
+
+```yaml
+queue:
+  static_workers: 4          # parallel static analyses at once
+  dynamic_workers: 2         # concurrent *devices* for dynamic jobs (never same serial)
+
+scheduler:
+  enabled: true
+  poll_interval_minutes: 60  # how often `serve` checks for due apps
+  default_interval_days: 30  # ≥1 review/month per app unless overridden
+```
+
+State (queued/running/done/error, per-app schedule, run history and findings) is persisted to a
+local SQLite database (`store.db_path` in `config.yaml`, default `./nutcracker.db`) — this is
+what both `serve` and the dashboard read from; it does not replace the existing JSON/PDF reports
+in `reports/<pkg>/`, it complements them.
+
+---
+
 ## Configuration (`config.yaml` / `config.yaml.example`)
 
 Use [config.yaml.example](config.yaml.example) as the source of truth.
@@ -376,12 +547,39 @@ llm:
   max_tokens: 4096
   timeout: 120
 
+# Azure AI Foundry example: keep provider: openai (the ".../openai/v1"
+# endpoint is OpenAI-wire-compatible) -- do NOT use provider: azure or
+# azureopenai for this URL shape, those expect a different endpoint format
+# (*.models.ai.azure.com or *.openai.azure.com + api_version) and will fail.
+# llm:
+#   provider: openai
+#   model: my-deployment-name          # the Azure deployment name, not a generic model id
+#   api_key: "<azure-api-key>"
+#   base_url: "https://<resource>.services.ai.azure.com/openai/v1"
+
 auto:
   unattended: true              # Unattended mode (no manual intervention)
 
 batch:
   list_file: ""                # Optional list file for batch mode
   stop_on_error: false
+
+store:                          # SQLite persistence (queue/scheduler/dashboard state)
+  enabled: true                 # set false to skip SQLite entirely
+  db_path: ""                   # empty = ./nutcracker.db at the project root
+
+queue:                          # see "Mass Execution: Queue & Scheduler"
+  static_workers: 4
+  dynamic_workers: 2
+
+scheduler:                      # see "Mass Execution: Queue & Scheduler"
+  enabled: true
+  poll_interval_minutes: 60
+  default_interval_days: 30
+
+dashboard:                      # see "Web Dashboard" — only used by `nutcracker dashboard`
+  bind: "127.0.0.1"
+  port: 8765
 ```
 
 ---
@@ -499,6 +697,118 @@ When the app doesn't start with `monkey` (native-level anti-tampering, emulator 
 
 ---
 
+## OWASP MAS Alignment (MASVS + MASWE + CWE)
+
+Every finding-producing rule (regex, semgrep, native-lib heuristics, manifest analysis, and a
+handful of deterministic on-device checks) is registered as a `Check` in
+`nutcracker_core/checks/` and mapped to the official OWASP taxonomy: a **MASVS v2.1** control, the
+relevant **MASWE** weakness id(s) (`MASWE-XXXX`), and a **CWE** id where one genuinely applies.
+There is no in-process framework separate from the existing scanners — `checks/static/adapter.py`
+wraps the existing rule registries (`vuln_scanner`, `native_scanner`, detectors, manifest
+analysis) so every rule gets taxonomy metadata without being rewritten.
+
+```bash
+# Regenerate the coverage matrix from the check registry (source of truth, not hand-edited):
+python tools/gen_owasp_coverage.py    # writes docs/owasp-mas-coverage.md
+```
+
+Current coverage (regenerated, not aspirational): **18/24 MASVS v2.1 controls** have at least one
+check, across **68 checks** (66 static, 2 dynamic — ADB-only, no LLM), referencing **33/119 MASWE**
+weaknesses. The 6 uncovered controls (`MASVS-AUTH-1`, `AUTH-3`, `CODE-2`, `CODE-3`, `PRIVACY-3`,
+`PRIVACY-4`) are documented as **deliberately out of scope**, not missing work: they require live
+backend behavior, business-logic understanding, or a real CVE database — none of which can be
+verified deterministically by analyzing an APK alone. See
+[docs/owasp-mas-coverage.md](docs/owasp-mas-coverage.md) for the full per-control breakdown.
+
+Dynamic checks (`checks/dynamic/`) run headless over ADB against a connected device/emulator —
+no Frida REPL, no manual interaction — via:
+
+```bash
+python nutcracker.py analyze downloads/app.apk --dynamic-checks --serial emulator-5554
+```
+
+---
+
+## Web Dashboard
+
+`nutcracker dashboard` starts a local web UI (FastAPI + WebSocket, self-contained — no CDN
+dependencies, dark/light theme aware) backed by the same SQLite store and job queue used by
+`serve`/`batch`/`queue add`:
+
+```bash
+python nutcracker.py dashboard
+# → http://127.0.0.1:8765
+
+python nutcracker.py dashboard --port 8080 --host 0.0.0.0   # expose on the LAN
+python nutcracker.py dashboard --no-scheduler                # if `nutcracker serve` already runs elsewhere
+```
+
+It shows:
+- **Apps overview** — verdict, MASVS score/grade, next scheduled review; click a row for a
+  detail view with the MASVS score trend over time, the MASVS controls affected, and the full
+  findings table (rule, severity, MASVS/MASWE/CWE, location) for the latest run.
+- **Analysis queue** — enqueue a target (path/URL/package id/list file) and watch it run,
+  including `aipwn` runs (see below).
+- **Batch from a .txt file** — upload a `.txt` of package ids (one per line, `#comments` ignored)
+  from the queue panel: every package gets a static analysis and, once it finishes OK, a chained
+  `aipwn` run right after (same semantics as `queue add <file> --then-aipwn` below). A single
+  dropdown picks the `.apk` source for the whole file — the store (default) or the app already
+  installed on the connected device (`adb pull`, no download at all).
+- **Live logs** — real job output streamed line-by-line over WebSocket as it happens.
+- **Device** — fluid live video via WebUSB + WebCodecs, opt-in (see below). No fallback: without
+  WebUSB support the tab just shows why (unsupported browser, or the bundle isn't built yet).
+- **Agent / Chat** — the real system prompt of the `aipwn` bypass agent (if installed), and a
+  WebSocket chat channel that a running `aipwn` job actually consumes (see below).
+- **Inline schedule editor** — change an app's review interval without touching the CLI.
+
+The dashboard is itself a plugin (`nutcracker_core/plugins/dashboard/`) — it only *reads* the
+store and *drives* the queue through their public APIs, following the same core/plugin boundary
+as every other plugin in this project.
+
+### Fluid device video (WebUSB + WebCodecs)
+
+For genuinely fluid video (15-30fps, like [app.webadb.com](https://app.webadb.com)), the dashboard
+ships an opt-in **WebUSB** mode: the *browser itself* speaks the ADB/scrcpy protocol directly over
+USB — no server-side process at all for this path — and decodes raw H.264 natively via the
+WebCodecs API. It's the project's first JS subproject
+(`nutcracker_core/plugins/dashboard/webusb/`, TypeScript + Vite, built on
+[Tango](https://github.com/yume-chan/ya-webadb)):
+
+```bash
+cd nutcracker_core/plugins/dashboard/webusb
+corepack enable && pnpm install && pnpm run build
+```
+
+This produces a self-contained bundle (the real `scrcpy-server` binary ends up embedded inside it
+as a data URI — no separate `.bin` file to manage) served by the dashboard. A "🔌 USB directo
+(fluido)" button appears in the Device tab automatically once the bundle exists and the browser
+supports it — real constraints apply: **Chromium only** (no Firefox/Safari, WebUSB isn't
+implemented there), the phone must be on **USB on the same machine as the browser** (can't reach a
+remote/networked device), and it needs a secure context (fine on `localhost`, not on a plain-HTTP
+LAN address). Without a supported browser or a built bundle, the Device tab explains why instead
+of silently falling back to anything else. See
+[webusb/README.md](nutcracker_core/plugins/dashboard/webusb/README.md) for the full picture.
+
+### `aipwn` in the queue + chat wiring
+
+`aipwn` (the LLM-powered bypass agent) can run as a queue job like any other target — its live
+reasoning ("Nutcracker thinking", each tool call) streams to the same live-logs WebSocket as
+`analyze`/`scan` jobs, and it shares the per-device lock with dynamic jobs (never runs
+concurrently with another job on the same phone):
+
+```bash
+python nutcracker.py queue add com.example.app --aipwn --serial emulator-5554 --run
+```
+
+The dashboard's chat (`/ws/chat/{package}`) is genuinely consumed by a running `aipwn` job: every
+operator message is also written to a small pull-based mailbox
+(`GET /api/chat/{package}/pending`); the agent polls it once per ReAct iteration (before calling
+the LLM) and injects any pending message as a real conversation turn — no dashboard running means
+no polling and zero overhead, this is entirely opt-in via the `NUTCRACKER_DASHBOARD_URL`
+environment variable the queue sets for the job's subprocess.
+
+---
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for pending tasks: OSINT improvements, iOS/IPA support and partial migration to Go.
@@ -523,6 +833,13 @@ git clone https://github.com/<user>/<plugin-repo> nutcracker_core/plugins/<name>
 |---|---|---|
 | `aipwn` | `nutcracker aipwn <package>` | Autonomous LLM-powered Frida bypass agent |
 | `aireview` | `nutcracker ai-review <package>` | LLM-powered false positive filter |
+| `dashboard` | `nutcracker dashboard` | Local web dashboard over the queue + SQLite store (see [Web Dashboard](#web-dashboard)) |
+
+> **`aipwn` native library analysis** — The agent can disassemble and patch `.so` files
+> (native RASP checks). This requires a cross-compiler `objdump` for ARM64:
+> - **macOS**: system `objdump` (LLVM) supports ELF ARM64 — no extra install needed.
+> - **Linux**: `sudo apt install binutils-aarch64-linux-gnu` (provides `aarch64-linux-gnu-objdump`). Already included in the Docker image.
+> - **Optional**: `radare2` — if present, preferred over objdump for richer output.
 
 > **`aipwn` native library analysis** — The agent can disassemble and patch `.so` files
 > (native RASP checks). This requires a cross-compiler `objdump` for ARM64:
@@ -672,42 +989,72 @@ def register(cli: click.Group) -> None:
 
 ```
 nutcracker/
-├── nutcracker.py                   # Main CLI (click)
+├── nutcracker.py                   # Thin entrypoint shim → nutcracker_core.cli.cli
 ├── config.yaml                     # Local configuration
 ├── config.yaml.example             # Configuration template
 ├── setup.sh                        # Quick install script
 ├── requirements.txt                # Python dependencies
 ├── docker-compose.yml              # Docker environment for hybrid execution
 ├── Dockerfile                      # Project base image
-├── docs/assets/                    # Logo and README assets
+├── docs/
+│   ├── assets/                     # Logo and README assets
+│   └── owasp-mas-coverage.md       # Generated MASVS×MASWE coverage matrix (tools/gen_owasp_coverage.py)
 ├── downloads/                      # Downloaded APKs
 ├── decompiled/                     # Code decompiled by jadx / frida-dexdump
 ├── frida_scripts/                  # Generated Frida bypass scripts
 ├── reports/                        # Generated PDFs and JSON reports
+├── nutcracker.db                   # SQLite store (queue/scheduler/dashboard state, gitignored)
 ├── semgrep_rules_android/          # OWASP MASTG rules
-├── tools/                          # Auxiliary utilities
+├── tools/                          # Auxiliary utilities (incl. gen_owasp_coverage.py)
 └── nutcracker_core/
     ├── __init__.py                 # Main package
     ├── analyzer.py                 # Main static analysis (androguard)
     ├── apk_tools.py                # APK manipulation and installation utilities
-    ├── config.py                   # config.yaml loading and access
+    ├── config.py                   # config.yaml loading and access (supports ${ENV_VAR})
     ├── device.py                   # Devices, SDK, Frida and adb utilities
     ├── downloader.py               # Download APKs (Google Play / APKPure / direct URL)
     ├── decompiler.py               # jadx interface
     ├── deobfuscator.py             # FART flow for physical device
     ├── frida_bypass.py             # Frida scripts (bypass, FART)
     ├── manifest_analyzer.py        # AndroidManifest.xml and insecure configuration analysis
-    ├── masvs.py                    # MASVS v2 compliance scoring (24 controls, numeric pass/fail)
+    ├── masvs.py                    # MASVS v2.1 taxonomy: controls, RULE_TO_MASVS/MASWE/CWE
+    ├── orchestrator.py             # Shared orchestration used by CLI, queue jobs and dashboard
     ├── osint.py                    # Subdomains, public leaks, Wayback and optional web searches
     ├── pdf_reporter.py             # PDF report generation (fpdf2)
     ├── pipeline.py                 # End-to-end analysis pipeline
     ├── reporter.py                 # JSON reports and console output
     ├── runtime.py                  # Dynamic analysis orchestration
+    ├── scan_types.py               # Shared finding/scan dataclasses
+    ├── scheduler.py                # APScheduler-based periodic re-review (used by `serve`/dashboard)
     ├── string_extractor.py         # APK string extraction
-    ├── vuln_scanner.py             # Semgrep + regex + apkleaks + gitleaks
+    ├── vuln_scanner.py             # Regex + semgrep vulnerability rules
+    ├── leak_scanner.py             # apkleaks + gitleaks secret scanning
+    ├── native_scanner.py           # Native (.so) library heuristics
+    ├── cli/                        # Click commands (one module per command)
+    │   ├── __init__.py             # Root click.Group + plugin loading + banner
+    │   ├── scan.py / analyze.py / launch.py / batch.py
+    │   ├── queue_cmd.py            # `queue add`/`queue ls`
+    │   ├── schedule_cmd.py         # `schedule set`/`schedule ls`
+    │   ├── serve.py                # `serve` daemon (queue + scheduler, no UI)
+    │   ├── setup_token.py / regen_pdf.py
+    ├── store/                      # SQLite persistence (Fase 0)
+    │   ├── db.py                   # Connection + WAL mode + versioned migrations
+    │   ├── repository.py           # Typed CRUD (apps, runs, findings, schedule, queue_jobs)
+    │   ├── hooks.py                # after_analysis post-hook → double, non-destructive write
+    │   └── schema.sql
+    ├── queue/                      # Job queue engine (Fase 1)
+    │   ├── engine.py                # Static thread pool + per-device lock for dynamic jobs
+    │   └── job.py
+    ├── checks/                     # OWASP MAS-aligned deterministic check registry (Fase 2)
+    │   ├── base.py                 # Check / CheckMeta / CheckFinding
+    │   ├── registry.py             # register_static / register_dynamic / load_all
+    │   ├── static/adapter.py       # Wraps vuln_scanner/native_scanner/detectors/manifest as Checks
+    │   └── dynamic/                # Headless ADB-only checks (debuggable, cleartext traffic, ...)
     ├── plugins/
     │   ├── __init__.py             # Plugin loader + post-hook registry
     │   ├── aireview/               # ai-review plugin: LLM-powered false positive filter
+    │   ├── aipwn/                  # Autonomous LLM-powered Frida bypass agent
+    │   └── dashboard/              # Web dashboard (Fase 3) — FastAPI + WS + self-contained SPA
     └── detectors/
         ├── __init__.py             # Detectors subpackage export
         ├── appdome.py              # Appdome detector

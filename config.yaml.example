@@ -1,3 +1,6 @@
+# Values can reference environment variables with "${VAR_NAME}", e.g.:
+#   aas_token: '${GOOGLE_PLAY_AAS_TOKEN}'
+# Useful to keep real secrets out of config.yaml (which is still gitignored).
 google_play:
   email: ''
   aas_token: ''
@@ -141,3 +144,85 @@ auto:
 batch:
   list_file: ''           # path to the list file (optional if passed as CLI argument)
   stop_on_error: false    # stop batch processing if an app fails
+
+# ── Persistence (SQLite) ──────────────────────────────────────────────────────
+# Every analysis is also recorded in a local SQLite DB (runs/findings/artifacts),
+# in addition to the existing reports/<pkg>/*.json and PDF (non-destructive).
+store:
+  enabled: true          # set false to skip SQLite persistence entirely
+  db_path: ''            # empty = ./nutcracker.db at the project root
+
+# ── Queue (mass execution — plan.md Fase 1) ────────────────────────────────────
+# `nutcracker queue add`/`nutcracker serve`: static jobs (decompile/scan/OSINT)
+# run in parallel; dynamic jobs (Frida/ADB on a physical device) are always
+# serialized per device serial, regardless of dynamic_workers.
+queue:
+  static_workers: 1      # parallel static analyses at once
+  dynamic_workers: 1      # concurrent *devices* for dynamic jobs (never same serial)
+
+# ── Scheduler (periodic reviews — plan.md Fase 1.2) ────────────────────────────
+# `nutcracker serve` re-queues every app whose next_due_at has passed, and
+# reschedules it after each run using its own `schedule` entry (or this default).
+scheduler:
+  enabled: true
+  poll_interval_minutes: 60      # how often the daemon checks for due apps
+  default_interval_days: 30      # ≥1 review/month per app unless overridden
+
+# ── Web dashboard (plugin — plan.md Fase 3) ────────────────────────────────────
+# `nutcracker dashboard`: starts its own queue + scheduler + a local web UI
+# (apps, live job logs, device screenshot, MASVS trend, schedule editor).
+dashboard:
+  bind: '127.0.0.1'
+  port: 8765
+  # Video en vivo del dispositivo: pestaña "Dispositivo" -> "🔌 USB directo
+  # (fluido)" (WebUSB + WebCodecs, ver nutcracker_core/plugins/dashboard/webusb/).
+  # Es la única vía de video: no hay fallback por screenshots.
+  #
+  # El navegador reclama el cable USB en exclusiva para ese video, así que
+  # nutcracker debe hablarle al teléfono por el serial de red
+  # (strategies.default_device_id = "<ip>:5555", tras `adb tcpip 5555`). Ese
+  # transporte TCP vive en el daemon adb y se cae solo (reinicio del daemon,
+  # doze/corte de red del teléfono); cada cuántos segundos revisarlo y
+  # reconectarlo en segundo plano. Mínimo efectivo: 10.
+  adb_keepalive_seconds: 60
+  # ── Login del dashboard (obligatorio para exponerlo a internet) ──────────
+  # Sin esto el dashboard no pide autenticación: cualquiera con acceso de red
+  # puede operarlo (encolar jobs, manejar el relay al dispositivo, leer
+  # reportes). Para uso local (bind 127.0.0.1) podés dejarlo deshabilitado;
+  # para un despliegue en VPS (ver deploy/README.md) es imprescindible.
+  #
+  # Generá username/password_hash/secret_key con:
+  #   python nutcracker.py dashboard-hash-password
+  # (pide la contraseña sin eco e imprime este bloque listo para pegar). NUNCA
+  # guardes la contraseña en texto plano -- solo el hash pbkdf2 va acá.
+  auth:
+    enabled: false
+    username: admin
+    password_hash: ''   # pbkdf2_sha256$...  (dashboard-hash-password)
+    # Firma las cookies de sesión. Con una clave fija las sesiones sobreviven
+    # reinicios del server; si se deja vacía se genera una al arrancar (habría
+    # que re-loguearse tras cada reinicio). Generar una:
+    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+    secret_key: ''
+    session_hours: 12   # duración de la sesión antes de re-loguear
+# ── Toolbox estático en Docker (opt-in) ────────────────────────────────────
+# Sandboxea jadx/apktool (y a futuro otras herramientas estáticas) dentro de
+# un contenedor Docker en vez de invocar binarios instalados en el host --
+# útil para no depender de tener cada herramienta instalada localmente (este
+# mismo entorno, por ejemplo, no tiene jadx) y para aislar el análisis de
+# APKs de terceros (potencialmente maliciosos) del resto del sistema.
+#
+# Herramientas dinámicas (adb, frida) NUNCA pasan por acá -- necesitan hablar
+# directo con el dispositivo físico conectado al host. Ver
+# nutcracker_core/toolbox/ para el diseño completo.
+toolbox:
+  enabled: false   # true = decompilar vía Docker en vez de binarios locales
+  image: 'nutcracker-toolbox-static:latest'
+  # Techo de memoria por contenedor (formato Docker: '4g', '2048m', ...). Sin
+  # esto, un jadx desbocado contra un APK grande/ofuscado puede agotar TODA
+  # la VM compartida de WSL2 (Docker Desktop comparte el mismo pool) y
+  # tirarse abajo con ella el dashboard y otros jobs. --memory-swap se fija
+  # igual a este valor (sin swap extra) para que un contenedor que se pasa
+  # del límite muera rápido por su cgroup en vez de entrar en swap thrashing.
+  memory_limit: '4g'
+

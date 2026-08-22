@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# UploadFile (POST /api/apks/upload) -- FastAPI requiere este paquete aparte
+# para parsear multipart/form-data, no viene con fastapi/starlette solos.
+python-multipart>=0.0.9

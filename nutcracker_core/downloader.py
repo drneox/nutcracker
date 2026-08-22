@@ -5,9 +5,12 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+
+from nutcracker_core import adb_transport
 
 
 class APKDownloadError(Exception):
@@ -260,6 +263,107 @@ class APKPureDownloader:
 
 # ── Google Play (requiere AAS token) ─────────────────────────────────────────
 
+# La lógica de salud del transporte adb (detección de fallas transitorias del
+# daemon y reconexión de seriales de red) vive en nutcracker_core.adb_transport
+# porque no es específica de la descarga: QueueEngine la usa antes de cada job
+# y el dashboard/serve la corren periódicamente en un hilo de fondo. Se
+# reexporta acá para no romper a quien ya la importaba desde este módulo.
+_is_daemon_transient_error = adb_transport.is_daemon_transient_error
+_ensure_network_serial_connected = adb_transport.ensure_connected
+
+
+class DeviceInstalledDownloader:
+    """
+    Extrae el .apk ya instalado en un dispositivo/emulador conectado, sin
+    descargar nada de ninguna store -- vía ``pm path`` + ``adb pull``.
+
+    Útil para apps que no están publicadas públicamente (demos internas,
+    apps corporativas de prueba) o cuando no hay credenciales de Google Play
+    configuradas y la app ya está instalada en el device de pruebas.
+
+    Si la app está instalada como App Bundle (varios splits), ``pm path``
+    devuelve una línea por cada uno -- se bajan todos a la misma carpeta
+    (misma convención que usa ``_find_downloaded_apk`` para descargas
+    normales) y se identifica ``base.apk`` como el APK principal a analizar.
+    """
+
+    def __init__(self, output_dir: str = "./downloads", serial: "str | None" = None,
+                 adb_bin: str = "adb"):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.serial = serial
+        self.adb_bin = adb_bin
+
+    def _adb_cmd(self, *args: str) -> list[str]:
+        cmd = [self.adb_bin]
+        if self.serial:
+            cmd += ["-s", self.serial]
+        cmd += list(args)
+        return cmd
+
+    def _run_adb(self, args: list[str], timeout: int, attempts: int = 3) -> subprocess.CompletedProcess:
+        """``subprocess.run`` con reintentos ante fallas transitorias del
+        daemon adb (ver ``_DAEMON_TRANSIENT_MARKERS``) -- un solo intento
+        alcanza casi siempre, pero conectar WebUSB en el dashboard puede
+        desestabilizar momentáneamente adb.exe (visto en uso real), y sin
+        reintentos eso tira abajo el job entero por un problema que se
+        resuelve solo en 1-2s."""
+        last: "subprocess.CompletedProcess | None" = None
+        for attempt in range(attempts):
+            last = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+            output = (last.stdout or "") + (last.stderr or "")
+            if not _is_daemon_transient_error(output):
+                return last
+            if attempt < attempts - 1:
+                time.sleep(1.5)
+        return last  # último intento, aunque siga siendo el error transitorio
+
+    def download(self, package_id: str) -> Path:
+        if self.serial:
+            adb_transport.ensure_available(self.serial, self.adb_bin)
+        try:
+            result = self._run_adb(
+                self._adb_cmd("shell", "pm", "path", package_id), timeout=15,
+            )
+        except FileNotFoundError as exc:
+            raise APKDownloadError("adb no está instalado o no está en el PATH.") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise APKDownloadError(
+                f"Timeout consultando 'pm path {package_id}' en el dispositivo."
+            ) from exc
+
+        remote_paths = [
+            line.split("package:", 1)[1].strip()
+            for line in result.stdout.splitlines()
+            if line.startswith("package:")
+        ]
+        if not remote_paths:
+            detail = (result.stderr or result.stdout or "").strip()
+            where = f" en el dispositivo ({self.serial})" if self.serial else " en el dispositivo"
+            raise APKDownloadError(
+                f"'{package_id}' no está instalado{where}."
+                + (f"\n{detail}" if detail else "")
+            )
+
+        package_dir = self.output_dir / package_id
+        package_dir.mkdir(parents=True, exist_ok=True)
+        base_local: "Path | None" = None
+        for remote_path in remote_paths:
+            remote_name = Path(remote_path).name  # base.apk, split_config.arm64_v8a.apk, ...
+            local_path = package_dir / remote_name
+            pull = self._run_adb(
+                self._adb_cmd("pull", remote_path, str(local_path)), timeout=180,
+            )
+            if pull.returncode != 0 or not local_path.exists():
+                raise APKDownloadError(
+                    f"'adb pull {remote_path}' falló: {(pull.stderr or pull.stdout).strip()}"
+                )
+            if remote_name == "base.apk" or len(remote_paths) == 1:
+                base_local = local_path
+
+        return base_local or package_dir / Path(remote_paths[0]).name
+
+
 class GooglePlayDownloader:
     """
     Descarga APKs desde Google Play usando apkeep >= 0.18.0.
@@ -299,12 +403,18 @@ def download_apk_from_config(
     progress_callback: "callable | None" = None,
     token_resolver: "callable | None" = None,
     on_start: "callable | None" = None,
+    serial: "str | None" = None,
 ) -> Path:
     """
     Descarga un APK usando la configuración del proyecto.
 
     Selector de fuente automático:
       - Si ``package`` es una URL directa a un .apk → DirectURLDownloader
+      - Si ``source="device"`` → DeviceInstalledDownloader (``adb pull`` del APK
+        ya instalado, sin tocar ninguna store -- ver ``serial``)
+      - Si ``source="device-or-store"`` → igual que "device", pero si el
+        dispositivo no está conectado o la app no está instalada, cae a la
+        store automáticamente en vez de fallar (ver batchero del dashboard)
       - Si ``source="google-play"`` o hay email configurado → GooglePlayDownloader
       - En caso contrario → APKPureDownloader (fallback sin autenticación)
 
@@ -312,8 +422,9 @@ def download_apk_from_config(
         package:           Package ID (ej. com.example.app), URL de Google Play
                            o URL directa a un .apk.
         config:            Diccionario de configuración (cargado desde config.yaml).
-        source:            Forzar fuente: ``"google-play"``, ``"apk-pure"`` o
-                           ``None`` para auto-detección.
+        source:            Forzar fuente: ``"google-play"``, ``"apk-pure"``,
+                           ``"device"``, ``"device-or-store"`` o ``None`` para
+                           auto-detección.
         output_dir:        Directorio de salida para el APK descargado.
         use_cache:         Si True, reutiliza el APK si ya existe (solo URL directa).
         progress_callback: ``callable(downloaded_bytes, total_bytes | None)``
@@ -323,6 +434,9 @@ def download_apk_from_config(
                            ``aas_token``. Debe devolver el token generado o None.
         on_start:          ``callable(label: str)`` invocado justo antes de iniciar
                            la descarga. Útil para mostrar un spinner o mensaje.
+        serial:            Serial ADB del dispositivo del que extraer el .apk
+                           cuando ``source="device"``. ``None`` = dispositivo
+                           único conectado (falla si hay más de uno).
 
     Returns:
         Path al APK descargado.
@@ -341,6 +455,30 @@ def download_apk_from_config(
         return DirectURLDownloader(output_dir).download(
             package, progress_callback=progress_callback, use_cache=use_cache
         )
+
+    # ── APK ya instalado en un dispositivo conectado (sin descargar nada) ────
+    if source == "device":
+        if on_start:
+            on_start("Dispositivo conectado (adb pull)")
+        return DeviceInstalledDownloader(output_dir=output_dir, serial=serial).download(
+            _extract_package_id(package)
+        )
+
+    # ── Dispositivo con fallback a store (feature del batchero, 2026-08-05) ──
+    # Igual que "device", pero si el pull falla (dispositivo no conectado,
+    # app no instalada, adb no disponible) NO propaga el error -- cae al
+    # auto-selección de abajo (google-play/apk-pure) como si source=None.
+    # Pensado para listas de package IDs donde no se sabe de antemano cuáles
+    # ya están instalados en el device de pruebas y cuáles hay que bajar.
+    if source == "device-or-store":
+        if on_start:
+            on_start("Dispositivo conectado (adb pull), con fallback a store")
+        try:
+            return DeviceInstalledDownloader(output_dir=output_dir, serial=serial).download(
+                _extract_package_id(package)
+            )
+        except APKDownloadError:
+            source = None
 
     # ── Auto-selección de fuente ─────────────────────────────────────────────
     if source is None:

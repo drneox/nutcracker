@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nutcracker"
+version = "0.2.0"
+description = "Android mobile security testing: anti-root/RASP bypass, static/dynamic analysis, OWASP MAS (MASVS+MASWE+CWE) alignment, mass execution queue/scheduler, and a local web dashboard."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "androguard>=3.3.5",
+    "click>=8.1.0",
+    "rich>=13.7.0",
+    "pyyaml>=6.0.1",
+    "fpdf2>=2.7.9",
+    "loguru>=0.7.0",
+    "frida-tools>=13.7.0",
+    "frida-dexdump>=2.0.1",
+    "requests>=2.31.0",
+    "apscheduler>=3.10",
+]
+
+[project.optional-dependencies]
+# `nutcracker dashboard` — installed automatically on first use if missing
+# (same auto-install-on-import pattern as every other plugin), listed here
+# too so `pip install .[dashboard]` works for a non-interactive setup.
+dashboard = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+nutcracker = "nutcracker_core.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["nutcracker_core*"]

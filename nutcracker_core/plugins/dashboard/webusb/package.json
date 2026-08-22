@@ -1,0 +1,27 @@
+{
+  "name": "nutcracker-dashboard-webusb",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "WebUSB + WebCodecs video (Fase 4 del plan): el navegador habla ADB/scrcpy directo por USB, sin proceso servidor. Ver README.md.",
+  "scripts": {
+    "fetch-server": "fetch-scrcpy-server 3.3.1",
+    "check": "fetch-scrcpy-server 3.3.1 && tsc --noEmit",
+    "build": "fetch-scrcpy-server 3.3.1 && tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "@yume-chan/adb": "^1.0.0",
+    "@yume-chan/adb-credential-web": "^1.0.0",
+    "@yume-chan/adb-daemon-webusb": "^1.0.0",
+    "@yume-chan/adb-scrcpy": "^1.0.0",
+    "@yume-chan/fetch-scrcpy-server": "^1.0.0",
+    "@yume-chan/scrcpy": "^1.0.0",
+    "@yume-chan/scrcpy-decoder-webcodecs": "^1.0.0",
+    "@yume-chan/stream-extra": "^1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0"
+  },
+  "packageManager": "pnpm@11.20.0+sha512.9a6f330a95b66446ea088faf1521405a8a01f07fde7124cc9958dfed52d4bb436737e65b08f85f37b46fcba375092558ac51262b816844b22f63406ed166bfee"
+}

@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Shim de `adb` para jobs de la cola con relay activo (ver plan.md, sección
+"Feature: relay browser-as-bridge").
+
+Intercepta invocaciones que el resto del código hace contra "adb" (resuelto
+normalmente vía ``shutil.which("adb")`` -- aipwn.py, frida_capture.py,
+frida_agent_tools.py) y las traduce a llamadas RPC contra el dashboard, que
+las reenvía al navegador del operador para que las resuelva con su handle
+`Adb` (Tango/ya-webadb) ya autenticado por USB.
+
+Por qué existe (en vez de un túnel TCP crudo como el de frida): confirmado en
+vivo que Android bloquea reenviar tráfico `tcp:` hacia el propio puerto de
+control de adbd (5555) -- `createSocket("tcp:5555")` resuelve OK pero después
+no fluye un solo byte, ni siquiera un error. No es un bug del mecanismo `tcp:`
+en general (frida-server en 27042 y scrcpy-server sí funcionan por el mismo
+camino, son procesos de terceros, no adbd). El reemplazo para adb es RPC
+estructurado: el navegador ejecuta la operación con los métodos NATIVOS de
+Tango (`adb.subprocess`, `adb.sync()`), el mismo mecanismo que ya usa scrcpy y
+que usa app.webadb.com (construida sobre la misma librería) para shell/
+install/pull -- no una técnica nueva sin probar, solo aplicada del lado
+equivocado hasta ahora.
+
+Cómo se activa: `engine.py::_run_job` antepone el directorio de ESTE archivo
+al PATH del subproceso cuando `job.relay_session_id` está seteado -- así todo
+el código existente que resuelve "adb" vía PATH lo recoge automáticamente,
+sin tocar esos call sites uno por uno.
+
+Env vars requeridas (las inyecta engine.py):
+    NUTCRACKER_DASHBOARD_URL     -- base URL del propio dashboard (ya existe,
+                                     reusa el mecanismo del chat mailbox)
+    NUTCRACKER_RELAY_SESSION_ID  -- session_id de la sesión de relay a usar
+
+El valor de `-s <serial>` que reciba este shim se IGNORA a propósito: el
+destino real ya lo determina NUTCRACKER_RELAY_SESSION_ID (un job relay-backed
+tiene un solo device de todos modos), y `serial` no siempre coincide con el
+session_id (ver Job.relay_session_id en queue/job.py).
+
+Alcance actual: `shell` (Etapa 1), `install`/`install-multiple` (Etapa 2),
+`exec-out screencap -p` (Etapa 3, único uso real de exec-out en el codebase),
+`pull` (Etapa 4), `logcat` (Etapa 5 -- NO es streaming línea-a-línea real, ver
+docstring de _cmd_logcat: aipwn solo consume el log DESPUÉS de la ventana de
+captura de todos modos, así que alcanza con juntar todo y devolverlo en un
+solo RPC). `push` (nadie lo usa todavía en el codebase) sigue sin implementar
+-- falla explícito con mensaje claro en vez de colgarse o dar un error
+confuso tipo "device offline" (el síntoma que llevó a este rediseño)."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import sys
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+_UNSUPPORTED_EXIT_CODE = 2
+
+
+def _fail(message: str, code: int = 1) -> None:
+    print(f"relay_adb_shim: {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def _parse_args(argv: list[str]) -> tuple[str, list[str]]:
+    """Devuelve (subcomando, resto_de_args), saltando un ``-s <serial>``
+    inicial si está presente (se ignora el valor, ver docstring del módulo)."""
+    i = 0
+    if i < len(argv) and argv[i] == "-s" and i + 1 < len(argv):
+        i += 2
+    if i >= len(argv):
+        _fail(f"sin subcomando (argv: {argv!r})")
+    return argv[i], argv[i + 1 :]
+
+
+def _rpc_post(dashboard_url: str, session_id: str, op: str, payload: dict, timeout: float) -> dict:
+    url = f"{dashboard_url}/api/relay/{session_id}/rpc/{op}"
+    body = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    # FIX (bug real reportado en vivo, 2026-08-05): con dashboard.auth.enabled
+    # (login), el middleware protege /api/* completo -- este shim nunca
+    # mandaba ningún header de auth, así que cada RPC (shell/install/pull/...)
+    # le devolvía 401 en silencio. check_app_installed() (aipwn.py), que solo
+    # mira stdout, interpretaba eso como "app no instalada" pese a que la
+    # sesión de relay estaba perfectamente conectada -- mismo token interno
+    # que ya usa frida_agent.py::_check_operator_chat (NUTCRACKER_DASHBOARD_
+    # TOKEN, inyectado por engine.py solo cuando el dashboard tiene auth
+    # activado; sin auth, la env var no existe y esto es un no-op).
+    token = os.environ.get("NUTCRACKER_DASHBOARD_TOKEN")
+    if token:
+        headers["X-Nutcracker-Token"] = token
+    request = Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urlopen(request, timeout=timeout + 10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(raw).get("detail", raw)
+        except (json.JSONDecodeError, AttributeError):
+            detail = raw
+        _fail(f"rpc {op} falló ({exc.code}): {detail}")
+    except URLError as exc:
+        _fail(f"no se pudo contactar al dashboard ({url}): {exc}")
+    raise AssertionError("unreachable -- _fail() siempre sys.exit()")
+
+
+def _cmd_shell(dashboard_url: str, session_id: str, rest: list[str]) -> None:
+    # adb real junta con espacios todos los tokens después de "shell" en un
+    # único comando que manda al shell remoto -- se replica el mismo
+    # comportamiento acá (algunos call sites ya pasan un solo token
+    # pre-armado con comillas propias, p.ej. `su -c 'killall ...'`; el join
+    # es un no-op en ese caso).
+    body = _rpc_post(dashboard_url, session_id, "shell", {"command": " ".join(rest), "timeout": 30}, timeout=30)
+    sys.stdout.write(body.get("stdout", ""))
+    sys.stderr.write(body.get("stderr", ""))
+    sys.exit(int(body.get("exit_code", 0)))
+
+
+def _cmd_install(dashboard_url: str, session_id: str, rest: list[str], multi: bool) -> None:
+    # adb real: flags (empiezan con "-") antes de la(s) ruta(s) de APK.
+    flags = [a for a in rest if a.startswith("-")]
+    apk_paths = [a for a in rest if not a.startswith("-")]
+    if not apk_paths:
+        _fail(f"install sin ruta de APK (argv: {rest!r})")
+        return
+
+    apks = []
+    for path in apk_paths:
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as exc:
+            _fail(f"no se pudo leer '{path}': {exc}")
+            return
+        apks.append({"name": os.path.basename(path), "data_b64": base64.b64encode(data).decode("ascii")})
+
+    body = _rpc_post(
+        dashboard_url, session_id, "install",
+        {"apks": apks, "flags": flags, "multi": multi, "timeout": 120}, timeout=120,
+    )
+    sys.stdout.write(body.get("stdout", ""))
+    sys.stderr.write(body.get("stderr", ""))
+    sys.exit(int(body.get("exit_code", 0)))
+
+
+def _cmd_pull(dashboard_url: str, session_id: str, rest: list[str]) -> None:
+    if len(rest) < 2:
+        _fail(f"pull requiere <remoto> <local> (argv: {rest!r})")
+        return
+    remote_path, local_path = rest[0], rest[1]
+
+    body = _rpc_post(dashboard_url, session_id, "pull", {"remote_path": remote_path, "timeout": 180}, timeout=180)
+    data = base64.b64decode(body.get("data_b64", ""))
+    try:
+        with open(local_path, "wb") as f:
+            f.write(data)
+    except OSError as exc:
+        _fail(f"no se pudo escribir '{local_path}': {exc}")
+        return
+    # Mímica libre del resumen real de `adb pull` -- ningún call site del
+    # proyecto parsea este texto, solo chequean returncode + el archivo local.
+    print(f"{remote_path}: 1 file pulled, {len(data)} bytes")
+    sys.exit(0)
+
+
+def _cmd_exec_out(dashboard_url: str, session_id: str, rest: list[str]) -> None:
+    # Único uso real en el codebase: `exec-out screencap -p` -- ver
+    # frida_agent_tools.py::tool_take_screenshot. No se generaliza a
+    # comandos arbitrarios (adb real sí lo permite) porque nada más lo usa
+    # todavía; se agrega si hace falta.
+    command = " ".join(rest).strip()
+    if not (command == "screencap -p" or command.startswith("screencap")):
+        _fail(
+            f"'exec-out {command}' todavía no soportado vía relay (solo "
+            f"'screencap -p' por ahora -- ver plan.md, etapas siguientes)",
+            code=_UNSUPPORTED_EXIT_CODE,
+        )
+        return
+
+    body = _rpc_post(dashboard_url, session_id, "screencap", {"timeout": 30}, timeout=30)
+    data = base64.b64decode(body.get("data_b64", ""))
+    sys.stdout.buffer.write(data)  # binario crudo -- NO sys.stdout.write() (corrompería el PNG)
+    sys.stdout.buffer.flush()
+    sys.exit(0)
+
+
+_LOGCAT_MAX_DURATION_S = 30.0
+
+
+def _cmd_logcat(dashboard_url: str, session_id: str, rest: list[str]) -> None:
+    """`adb logcat -c` (limpiar buffer, ver frida_capture.py:306/
+    frida_agent_tools.py:1335) es un comando de una sola pasada -- se
+    reenvía tal cual al RPC de 'shell' que ya existe, no hace falta nada
+    especial. `adb logcat -v time ...` (SIN -c, modo streaming real -- ver
+    frida_capture.py:315/frida_agent_tools.py:1360, siempre vía Popen) es la
+    parte nueva de la Etapa 5.
+
+    Esto NO es streaming línea-a-línea de verdad: el caller real (
+    frida_capture.py::stream_logcat) solo junta las líneas en una lista para
+    razonar sobre ellas DESPUÉS de que termina la ventana de captura -- nunca
+    las consume mientras llegan. Así que alcanza con juntar todo lo que
+    `logcat` escupe durante `_LOGCAT_MAX_DURATION_S` en el navegador y
+    devolverlo entero en un solo RPC (ver relay.ts::runLogcat) -- mismo
+    patrón pedido-respuesta que install/pull/screencap, sin agregar
+    streaming real al relay.
+
+    El caller SIEMPRE mata a este proceso con `.terminate()` cuando termina
+    su propia ventana de captura (que en la práctica es más corta que
+    _LOGCAT_MAX_DURATION_S) -- ese kill corta el RPC en pleno vuelo del lado
+    de este shim; el navegador sigue corriendo hasta su propio timeout
+    interno y el resultado, si llega, no tiene a quién volver. Inofensivo
+    (nadie lo espera), solo algo de trabajo desperdiciado del lado del
+    navegador -- aceptable para esta primera versión.
+    """
+    if "-c" in rest:
+        _cmd_shell(dashboard_url, session_id, ["logcat", "-c"])
+        return
+
+    body = _rpc_post(
+        dashboard_url, session_id, "logcat",
+        {"args": rest, "duration_seconds": _LOGCAT_MAX_DURATION_S, "timeout": _LOGCAT_MAX_DURATION_S + 10},
+        timeout=_LOGCAT_MAX_DURATION_S + 10,
+    )
+    sys.stdout.write(body.get("stdout", ""))
+    sys.exit(0)
+
+
+def main() -> None:
+    dashboard_url = os.environ.get("NUTCRACKER_DASHBOARD_URL", "").rstrip("/")
+    session_id = os.environ.get("NUTCRACKER_RELAY_SESSION_ID", "")
+    if not dashboard_url or not session_id:
+        _fail(
+            "faltan NUTCRACKER_DASHBOARD_URL/NUTCRACKER_RELAY_SESSION_ID -- "
+            "este shim solo debe invocarse dentro de un job con relay activo "
+            "(ver engine.py::_run_job)."
+        )
+        return
+
+    subcommand, rest = _parse_args(sys.argv[1:])
+
+    if subcommand == "shell":
+        _cmd_shell(dashboard_url, session_id, rest)
+        return
+    if subcommand == "install":
+        _cmd_install(dashboard_url, session_id, rest, multi=False)
+        return
+    if subcommand == "install-multiple":
+        _cmd_install(dashboard_url, session_id, rest, multi=True)
+        return
+    if subcommand == "pull":
+        _cmd_pull(dashboard_url, session_id, rest)
+        return
+    if subcommand == "exec-out":
+        _cmd_exec_out(dashboard_url, session_id, rest)
+        return
+    if subcommand == "logcat":
+        _cmd_logcat(dashboard_url, session_id, rest)
+        return
+
+    _fail(
+        f"comando '{subcommand}' todavía no soportado vía relay (implementados: "
+        f"shell, install, install-multiple, pull, exec-out screencap -p, logcat -- "
+        f"ver plan.md, etapas siguientes). argv completo: {sys.argv[1:]!r}",
+        code=_UNSUPPORTED_EXIT_CODE,
+    )
+
+
+if __name__ == "__main__":
+    main()

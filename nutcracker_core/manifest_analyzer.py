@@ -84,6 +84,7 @@ def analyze_decompiled_dir(
     decompiled_dir: Path,
     progress_callback=None,
     apk_path: Path | None = None,
+    config: dict | None = None,
 ) -> ManifestAnalysisResult:
     """
     Analiza el directorio decompilado por jadx buscando misconfigs en:
@@ -111,7 +112,8 @@ def analyze_decompiled_dir(
         try:
             from .decompiler import extract_manifest
             _cb(t("analyzing_manifest_progress"))
-            extracted = extract_manifest(apk_path, decompiled_dir.parent)
+            extracted = extract_manifest(apk_path, decompiled_dir.parent,
+                                          name_hint=decompiled_dir.name, config=config)
             if extracted:
                 manifest_path = extracted
         except Exception:  # noqa: BLE001

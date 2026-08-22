@@ -24,6 +24,7 @@ _loguru_logger.disable("androguard")
 
 from androguard.misc import AnalyzeAPK
 
+from . import toolbox
 from .i18n import t
 
 
@@ -156,6 +157,14 @@ class AnalysisResult:
         # Campo opcional: rellena nutcracker.py si se hizo decompilación con frida
         # Formato: {"method": "frida-dexdump" | "FART" | None, "dex_count": int, "source_dir": str}
         self.decompilation_info: "dict | None" = None
+        # ROADMAP "Differentiate runtime bypass vs DEX extraction in reports":
+        # True cuando el plugin aipwn confirmó un bypass runtime (report_success
+        # del FridaAgent) SIN que necesariamente se haya volcado DEX en memoria
+        # (protection_broken exige dex_count > 0, lo cual es engañoso — apps con
+        # anti-root nativo agresivo pueden matar el proceso antes de que los
+        # hooks FART corran, aun con el bypass confirmado). Lo rellena
+        # plugins/aipwn/__init__.py tras un run exitoso; ver build_masvs_report().
+        self.aipwn_bypass_confirmed: bool = False
 
     @property
     def protected(self) -> bool:
@@ -202,6 +211,7 @@ class AnalysisResult:
             "elapsed_seconds": self.elapsed_seconds,
             "anti_root_protected": self.protected,
             "protection_broken": self.protection_broken,
+            "aipwn_bypass_confirmed": self.aipwn_bypass_confirmed,
             "confidence": self.confidence,
             "high_strength_detections": self.high_strength_count,
             "detections": [r.to_dict() for r in self.results],
@@ -226,22 +236,29 @@ class AnalysisResult:
             elapsed_seconds=data.get("elapsed_seconds"),
         )
         obj.decompilation_info = data.get("decompilation_info")
+        obj.aipwn_bypass_confirmed = bool(data.get("aipwn_bypass_confirmed", False))
         return obj
 
 
 class APKAnalyzer:
     """Analiza una APK en busca de protecciones anti-root."""
 
-    def __init__(self, progress_callback=None, engine: str = "native") -> None:
+    def __init__(self, progress_callback=None, engine: str = "native", config: dict | None = None) -> None:
         """
         Args:
             progress_callback: Función opcional llamada con (mensaje: str)
                                para reportar progreso.
             engine: Motor de detección anti-root ("native" | "apkid").
+            config: config.yaml cargado -- habilita el toolbox de Docker para
+                    el motor "apkid" si ``toolbox.enabled: true`` (ver
+                    nutcracker_core/toolbox/). Sin esto (o con el flag en
+                    false), corre exactamente igual que antes, contra el
+                    binario local de apkid.
         """
         self._progress = progress_callback or (lambda msg: None)
         self._detectors = ALL_DETECTORS
         self._engine = (engine or "native").strip().lower()
+        self._config = config
         if self._engine == "builtin":
             self._engine = "native"
 
@@ -326,16 +343,35 @@ class APKAnalyzer:
         return detection_results
 
     def _run_apkid_detector(self, real_apk: Path) -> list[DetectionResult]:
-        """Ejecuta APKiD y traduce su salida a DetectionResult."""
+        """Ejecuta APKiD y traduce su salida a DetectionResult.
+
+        FIX (encontrado en vivo, 2026-08-05, mismo bug que decompiler.py): esto
+        siempre exigía el binario local de apkid, incluso con
+        ``toolbox.enabled: true`` -- apkid SÍ está en la imagen del toolbox
+        (ver toolbox.STATIC_TOOLS) pero nada acá lo consultaba. Ahora ruta por
+        el toolbox de Docker cuando está habilitado, igual que
+        native_scanner.py/leak_scanner.py/decompiler.py."""
         self._log(t("log_running_apkid"))
 
+        # toolbox.run() monta Path.cwd() en el contenedor en la MISMA ruta
+        # absoluta -- el arg tiene que venir ya resuelto a absoluto para que
+        # coincida en ambos lados (ver decompiler.py/native_scanner.py).
+        apk_arg = str(real_apk.resolve())
+
         try:
-            proc = subprocess.run(
-                ["apkid", "-j", str(real_apk)],
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
+            if toolbox.is_enabled(self._config):
+                try:
+                    proc = toolbox.run("apkid", ["-j", apk_arg], config=self._config, timeout=180)
+                except toolbox.ToolboxError:
+                    self._log(t("log_apkid_not_found"))
+                    return []
+            else:
+                proc = subprocess.run(
+                    ["apkid", "-j", apk_arg],
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
         except FileNotFoundError:
             self._log(t("log_apkid_not_found"))
             return []

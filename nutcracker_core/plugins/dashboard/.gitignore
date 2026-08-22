@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Node (subproyecto webusb/) -- reproducible con `npm install`
+webusb/node_modules/
+
+# macOS
+.DS_Store

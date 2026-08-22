@@ -1,0 +1,3 @@
+# Dependencias de desarrollo (tests). No requeridas en producción.
+-r requirements.txt
+pytest>=8.0.0

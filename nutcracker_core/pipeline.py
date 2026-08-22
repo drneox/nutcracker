@@ -12,6 +12,7 @@ import click
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from nutcracker_core import toolbox
 from nutcracker_core.config import get as cfg_get
 from nutcracker_core.i18n import t
 from nutcracker_core.deobfuscator import check_adb
@@ -565,7 +566,12 @@ def try_gadget_inject(
     from nutcracker_core.device import find_sdk_root
 
     # ── Verificar apktool ────────────────────────────────────────────────────
-    if not _shutil.which("apktool"):
+    # FIX (encontrado en vivo, 2026-08-05, mismo bug que decompiler.py/
+    # analyzer.py/deobfuscator.py): exigía SIEMPRE el binario local de apktool,
+    # incluso con toolbox.enabled=true -- apktool sí está en la imagen del
+    # toolbox (ver toolbox.STATIC_TOOLS).
+    use_toolbox_apktool = toolbox.is_enabled(cfg)
+    if not use_toolbox_apktool and not _shutil.which("apktool"):
         console.print(
             f"[yellow]⚠[/yellow]  {t('pipe_apktool_not_found')}"
         )
@@ -584,7 +590,14 @@ def try_gadget_inject(
         console.print(f"[yellow]⚠[/yellow]  {t('pipe_keytool_not_found')}")
         return None
 
-    work_dir = Path(_tempfile.mkdtemp(prefix="apkmon_gadget_"))
+    # toolbox.run() solo monta Path.cwd() en el contenedor -- tempfile.mkdtemp()
+    # a secas crea bajo /tmp del sistema, invisible ahí adentro. Con el
+    # toolbox habilitado para apktool, work_dir tiene que vivir bajo cwd
+    # (toolbox.scratch_dir(), mismo mecanismo que leak_scanner.py) para que
+    # decompiled_dir/patched_unsigned_raw (los paths que sí se le pasan a
+    # apktool vía toolbox.run()) sean legibles/escribibles desde el contenedor.
+    _work_dir_parent = str(toolbox.scratch_dir()) if use_toolbox_apktool else None
+    work_dir = Path(_tempfile.mkdtemp(prefix="apkmon_gadget_", dir=_work_dir_parent))
 
     try:
         # ── 1. Detectar ABI del emulador ────────────────────────────────────
@@ -629,10 +642,14 @@ def try_gadget_inject(
         # ── 3. Desempaquetar APK con apktool ────────────────────────────────
         decompiled_dir = work_dir / "decompiled"
         console.print(f"  {t('pipe_apktool_decompiling')}")
-        r = _sp.run(
-            ["apktool", "d", str(apk_path), "-o", str(decompiled_dir), "-f", "--no-res"],
-            capture_output=True, text=True, timeout=120,
-        )
+        # toolbox.run() monta Path.cwd() en el contenedor en la MISMA ruta
+        # absoluta -- work_dir ya es absoluto (tempfile.mkdtemp()), pero
+        # apk_path podría no serlo si vino relativo del llamador.
+        apktool_d_args = ["d", str(apk_path.resolve()), "-o", str(decompiled_dir), "-f", "--no-res"]
+        if use_toolbox_apktool:
+            r = toolbox.run("apktool", apktool_d_args, config=cfg, timeout=120)
+        else:
+            r = _sp.run(["apktool", *apktool_d_args], capture_output=True, text=True, timeout=120)
         if r.returncode != 0:
             console.print(f"[yellow]⚠[/yellow]  {t('pipe_apktool_failed', err=r.stderr[:200])}")
             return None
@@ -678,10 +695,11 @@ def try_gadget_inject(
         patched_unsigned_raw = work_dir / f"{package}_gadget_unsigned_raw.apk"
         patched_unsigned = work_dir / f"{package}_gadget_unsigned.apk"
         console.print(f"  {t('pipe_repackaging_apk')}")
-        r = _sp.run(
-            ["apktool", "b", str(decompiled_dir), "-o", str(patched_unsigned_raw)],
-            capture_output=True, text=True, timeout=120,
-        )
+        apktool_b_args = ["b", str(decompiled_dir), "-o", str(patched_unsigned_raw)]
+        if use_toolbox_apktool:
+            r = toolbox.run("apktool", apktool_b_args, config=cfg, timeout=120)
+        else:
+            r = _sp.run(["apktool", *apktool_b_args], capture_output=True, text=True, timeout=120)
         if r.returncode != 0:
             console.print(f"[yellow]⚠[/yellow]  {t('pipe_apktool_build_failed', err=r.stderr[:200])}")
             return None

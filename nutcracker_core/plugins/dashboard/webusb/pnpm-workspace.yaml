@@ -1,0 +1,8 @@
+allowBuilds:
+  # esbuild necesita correr su postinstall para bajar el binario nativo de
+  # esta plataforma (usado por vite internamente) -- es el único paquete de
+  # este proyecto con install script, y su propósito es conocido/verificable
+  # (no ofusca nada). El resto de las dependencias queda sin correr scripts
+  # de instalación por default -- justo la protección de pnpm contra
+  # supply-chain que motivó este cambio desde npm.
+  esbuild: true
