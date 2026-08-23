@@ -13,6 +13,8 @@ import threading
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
 
+from nutcracker_core import capabilities
+
 from . import chat_mailbox
 from .auth import AuthConfig, websocket_authenticated
 from .events import bus
@@ -123,13 +125,13 @@ async def ws_chat(websocket: WebSocket, package: str) -> None:
 
 @router.websocket("/ws/relay/{session_id}")
 async def ws_relay(websocket: WebSocket, session_id: str) -> None:
-    """Punto de entrada del navegador al túnel frida/adb (ver relay.py y
+    """Punto de entrada del navegador al túnel de frida (ver relay.py y
     plan.md, sección "Browser-as-relay"). El navegador se conecta acá y:
 
     - recibe control en JSON (frame de texto) por cada conexión TCP local
-      nueva que `frida`/`adb` reales (en el backend) abrieron contra los
-      puertos de la sesión (``{"type": "open", "tunnel": "frida"|"adb",
-      "conn_id": N}``) o que se cerraron (``{"type": "close", "conn_id": N}``);
+      nueva que el `frida` real (en el backend) abrió contra el puerto
+      de la sesión (``{"type": "open", "tunnel": "frida",
+      "conn_id": N}``) o que se cerró (``{"type": "close", "conn_id": N}``);
     - manda/recibe los bytes de cada conexión como frames BINARIOS con un
       header de 4 bytes big-endian = conn_id (ver relay._HEADER) -- necesario
       porque frida abre varias conexiones concurrentes a frida-server, así
@@ -192,6 +194,17 @@ async def ws_query(websocket: WebSocket, package: str) -> None:
         await websocket.close(code=1011)
         return
 
+    # El co-piloto lo provee el plugin aipwn vía el registro de capacidades
+    # (ver nutcracker_core/capabilities.py) -- sin importarlo directamente.
+    query_cap = capabilities.get("aipwn.query")
+    if query_cap is None:
+        await websocket.send_json({
+            "kind": "error",
+            "data": {"text": "plugin aipwn no instalado en este entorno."},
+        })
+        await websocket.close(code=1011)
+        return
+
     try:
         conn_raw = await websocket.receive_text()
         conn_params = json.loads(conn_raw) if conn_raw else {}
@@ -221,31 +234,18 @@ async def ws_query(websocket: WebSocket, package: str) -> None:
             })
             await websocket.close(code=1011)
             return
-        from nutcracker_core.plugins.aipwn.query_tools import DeviceIO
         loop = asyncio.get_running_loop()
-        device = DeviceIO(relay_session=session, loop=loop)
+        device = query_cap["DeviceIO"](relay_session=session, loop=loop)
         frida_host = f"127.0.0.1:{session.ports['frida']}"
     elif serial:
-        from nutcracker_core.plugins.aipwn.query_tools import DeviceIO
-        device = DeviceIO(serial=serial)
+        device = query_cap["DeviceIO"](serial=serial)
     # Sin serial ni relay: modo estático puro (device=None) -- las tools
     # dinámicas devuelven su propio error "no hay dispositivo conectado".
 
-    try:
-        from nutcracker_core.plugins.aipwn.query_agent import QueryAgent
-        from nutcracker_core.plugins.aipwn.query_context import resolve_package_context
-    except ImportError:
-        await websocket.send_json({
-            "kind": "error",
-            "data": {"text": "plugin aipwn no instalado en este entorno."},
-        })
-        await websocket.close(code=1011)
-        return
-
     decompiled_dir, runtime_dump_dir, analysis_result = await run_in_threadpool(
-        resolve_package_context, package,
+        query_cap["resolve_package_context"], package,
     )
-    agent = QueryAgent(
+    agent = query_cap["QueryAgent"](
         package=package,
         decompiled_dir=decompiled_dir,
         runtime_dump_dir=runtime_dump_dir,
@@ -267,8 +267,7 @@ async def ws_query(websocket: WebSocket, package: str) -> None:
                     for event in agent.ask(text):
                         q.put(event)
                 except Exception as exc:  # noqa: BLE001
-                    from nutcracker_core.plugins.aipwn.query_agent import QueryEvent
-                    q.put(QueryEvent("error", {"text": f"error interno del agente: {exc}"}))
+                    q.put(query_cap["QueryEvent"]("error", {"text": f"error interno del agente: {exc}"}))
                 finally:
                     q.put(None)
 
