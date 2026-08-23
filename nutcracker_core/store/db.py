@@ -1,16 +1,14 @@
 """Conexión SQLite (WAL) y migraciones simples versionadas para nutcracker.
 
 El esquema completo vive en ``schema.sql``. Las migraciones son statements SQL
-adicionales aplicados en orden cuando ``PRAGMA user_version`` está por debajo de
-``SCHEMA_VERSION``; hoy solo existe la versión 1 (esquema inicial).
+adicionales aplicados en orden según ``PRAGMA user_version`` (ver
+``_MIGRATIONS``: hoy existen las versiones 2 y 3 sobre el esquema inicial).
 """
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-
-SCHEMA_VERSION = 3
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 

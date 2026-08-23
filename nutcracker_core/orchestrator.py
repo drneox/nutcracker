@@ -27,11 +27,6 @@ from nutcracker_core.config import get as cfg_get
 from nutcracker_core.decompiler import (
     decompile, get_available_tool, install_instructions, DecompilerError, _find_tool,
 )
-from nutcracker_core.deobfuscator import (
-    apply_decrypt_map,
-    check_adb,
-    decompile_dumps,
-)
 from nutcracker_core.device import (
     download_frida_server,
     find_sdk_tools,
@@ -41,7 +36,6 @@ from nutcracker_core.device import (
     setup_frida_server,
 )
 from nutcracker_core.frida_bypass import (
-    fart_run_instructions,
     frida_run_instructions,
     generate_bypass_script,
     generate_fart_script,
@@ -49,18 +43,17 @@ from nutcracker_core.frida_bypass import (
 from nutcracker_core import i18n
 from nutcracker_core.i18n import t
 from nutcracker_core.plugins import fire_post_hooks
-from nutcracker_core.manifest_analyzer import analyze_decompiled_dir, Misconfiguration
+from nutcracker_core.manifest_analyzer import analyze_decompiled_dir
 from nutcracker_core.pdf_reporter import generate_pdf_report
 from nutcracker_core.reporter import print_report, save_json_report, save_analysis_json, print_vuln_report, print_masvs_summary
 from nutcracker_core.pipeline import (
-    ExtractionResult,
     connected_adb_devices,
     deobf_method_order,
     do_fart_emulator,
     do_fart_manual,
     is_emulator_serial,
 )
-from nutcracker_core.vuln_scanner import scan_directory, auto_scan, scan_with_apkleaks, scan_with_gitleaks, ScanResult
+from nutcracker_core.vuln_scanner import auto_scan, scan_with_apkleaks, scan_with_gitleaks, ScanResult
 from nutcracker_core.osint import run_osint, OsintResult
 
 console = Console()

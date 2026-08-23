@@ -2,7 +2,7 @@
 __pycache__/
 *.py[cod]
 
-# Node (subproyecto webusb/) -- reproducible con `npm install`
+# Node (subproyecto webusb/) -- reproducible con `pnpm install`
 webusb/node_modules/
 
 # macOS
