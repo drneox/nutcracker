@@ -227,6 +227,7 @@
         <img id="emulator-img" style="display:none" alt="pantalla del dispositivo">
         <div class="row">
           <button id="device-toggle-btn" class="secondary" style="display:none" onclick="toggleDevice()" data-i18n="btn.release">⏏ Soltar</button>
+          <button id="adb-restart-btn" class="secondary" onclick="restartAdb()" data-i18n="btn.adbRestart">🔌 Reiniciar adb</button>
         </div>
 
         <details style="margin-top:16px">
@@ -323,6 +324,10 @@ const I18N = {
     'btn.relayOn': '🌐 Start relay',
     'btn.relayOff': '⏏ Stop relay',
     'btn.adbKill': '🔪 adb kill-server',
+    'btn.adbRestart': '🔌 Restart adb',
+    'status.adbRestarting': 'Restarting adb connection…',
+    'status.adbRecovered': 'adb recovered ({steps}).',
+    'status.adbDead': 'adb restarted but the device still does not answer -- the emulator is hung; cold boot it manually.',
     'btn.reanalyze': 'Re-analyze',
     'btn.save': 'Save',
     'btn.resume5': '▶ +5 iterations',
@@ -453,6 +458,10 @@ const I18N = {
     'btn.relayOn': '🌐 Activar relay',
     'btn.relayOff': '⏏ Detener relay',
     'btn.adbKill': '🔪 adb kill-server',
+    'btn.adbRestart': '🔌 Reiniciar adb',
+    'status.adbRestarting': 'Reiniciando la conexión adb…',
+    'status.adbRecovered': 'adb recuperado ({steps}).',
+    'status.adbDead': 'adb reiniciado pero el dispositivo sigue sin responder -- el emulador está colgado; hazle un cold boot manual.',
     'btn.reanalyze': 'Re-analizar',
     'btn.save': 'Guardar',
     'btn.resume5': '▶ +5 iteraciones',
@@ -1240,6 +1249,32 @@ function disconnectEmulator(){
   _showEmulatorImg(false);
   setDeviceToggle(false);
   document.getElementById('device-status').textContent = T('status.stopped');
+}
+
+// Botón "🔌 Reiniciar adb": recuperación por etapas en el backend
+// (reconnect → kill/start-server + chequeo de vida). Pensado para cuando el
+// emulador deja de responder (screencap/shell colgados). NO reinicia el
+// guest: si ok=false el mensaje lo dice y toca cold boot manual.
+async function restartAdb(){
+  const status = document.getElementById('device-status');
+  const btn = document.getElementById('adb-restart-btn');
+  btn.disabled = true;
+  status.textContent = T('status.adbRestarting');
+  try {
+    const q = emuSerial ? `?serial=${encodeURIComponent(emuSerial)}` : '';
+    const r = await j(`/api/device/restart-adb${q}`, {method: 'POST'});
+    status.textContent = r.ok
+      ? T('status.adbRecovered', {steps: r.steps.join(' → ')})
+      : T('status.adbDead');
+    if (r.ok && deviceMode === 'emulator' && emuSerial) {
+      emuFailCount = 0;
+      refreshEmulatorFrame();
+    }
+  } catch (e) {
+    status.textContent = T('status.adbDead');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // Arranque del panel: el modo lo dicta config.yaml (runtime_target /

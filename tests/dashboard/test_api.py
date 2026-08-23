@@ -1344,3 +1344,70 @@ def test_i18n_endpoint_returns_configured_language(db_path, engine):
     r = c.get("/api/i18n")
     assert r.status_code == 200
     assert r.json()["language"] == "es"
+
+
+# ── /api/device/restart-adb -- recuperación por etapas (botón del panel) ────
+
+def test_device_restart_adb_without_adb_is_503(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = client.post("/api/device/restart-adb")
+    assert r.status_code == 503
+
+
+def test_device_restart_adb_recovers_with_reconnect_only(client, monkeypatch):
+    """Si `reconnect` + echo de vida reviven el device, NO debe llegar a
+    kill-server (que tumba los wrappers de frida-server y demás clientes)."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        args=a[0], returncode=0, stdout=b"ok", stderr=b""))
+    r = client.post("/api/device/restart-adb?serial=emulator-5554")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["steps"] == ["reconnect emulator-5554"]
+
+
+def test_device_restart_adb_falls_back_to_kill_server(client, monkeypatch):
+    """Primer echo de vida falla (reconnect no bastó) → kill/start-server →
+    el segundo echo responde: ok=True con las dos etapas registradas."""
+    state = {"echo_calls": 0}
+
+    def fake_run(cmd, **kwargs):
+        args = cmd[1:]
+        if "shell" in args:
+            state["echo_calls"] += 1
+            rc = 1 if state["echo_calls"] == 1 else 0
+            return subprocess.CompletedProcess(args=cmd, returncode=rc, stdout=b"", stderr=b"")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = client.post("/api/device/restart-adb?serial=emulator-5554")
+    body = r.json()
+    assert body["ok"] is True
+    assert body["steps"] == ["reconnect emulator-5554", "kill-server → start-server"]
+
+
+def test_device_restart_adb_reports_dead_guest(client, monkeypatch):
+    """Nada reviva el device (guest colgado): ok=False -- el frontend le dice
+    al operador que toca cold boot manual; el endpoint NO hace adb reboot."""
+
+    def fake_run(cmd, **kwargs):
+        rc = 1 if "shell" in cmd[1:] else 0
+        return subprocess.CompletedProcess(args=cmd, returncode=rc, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = client.post("/api/device/restart-adb?serial=emulator-5554")
+    assert r.json()["ok"] is False
+
+
+def test_device_restart_adb_without_serial_skips_alive_check(client, monkeypatch):
+    """Sin serial no hay a quién hacerle echo: kill/start y ok=True."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        args=a[0], returncode=0, stdout=b"", stderr=b""))
+    r = client.post("/api/device/restart-adb")
+    body = r.json()
+    assert body["ok"] is True
+    assert body["steps"] == ["kill-server → start-server"]

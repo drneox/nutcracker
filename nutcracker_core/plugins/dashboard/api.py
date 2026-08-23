@@ -322,6 +322,51 @@ def create_router(
             )
         return Response(content=proc.stdout, media_type="image/png")
 
+    @router.post("/api/device/restart-adb")
+    def device_restart_adb(serial: str | None = None):
+        """Recuperación por etapas de la conexión adb (botón "🔌 Reiniciar adb"
+        del panel Dispositivo):
+
+        1. ``adb -s <serial> reconnect`` (reset del transporte, nada invasivo)
+           + chequeo de vida (``shell echo``). Si responde, listo.
+        2. Si no: ``kill-server`` + ``start-server`` y nuevo chequeo.
+
+        NO toca el guest (no hace ``adb reboot``): si el device/emulador quedó
+        colgado del lado del sistema operativo (adbd no responde ni con el
+        server recién reiniciado), ``ok=False`` le dice al operador que toca
+        reiniciar el emulador a mano -- matar qemu desde un botón web es
+        demasiado destructivo."""
+        adb = shutil.which("adb")
+        if not adb:
+            raise HTTPException(status_code=503, detail="adb no está instalado en el backend")
+
+        def _run(args: list[str], timeout: int) -> None:
+            try:
+                subprocess.run([adb] + args, capture_output=True, timeout=timeout)
+            except (subprocess.TimeoutExpired, OSError):
+                pass  # la etapa falló -- el chequeo de vida de abajo decide
+
+        def _alive() -> bool:
+            try:
+                proc = subprocess.run(
+                    [adb, "-s", serial, "shell", "echo", "ok"],
+                    capture_output=True, timeout=8,
+                )
+                return proc.returncode == 0
+            except (subprocess.TimeoutExpired, OSError):
+                return False
+
+        steps: list[str] = []
+        if serial:
+            _run(["-s", serial, "reconnect"], 10)
+            steps.append(f"reconnect {serial}")
+            if _alive():
+                return {"ok": True, "steps": steps}
+        _run(["kill-server"], 10)
+        _run(["start-server"], 15)
+        steps.append("kill-server → start-server")
+        return {"ok": _alive() if serial else True, "steps": steps}
+
     # ── Explorador del decompilado (workbench IDE del dashboard) ─────────────
     # Sirve el árbol de decompiled/<package>/ (jadx) y runtime_dump_<package>/
     # (FART) directo de disco. Carga perezosa por directorio (un árbol plano de
