@@ -245,6 +245,24 @@ async def ws_query(websocket: WebSocket, package: str) -> None:
     decompiled_dir, runtime_dump_dir, analysis_result = await run_in_threadpool(
         query_cap["resolve_package_context"], package,
     )
+
+    # ── Handoff vivo: si la última corrida autónoma quedó sin conclusión hay
+    # un resume_state pendiente (agent_memory.save_resume_state) -- el chat
+    # hereda la conversación REAL de esa corrida en vez de solo la semilla
+    # con el resumen, para poder afinar el bypass donde quedó. No se limpia
+    # el estado: el botón "+N iteraciones" sigue pudiendo reanudarla en modo
+    # autónomo.
+    # Gate de versión: la capacidad aipwn.load_resume_state solo existe en el
+    # plugin que ya acepta el kwarg resume_messages -- si falta (plugin
+    # viejo), el chat arranca como antes, con la semilla-resumen.
+    agent_kwargs: dict = {}
+    load_resume = capabilities.get("aipwn.load_resume_state")
+    if load_resume is not None:
+        resume_state = await run_in_threadpool(load_resume, package)
+        agent_kwargs["resume_messages"] = (
+            (resume_state or {}).get("messages") or None
+        )
+
     agent = query_cap["QueryAgent"](
         package=package,
         decompiled_dir=decompiled_dir,
@@ -255,6 +273,7 @@ async def ws_query(websocket: WebSocket, package: str) -> None:
         serial=serial if not use_relay else None,
         frida_host=frida_host,
         device=device,
+        **agent_kwargs,
     )
 
     try:

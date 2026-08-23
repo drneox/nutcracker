@@ -247,3 +247,76 @@ def test_handoff_seed_works_with_memory_only(tmp_path, monkeypatch):
 
     assert len(agent.messages) == 2
     assert "Past Sessions Memory" in agent.messages[1]["content"]
+
+
+# ── Handoff vivo: resume_messages (conversación real, no solo el resumen) ───
+#
+# Cuando una corrida autónoma queda sin conclusión y el operador pide
+# continuar (--interactive en CLI, o el dashboard cargando el resume_state),
+# QueryAgent hereda los mensajes REALES del FridaAgent: reemplaza el system
+# prompt autónomo por el del co-piloto + nota de handoff, y NO carga la
+# semilla-resumen de _build_handoff_context (la conversación completa la
+# vuelve redundante).
+
+def _make_agent_with_resume(tmp_path: Path, history: list[dict]) -> QueryAgent:
+    return QueryAgent(
+        package="com.example.app",
+        decompiled_dir=None,
+        runtime_dump_dir=None,
+        analysis_result=None,
+        llm_config={"provider": "openai", "model": "gpt-4o", "api_key": "sk-test"},
+        db_path=str(tmp_path / "test.db"),
+        device=None,
+        resume_messages=history,
+    )
+
+
+def test_resume_messages_replaces_system_prompt_and_keeps_history(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    history = [
+        {"role": "system", "content": "OLD AUTONOMOUS PROMPT"},
+        {"role": "user", "content": "OLD autonomous goal message"},
+        {"role": "assistant", "content": "tried hooking X and it crashed"},
+    ]
+
+    agent = _make_agent_with_resume(tmp_path, history)
+
+    assert agent.messages[0]["role"] == "system"
+    assert "OLD AUTONOMOUS PROMPT" not in agent.messages[0]["content"]
+    assert "live handoff" in agent.messages[0]["content"]
+    assert agent.messages[1]["content"] == "OLD autonomous goal message"
+    assert agent.messages[2]["content"] == "tried hooking X and it crashed"
+    assert len(agent.messages) == 3
+
+
+def test_resume_messages_skips_summary_seed(tmp_path, monkeypatch):
+    """Con conversación real heredada, la semilla-resumen (memoria + script)
+    NO se agrega -- sería contexto duplicado."""
+    monkeypatch.chdir(tmp_path)
+    _seed_memory(tmp_path)
+    _seed_script(tmp_path)
+    history = [
+        {"role": "system", "content": "OLD AUTONOMOUS PROMPT"},
+        {"role": "user", "content": "OLD autonomous goal message"},
+    ]
+
+    agent = _make_agent_with_resume(tmp_path, history)
+
+    assert not any("Past Sessions Memory" in str(m.get("content")) for m in agent.messages)
+    assert len(agent.messages) == 2
+
+
+def test_resume_messages_copies_the_list(tmp_path):
+    """El agente trabaja sobre una copia: mutar self.messages (pruning,
+    nuevos turnos) no debe tocar la lista del llamador (que puede ser el
+    resume_state en disco recién cargado o los mensajes del FridaAgent)."""
+    history = [
+        {"role": "system", "content": "OLD"},
+        {"role": "user", "content": "goal"},
+    ]
+
+    agent = _make_agent_with_resume(tmp_path, history)
+
+    assert agent.messages is not history
+    assert len(history) == 2  # el reemplazo del system prompt no toca el original
+    assert history[0]["content"] == "OLD"
