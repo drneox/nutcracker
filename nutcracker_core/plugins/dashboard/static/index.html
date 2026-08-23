@@ -43,7 +43,12 @@
   .explorer-tree .tdir{color:var(--accent)}
   .explorer-tree .tchildren{margin-left:14px}
   #code-path{font-size:11px;color:var(--dim);margin-bottom:6px;word-break:break-all}
-  #code-view{background:#05070a;color:#c9d1d9;padding:12px;border-radius:8px;max-height:50vh;overflow:auto;white-space:pre;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  #code-view{background:#05070a;color:#c9d1d9;padding:12px;border-radius:0 8px 8px 8px;max-height:50vh;overflow:auto;white-space:pre;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  #code-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:0}
+  #code-tabs .ftab{background:var(--panel2);border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;padding:3px 8px;font-size:11px;cursor:pointer;color:var(--dim)}
+  #code-tabs .ftab.active{color:var(--text);border-color:var(--accent);background:var(--panel)}
+  #code-tabs .ftab .x{margin-left:6px;color:var(--dim)}
+  #code-tabs .ftab .x:hover{color:var(--critical)}
   @media (max-width:1100px){
     .interaction-grid{grid-template-columns:1fr}
     .interaction-side{position:static}
@@ -174,7 +179,7 @@
           <button class="secondary" onclick="searchExplorer()" title="Filtrar por nombre de archivo">🔎</button>
           <button class="secondary" onclick="loadExplorer()" title="Recargar árbol">⟳</button>
         </div>
-        <div class="explorer-tree" id="explorer-tree">(conectá el chat con un package id para explorar su decompilado)</div>
+        <div class="explorer-tree" id="explorer-tree">(elegí un job de la cola ↑ para explorar su decompilado)</div>
       </div>
 
       <div class="interaction-main">
@@ -183,21 +188,23 @@
           Co-piloto interactivo: preguntá sobre findings/componentes/secretos ya analizados
           (funciona sin ningún job corriendo), o pedile en lenguaje natural que use Frida/ADB
           con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
+          El package lo fija el job que elijas en la cola de arriba (click en su #).
         </p>
+
+        <div id="code-panel" style="display:none">
+          <div id="code-tabs"></div>
+          <div id="code-path"></div>
+          <pre id="code-view"></pre>
+        </div>
+
         <div class="row">
-          <input id="query-package" placeholder="package id" style="width:220px" onkeydown="if(event.key==='Enter')connectQuery()">
-          <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px" onkeydown="if(event.key==='Enter')connectQuery()" title="Serial adb directo (emulator-5554, ip:5555…). Si hay una sesión de relay activa (panel Dispositivo → Avanzado) y escribís su session id, se detecta solo.">
-          <button class="secondary" id="query-connect-btn" onclick="connectQuery()">Conectar</button>
+          <input id="query-serial" placeholder="serial (vacío = default de config/USB)" style="width:220px" onkeydown="if(event.key==='Enter'&&chatPackage)connectQuery(chatPackage)" title="Serial adb directo (emulator-5554, ip:5555…). Se precarga solo al conectar el device en el panel de la derecha. Si hay una sesión de relay activa y escribís su session id, se detecta solo.">
         </div>
         <div id="querylog"></div>
         <div class="row">
           <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
           <button onclick="sendQuery()">Enviar</button>
         </div>
-
-        <h2 style="margin-top:18px">Código</h2>
-        <div id="code-path">(elegí un archivo del explorador de la izquierda)</div>
-        <pre id="code-view"></pre>
 
         <h2 style="margin-top:18px" id="logs-title">Logs en vivo</h2>
         <div class="row">
@@ -370,11 +377,12 @@ async function refreshApps(){
 
 async function refreshQueue(){
   const jobs = await j('/api/queue');
+  lastJobs = jobs;
   const tbody = document.querySelector('#queue-table tbody');
   tbody.innerHTML = jobs.map(job => `
     <tr>
-      <td><a href="#" class="job-id-link" onclick="goToJobLog(${job.id}); return false"
-             title="Ver logs del job #${job.id}">#${job.id}</a></td>
+      <td><a href="#" class="job-id-link" onclick="openJobContext(${job.id}); return false"
+             title="Ver logs del job #${job.id} + abrir su package en el chat y el explorador">#${job.id}</a></td>
       <td>${job.kind}</td><td>${job.target}</td>
       <td>${job.status}</td><td>${job.package || '–'}</td>
       <td>
@@ -489,26 +497,44 @@ function connectJobLog(){
   };
 }
 
-// Click en el "#id" de un job (tabla de la cola) -- baja directo al bloque
-// "Logs en vivo" (abajo del chat/código, todo visible sin tabs) con ese job
-// ya cargado.
-function goToJobLog(jobId){
+// Click en el "#id" de un job (tabla de la cola): baja al bloque "Logs en
+// vivo" con ese job cargado Y fija el package como contexto de todo el
+// workbench (chat del co-piloto + explorador del decompilado) -- el package
+// se toma del job, no de un campo a mano.
+let lastJobs = [];
+
+function _pkgFromJob(job){
+  if (job.package) return job.package;
+  const t = job.target || '';
+  const m = t.match(/[?&]id=([a-zA-Z0-9._]+)/);           // URL de store
+  if (m) return m[1];
+  const base = t.split(/[\\/]/).pop();
+  if (base.endsWith('.apk')) return base.slice(0, -4);    // .apk local
+  if (/^[a-zA-Z][\w.]*\.[\w.]+$/.test(t)) return t;       // package id pelado
+  return null;
+}
+
+function openJobContext(jobId){
   document.getElementById('log-job-id').value = jobId;
   document.getElementById('logs-title').scrollIntoView({behavior: 'smooth'});
   connectJobLog();
+  const job = lastJobs.find(x => x.id === jobId);
+  const pkg = job && _pkgFromJob(job);
+  // Reconectar el chat pisa la conversación visible -- solo si cambia el package.
+  if (pkg && pkg !== chatPackage) connectQuery(pkg);
 }
 
 // ── Explorador del decompilado (árbol lazy vía /api/decompiled/*) ─────────
 // Raíces: "static" = decompiled/<package> (jadx), "runtime" =
 // decompiled/runtime_dump_<package> (FART, solo si existe). El package lo
-// fija la conexión del chat (connectQuery) o el campo query-package.
+// fija el job elegido en la cola (openJobContext → connectQuery).
 let explorerPackage = null;
 
 async function loadExplorer(pkg){
-  explorerPackage = (pkg || explorerPackage || document.getElementById('query-package').value.trim()) || null;
+  explorerPackage = (pkg || explorerPackage) || null;
   const tree = document.getElementById('explorer-tree');
   if (!explorerPackage) {
-    tree.textContent = '(conectá el chat con un package id para explorar su decompilado)';
+    tree.textContent = '(elegí un job de la cola ↑ para explorar su decompilado)';
     return;
   }
   tree.innerHTML = '';
@@ -560,19 +586,80 @@ function _renderFile(container, root, path, name){
   container.appendChild(node);
 }
 
+// Click en un archivo del explorador: lo abre (o activa si ya estaba) en una
+// pestaña del panel de código que está sobre el chat, estilo IDE. El contenido
+// se cachea en memoria -- el decompilado en disco no cambia durante la sesión.
+const openTabs = new Map();  // `${root}:${path}` -> {root, path, name, content, truncated}
+let activeTab = null;
+
 async function openDecompiledFile(root, path){
-  const pathEl = document.getElementById('code-path');
-  const view = document.getElementById('code-view');
-  pathEl.textContent = `${root === 'runtime' ? 'runtime dump' : 'jadx'}: ${path}`;
-  pathEl.scrollIntoView({behavior: 'smooth', block: 'nearest'});
-  view.textContent = 'cargando…';
+  const key = `${root}:${path}`;
+  if (openTabs.has(key)) { activateTab(key); return; }
+  openTabs.set(key, {root, path, name: path.split('/').pop(), content: null, truncated: false});
+  activateTab(key);
   try {
     const data = await j(`/api/decompiled/${encodeURIComponent(explorerPackage)}/file?root=${root}&path=${encodeURIComponent(path)}`);
-    view.textContent = data.content;
-    if (data.truncated) pathEl.textContent += '  [truncado a 512 KB]';
+    const tab = openTabs.get(key);
+    if (!tab) return;  // la cerraron mientras cargaba
+    tab.content = data.content;
+    tab.truncated = !!data.truncated;
   } catch (e) {
-    view.textContent = `no se pudo abrir: ${e.message || e}`;
+    const tab = openTabs.get(key);
+    if (tab) tab.content = `no se pudo abrir: ${e.message || e}`;
   }
+  if (activeTab === key) _renderActiveTab();
+}
+
+function activateTab(key){
+  activeTab = key;
+  _renderTabs();
+  _renderActiveTab();
+}
+
+function closeTab(key, ev){
+  ev.stopPropagation();
+  openTabs.delete(key);
+  if (activeTab === key) activeTab = openTabs.size ? [...openTabs.keys()].pop() : null;
+  _renderTabs();
+  _renderActiveTab();
+}
+
+function closeAllTabs(){
+  openTabs.clear();
+  activeTab = null;
+  _renderTabs();
+  _renderActiveTab();
+}
+
+function _renderTabs(){
+  const bar = document.getElementById('code-tabs');
+  bar.innerHTML = '';
+  for (const [key, tab] of openTabs) {
+    const el = document.createElement('span');
+    el.className = 'ftab' + (key === activeTab ? ' active' : '');
+    el.title = tab.path;
+    const label = document.createElement('span');
+    label.textContent = tab.name;
+    const x = document.createElement('span');
+    x.className = 'x';
+    x.textContent = '✕';
+    x.title = 'cerrar';
+    x.onclick = (ev) => closeTab(key, ev);
+    el.appendChild(label);
+    el.appendChild(x);
+    el.onclick = () => activateTab(key);
+    bar.appendChild(el);
+  }
+}
+
+function _renderActiveTab(){
+  const panel = document.getElementById('code-panel');
+  if (!activeTab || !openTabs.has(activeTab)) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  const tab = openTabs.get(activeTab);
+  document.getElementById('code-path').textContent =
+    `${tab.root === 'runtime' ? 'runtime dump' : 'jadx'}: ${tab.path}` + (tab.truncated ? '  [truncado a 512 KB]' : '');
+  document.getElementById('code-view').textContent = tab.content === null ? 'cargando…' : tab.content;
 }
 
 async function searchExplorer(){
@@ -898,7 +985,7 @@ async function checkQueryAvailable(){
   try {
     const data = await j('/api/query/available');
     if (!data.available) {
-      document.getElementById('query-connect-btn').disabled = true;
+      document.getElementById('query-text').disabled = true;
       document.getElementById('query-hint').textContent =
         'Co-piloto no disponible -- falta el plugin aipwn o el bloque llm: en config.yaml.';
     }
@@ -906,15 +993,19 @@ async function checkQueryAvailable(){
 }
 
 let querySocket = null;
+let chatPackage = null;   // package de la conversación actual (lo fija openJobContext)
 function _qAppend(cls, html){
   const log = document.getElementById('querylog');
   log.innerHTML += `<div class="qmsg ${cls}">${html}</div>`;
   log.scrollTop = log.scrollHeight;
 }
-function connectQuery(){
-  const pkg = document.getElementById('query-package').value.trim();
+function connectQuery(pkg){
+  pkg = (pkg || '').trim();
   if (!pkg) return;
   if (querySocket) querySocket.close();
+  // Los archivos abiertos en pestañas pertenecen al package anterior.
+  if (pkg !== chatPackage) closeAllTabs();
+  chatPackage = pkg;
   document.getElementById('querylog').innerHTML = '';
   const serial = document.getElementById('query-serial').value.trim();
   // Sin checkbox "usar relay": si hay una sesión de relay activa y el serial
