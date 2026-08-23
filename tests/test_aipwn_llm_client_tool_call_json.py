@@ -75,3 +75,21 @@ def test_local_tool_dispatch_and_stored_history_agree_on_sanitized_args(monkeypa
     assert response.tool_calls[0].arguments == {}
     stored = response.raw_message["tool_calls"][0]["function"]["arguments"]
     assert json.loads(stored) == {}
+
+
+def test_vision_unsupported_error_detects_zai_wording():
+    """Encontrado en vivo (2026-08-23): z.ai/GLM rechaza los bloques de imagen
+    con `messages.content.type is invalid, allowed values: ['text']` (error
+    1210) -- un wording que ningún hint cubría, así que el retry sin imágenes
+    no se disparaba y el chat de pentest moría con el 400 crudo tras un
+    screenshot."""
+    exc = Exception(
+        "Error code: 400 - {'error': {'code': '1210', 'message': "
+        "\"messages.content.type is invalid, allowed values: ['text']\"}}"
+    )
+    assert frida_agent._is_vision_unsupported_error(exc) is True
+
+
+def test_vision_unsupported_error_ignores_unrelated_400():
+    exc = Exception("Error code: 400 - {'error': {'message': 'max_tokens must be positive'}}")
+    assert frida_agent._is_vision_unsupported_error(exc) is False
