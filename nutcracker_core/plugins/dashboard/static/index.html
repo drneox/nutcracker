@@ -207,36 +207,31 @@
 
       <div class="interaction-side">
         <h2 style="margin-top:0">Dispositivo</h2>
-        <div class="row" id="emulator-controls" style="display:none">
-          <input id="emulator-serial" placeholder="emulator-5554 (vacío = autodetectar)" style="width:200px">
-          <button id="emulator-btn" class="secondary" onclick="connectEmulator()" title="Vista de pantalla vía screencap del adb del backend (~1 fps) -- para emuladores y devices de red, donde WebUSB no aplica">📱 Ver emulador</button>
-          <button id="emulator-stop-btn" class="secondary" style="display:none" onclick="disconnectEmulator()">⏏ Soltar</button>
-        </div>
-        <div class="row">
-          <button id="webusb-btn" class="secondary" style="display:none" onclick="connectWebUsb()">🔌 USB directo (fluido)</button>
-          <button id="webusb-stop-btn" class="secondary" style="display:none" onclick="disconnectWebUsb()">⏏ Soltar USB</button>
-          <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB">🔪 adb kill-server</button>
-        </div>
         <div class="device-status" id="device-status">cargando…</div>
         <canvas id="webusb-canvas" width="720" height="1600"></canvas>
-        <img id="emulator-img" style="display:none" alt="pantalla del emulador">
+        <img id="emulator-img" style="display:none" alt="pantalla del dispositivo">
+        <div class="row">
+          <button id="device-toggle-btn" class="secondary" style="display:none" onclick="toggleDevice()">⏏ Soltar</button>
+        </div>
 
         <details style="margin-top:16px">
-          <summary style="cursor:pointer;color:var(--dim);font-size:13px">Relay (frida/adb desde un backend remoto)</summary>
+          <summary style="cursor:pointer;color:var(--dim);font-size:13px">Avanzado: relay (frida/adb remoto) / adb kill-server</summary>
           <p style="font-size:12px;color:var(--muted,#888)">
-            Puentea `frida`/`adb` corriendo en este backend hacia el device conectado
-            acá. `adb` (shell/install/pull/screencap) reusa la misma conexión USB de
-            arriba (conectá "USB directo" primero). `frida` va por un WebSocket nativo
-            directo a la IP de LAN del device (Tango no sostiene bien el handshake
-            WebSocket que usa frida moderno, verificado en vivo) — necesita que ESTA PC
-            tenga alcance de red al device, y puede pedir el permiso "Acceso a Red
-            Local" de Chrome la primera vez.
+            El relay puentea `frida`/`adb` corriendo en este backend hacia el device
+            conectado acá. `adb` (shell/install/pull/screencap) reusa la conexión USB
+            (requiere el video USB activo). `frida` va por un WebSocket nativo directo
+            a la IP de LAN del device (Tango no sostiene bien el handshake WebSocket
+            que usa frida moderno, verificado en vivo) — necesita que ESTA PC tenga
+            alcance de red al device, y puede pedir el permiso "Acceso a Red Local" de
+            Chrome la primera vez. `adb kill-server` mata el daemon adb (WSL + Windows)
+            para soltar el cable antes de que WebUSB lo reclame.
           </p>
           <div class="row">
             <input id="relay-session-id" placeholder="session id (ej. el serial del device)" style="width:220px">
             <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" style="width:220px">
             <button id="relay-btn" class="secondary" onclick="connectRelay()">🌐 Activar relay</button>
             <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()">⏏ Detener relay</button>
+            <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB">🔪 adb kill-server</button>
           </div>
           <div class="device-status" id="relay-status"></div>
         </details>
@@ -485,18 +480,11 @@ function goToJobLog(jobId){
 }
 
 // ── Dispositivo ──────────────────────────────────────────────────────────
-// Único modo de video: WebUSB + WebCodecs ("USB directo (fluido)"), 100%
-// opt-in vía su propio botón -- no hay fallback de screenshots/scrcpy, a
-// pedido explícito del usuario. Import perezoso: si el bundle no existe
-// porque nadie corrió `pnpm run build` en webusb/, o el navegador no soporta
-// WebUSB, el botón simplemente no aparece.
-// Reconexión tras F5: se guarda en sessionStorage (NO localStorage) el serial
-// del device que el usuario conectó a mano. sessionStorage tiene justo la vida
-// útil que queremos -- sobrevive a un reload, muere al cerrar la pestaña -- así
-// que la reconexión automática ocurre SOLO en la pestaña donde el usuario ya
-// había pedido video explícitamente. Abrir el dashboard de cero nunca toca el
-// USB solo: el cable es exclusivo (mientras el navegador lo tiene, adb no puede
-// usarlo), así que reclamarlo sin que lo pidan rompería los jobs de la cola.
+// Dos modos de pantalla, elegidos por config.yaml (no por botones):
+//   - emulator/red: screencap polling vía adb del backend (~1 fps)
+//   - físico: WebUSB + WebCodecs (video fluido; el navegador reclama el cable)
+// El detalle de cada modo está en su sección más abajo. sessionStorage guarda
+// el serial USB conectado a mano para la reconexión tras F5 (ver _initUsbMode).
 const WEBUSB_SESSION_KEY = 'nutcracker.webusb.serial';
 
 function rememberWebUsbSerial(serial){
@@ -506,47 +494,94 @@ function rememberWebUsbSerial(serial){
 function rememberedWebUsbSerial(){
   try { return sessionStorage.getItem(WEBUSB_SESSION_KEY); } catch (e) { return null; }
 }
-function setWebUsbConnectedUi(connected){
-  document.getElementById('webusb-btn').style.display = connected ? 'none' : '';
-  document.getElementById('webusb-stop-btn').style.display = connected ? '' : 'none';
+
+// ── Panel Dispositivo: auto-conexión según config, UN solo botón toggle ────
+// No hay botones de "conectar": al cargar, el panel se conecta solo usando el
+// modo que dicta config.yaml -- emulator (screencap polling vía adb del
+// backend) si strategies.runtime_target: emulator o el serial configurado es
+// de emulador; si no, WebUSB (device físico por cable). El único botón es el
+// toggle: "⏏ Soltar" cuando hay conexión, "🔄 Reconectar" cuando no.
+// Excepción inevitable: la PRIMERA conexión WebUSB necesita un gesto del
+// usuario (el navegador exige el diálogo de permiso USB) -- ese gesto es el
+// propio click en "🔄 Reconectar".
+let deviceMode = null;        // 'emulator' | 'usb'
+let deviceConnected = false;
+let emuConfigSerial = null;   // serial de emulador desde config.yaml (si hay)
+let emuTimer = null;
+let emuSerial = null;
+
+function _isEmulatorSerial(s){
+  return !!s && (s.startsWith('emulator-') || s.startsWith('127.0.0.1:') || s.startsWith('localhost:'));
 }
 
+function setDeviceToggle(connected){
+  deviceConnected = connected;
+  const btn = document.getElementById('device-toggle-btn');
+  btn.style.display = '';
+  btn.textContent = connected ? '⏏ Soltar' : '🔄 Reconectar';
+}
+
+function _showEmulatorImg(show){
+  document.getElementById('emulator-img').style.display = show ? 'block' : 'none';
+  document.getElementById('webusb-canvas').style.display = show ? 'none' : '';
+}
+
+async function toggleDevice(){
+  if (deviceConnected) {
+    if (deviceMode === 'emulator') disconnectEmulator();
+    else await disconnectWebUsb();
+  } else {
+    if (deviceMode === 'emulator') await connectEmulator();
+    else await connectWebUsb();
+  }
+}
+
+// ── Modo USB (device físico): WebUSB + WebCodecs, video fluido ─────────────
 // Import perezoso: si el bundle no existe porque nadie corrió `pnpm run build`
-// en webusb/, o el navegador no soporta WebUSB, el botón simplemente no aparece.
-(async () => {
+// en webusb/, o el navegador no soporta WebUSB, el panel informa y listo.
+// Reconexión tras F5: se guarda en sessionStorage (NO localStorage) el serial
+// del device que el usuario conectó a mano. sessionStorage tiene justo la vida
+// útil que queremos -- sobrevive a un reload, muere al cerrar la pestaña -- así
+// que la reconexión automática ocurre SOLO en la pestaña donde el usuario ya
+// había pedido video explícitamente. Abrir el dashboard de cero nunca toca el
+// USB solo: el cable es exclusivo (mientras el navegador lo tiene, adb no puede
+// usarlo), así que reclamarlo sin que lo pidan rompería los jobs de la cola.
+async function _initUsbMode(){
   const status = document.getElementById('device-status');
   try {
     const mod = await import('/static/webusb-video.bundle.js');
     if (mod.isSupported && mod.isSupported()) {
       window.__nutcrackerWebUsb = mod;
-      setWebUsbConnectedUi(false);
-      status.textContent = 'Clic en "🔌 USB directo (fluido)" para conectar por USB.';
-
       const previous = rememberedWebUsbSerial();
       if (previous) {
         const canvas = document.getElementById('webusb-canvas');
         const serial = await mod.reconnect(canvas, (s) => { status.textContent = s; }, previous);
         rememberWebUsbSerial(serial);
-        setWebUsbConnectedUi(!!serial);
+        setDeviceToggle(!!serial);
+        if (serial) return;
+      } else {
+        setDeviceToggle(false);
       }
+      status.textContent = 'Sin conexión USB -- "🔄 Reconectar" para reclamar el cable (la primera vez el navegador pide permiso).';
       return;
     }
   } catch (e) { /* bundle no compilado o navegador sin soporte -- no-op */ }
   status.textContent = 'WebUSB no disponible (necesita Chrome/Edge y el bundle compilado — ver nutcracker_core/plugins/dashboard/webusb/README.md).';
-})();
+}
 
 async function connectWebUsb(){
   const mod = window.__nutcrackerWebUsb;
-  if (!mod) return;
-  const canvas = document.getElementById('webusb-canvas');
   const status = document.getElementById('device-status');
+  if (!mod) { status.textContent = 'Bundle WebUSB no disponible (ver README de webusb/).'; return; }
+  const canvas = document.getElementById('webusb-canvas');
+  _showEmulatorImg(false);
   try {
     // mod.connect() ya captura sus propios errores internamente y los reporta
     // vía onStatus (ver webusb/src/main.ts) -- este try/catch es defensa en
     // profundidad por si algo se escapa (p.ej. el propio import/bundle).
     const serial = await mod.connect(canvas, (s) => { status.textContent = s; });
     rememberWebUsbSerial(serial);
-    setWebUsbConnectedUi(!!serial);
+    setDeviceToggle(!!serial);
   } catch (e) {
     console.error('connectWebUsb falló:', e);
     status.textContent = `Error con USB directo: ${e.message || e}`;
@@ -560,7 +595,7 @@ async function disconnectWebUsb(){
   // Se olvida el serial ANTES de cerrar: si el cierre falla a mitad, no queremos
   // que el próximo F5 vuelva a reclamar el cable por su cuenta.
   rememberWebUsbSerial(null);
-  setWebUsbConnectedUi(false);
+  setDeviceToggle(false);
   try {
     await mod.disconnect((s) => { status.textContent = s; });
   } catch (e) {
@@ -569,25 +604,10 @@ async function disconnectWebUsb(){
   }
 }
 
-// ── Emulador / device de red (screencap polling) ─────────────────────────
-// WebUSB solo aplica a un device FÍSICO por cable (el navegador reclama el
-// USB). Para emuladores y seriales de red la pantalla se trae frame a frame
-// del adb del backend (GET /api/device/screenshot) -- por eso esta vista no
-// necesita Chrome ni el bundle webusb compilado.
-let emuTimer = null;
-let emuSerial = null;
-
-function _isEmulatorSerial(s){
-  return !!s && (s.startsWith('emulator-') || s.startsWith('127.0.0.1:') || s.startsWith('localhost:'));
-}
-
-function setEmulatorConnectedUi(connected){
-  document.getElementById('emulator-btn').style.display = connected ? 'none' : '';
-  document.getElementById('emulator-stop-btn').style.display = connected ? '' : 'none';
-  document.getElementById('emulator-img').style.display = connected ? 'block' : 'none';
-  document.getElementById('webusb-canvas').style.display = connected ? 'none' : '';
-}
-
+// ── Modo emulador / device de red (screencap polling) ──────────────────────
+// WebUSB no aplica acá (no hay cable que reclamar): la pantalla se trae frame
+// a frame del adb del backend (GET /api/device/screenshot). No necesita
+// Chrome ni el bundle webusb compilado.
 function refreshEmulatorFrame(){
   if (!emuSerial) return;
   document.getElementById('emulator-img').src =
@@ -596,8 +616,8 @@ function refreshEmulatorFrame(){
 
 async function connectEmulator(){
   const status = document.getElementById('device-status');
-  let serial = document.getElementById('emulator-serial').value.trim();
   try {
+    let serial = emuConfigSerial;
     if (!serial) {
       // Autodetección: primer emulador vivo que vea el adb del backend (o el
       // primer device disponible, si no hay emulador).
@@ -606,7 +626,6 @@ async function connectEmulator(){
       const emu = alive.find(d => d.kind === 'emulator') || alive[0];
       if (!emu) { status.textContent = 'No hay ningún device/emulador visible para el adb del backend.'; return; }
       serial = emu.serial;
-      document.getElementById('emulator-serial').value = serial;
     }
     // Validar con un frame antes de prender el polling
     const probe = await fetch(`/api/device/screenshot?serial=${encodeURIComponent(serial)}`);
@@ -615,7 +634,8 @@ async function connectEmulator(){
       return;
     }
     emuSerial = serial;
-    setEmulatorConnectedUi(true);
+    _showEmulatorImg(true);
+    setDeviceToggle(true);
     status.textContent = `Viendo pantalla de ${serial} (screencap ~1 fps).`;
     refreshEmulatorFrame();
     emuTimer = setInterval(refreshEmulatorFrame, 900);
@@ -628,9 +648,26 @@ async function connectEmulator(){
 function disconnectEmulator(){
   if (emuTimer) { clearInterval(emuTimer); emuTimer = null; }
   emuSerial = null;
-  setEmulatorConnectedUi(false);
-  document.getElementById('device-status').textContent = 'Vista de emulador detenida.';
+  _showEmulatorImg(false);
+  setDeviceToggle(false);
+  document.getElementById('device-status').textContent = 'Vista detenida -- "🔄 Reconectar" para retomar.';
 }
+
+// Arranque del panel: el modo lo dicta config.yaml (runtime_target /
+// default_device_id), no un botón. Emulador → auto-conecta el polling;
+// físico → WebUSB (auto-reconnect solo si ESTA pestaña ya lo había pedido).
+(async () => {
+  let cfg = {};
+  try { cfg = await j('/api/config/default-serial'); } catch (e) { /* sin config */ }
+  if (cfg.runtime_target === 'emulator' || _isEmulatorSerial(cfg.serial)) {
+    deviceMode = 'emulator';
+    emuConfigSerial = _isEmulatorSerial(cfg.serial) ? cfg.serial : null;
+    await connectEmulator();
+    return;
+  }
+  deviceMode = 'usb';
+  await _initUsbMode();
+})();
 
 // Mata el daemon adb por las dos vías (WSL + Windows, ver
 // adb_transport.kill_server()) -- pensado para correr ANTES de "🔌 USB directo
@@ -670,7 +707,7 @@ async function connectRelay(){
   if (!mod) { status.textContent = 'Bundle WebUSB no disponible.'; return; }
   const adb = mod.getAdb && mod.getAdb();
   if (!adb) {
-    status.textContent = 'Conectá "🔌 USB directo (fluido)" primero -- el relay reusa esa conexión.';
+    status.textContent = 'Conectá el video USB primero (botón de arriba) -- el relay reusa esa conexión.';
     return;
   }
   const sessionId = document.getElementById('relay-session-id').value.trim();
@@ -960,22 +997,13 @@ async function reQueue(){
 // de config.yaml -- típicamente un serial de red ("ip:5555" tras `adb tcpip
 // 5555`) para no tener que escribirlo a mano y para que no compita por el
 // cable USB con el video WebUSB. Solo si el campo está vacío -- no pisa lo
-// que el operador ya haya escrito.
-// Además: si la config está apuntando a un emulador (strategies.runtime_target:
-// emulator, o un default_device_id con pinta de emulador), se muestran los
-// controles "📱 Ver emulador" del panel Dispositivo y se precarga ese serial
-// en el chat del co-piloto.
+// que el operador ya haya escrito. Si es un serial de emulador, también se
+// precarga en el chat del co-piloto.
 (async () => {
   try {
-    const { serial, runtime_target } = await j('/api/config/default-serial');
-    const emulatorMode = runtime_target === 'emulator' || _isEmulatorSerial(serial);
-    if (emulatorMode) {
-      document.getElementById('emulator-controls').style.display = '';
-    }
+    const { serial } = await j('/api/config/default-serial');
     if (!serial) return;
-    if (emulatorMode) {
-      const emuInput = document.getElementById('emulator-serial');
-      if (emuInput && !emuInput.value) emuInput.value = serial;
+    if (_isEmulatorSerial(serial)) {
       const qInput = document.getElementById('query-serial');
       if (qInput && !qInput.value) qInput.value = serial;
     }
