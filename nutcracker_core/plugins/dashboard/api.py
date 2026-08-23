@@ -4,11 +4,13 @@ a través de sus APIs públicas (QueueEngine), nunca reimplementa análisis."""
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from nutcracker_core import adb_transport
@@ -219,7 +221,7 @@ async def _run_relay_rpc(session, op: str, **fields):
 
 def create_router(
     db_path: str, engine: QueueEngine, default_serial: str | None = None,
-    llm_config: dict | None = None,
+    llm_config: dict | None = None, runtime_target: str | None = None,
 ) -> APIRouter:
     """No toca ``engine.on_line`` a propósito: ese wiring (streaming de logs en
     vivo al EventBus) lo hace ``plugins/dashboard/__init__.py::dashboard()``
@@ -250,8 +252,58 @@ def create_router(
         típicamente un serial de red ("ip:5555" tras ``adb tcpip 5555``) para
         que el operador no tenga que escribirlo a mano en cada job, y para
         evitar el conflicto de exclusividad USB con el video WebUSB (ver
-        README de nutcracker_core/plugins/dashboard/webusb/)."""
-        return {"serial": default_serial}
+        README de nutcracker_core/plugins/dashboard/webusb/).
+
+        ``runtime_target`` (``strategies.runtime_target``: emulator|device) le
+        dice al panel Dispositivo si debe ofrecer la vista de emulador por
+        screencap polling (WebUSB solo aplica a devices físicos por cable)."""
+        return {"serial": default_serial, "runtime_target": runtime_target}
+
+    @router.get("/api/device/list")
+    def device_list():
+        """Dispositivos que ve el adb DEL BACKEND (``adb devices``), ya
+        clasificados por tipo -- el panel Dispositivo lo usa para autodetectar
+        el emulador cuando el operador no escribió un serial a mano."""
+        adb = shutil.which("adb")
+        if not adb:
+            return {"available": False, "devices": []}
+        try:
+            proc = subprocess.run([adb, "devices"], capture_output=True, text=True, timeout=8)
+        except (subprocess.TimeoutExpired, OSError):
+            return {"available": False, "devices": []}
+        devices = []
+        for line in proc.stdout.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            serial, state = parts
+            kind = ("emulator" if serial.startswith(("emulator-", "127.0.0.1:", "localhost:"))
+                    else "network" if ":" in serial else "usb")
+            devices.append({"serial": serial, "state": state, "kind": kind})
+        return {"available": True, "devices": devices}
+
+    @router.get("/api/device/screenshot")
+    def device_screenshot(serial: str | None = None):
+        """Frame PNG actual del device vía ``adb exec-out screencap -p`` -- la
+        vista de pantalla para emuladores y devices de red, donde WebUSB no
+        aplica (no hay cable USB que reclamar desde el navegador). El frontend
+        lo pollea ~1/s mientras la vista de emulador está activa."""
+        adb = shutil.which("adb")
+        if not adb:
+            raise HTTPException(status_code=503, detail="adb no está instalado en el backend")
+        cmd = [adb] + (["-s", serial] if serial else []) + ["exec-out", "screencap", "-p"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(status_code=504, detail="screencap timeout") from exc
+        except OSError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if proc.returncode != 0 or not proc.stdout:
+            raise HTTPException(
+                status_code=502,
+                detail=proc.stderr.decode(errors="replace").strip() or "screencap falló",
+            )
+        return Response(content=proc.stdout, media_type="image/png")
 
     @router.post("/api/adb/kill-server")
     def adb_kill_server():

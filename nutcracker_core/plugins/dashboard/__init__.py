@@ -141,6 +141,10 @@ def register(cli) -> None:
         # vez de tener que escribirlo a mano en cada campo de serial del
         # dashboard (cola, batch).
         default_serial = str(cfg_get(config, "strategies", "default_device_id", default="")).strip() or None
+        # strategies.runtime_target (emulator|device): el panel Dispositivo lo
+        # usa para ofrecer la vista de emulador por screencap polling -- WebUSB
+        # solo sirve con un device físico por cable (ver api.py y static/index.html).
+        runtime_target = str(cfg_get(config, "strategies", "runtime_target", default="")).strip() or None
 
         db_path = db_path_from_config(config)
         engine = QueueEngine(
@@ -195,7 +199,7 @@ def register(cli) -> None:
 
         app = create_app(
             db_path=db_path, engine=engine, default_serial=default_serial,
-            auth=auth, llm_config=llm_config,
+            auth=auth, llm_config=llm_config, runtime_target=runtime_target,
         )
 
         console.print(

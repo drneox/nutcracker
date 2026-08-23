@@ -26,15 +26,21 @@
   main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px}
   .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
   .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);margin:0 0 12px}
-  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:12px}
-  .tab{padding:8px 14px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
-  .tab.active{color:var(--text);border-color:var(--accent)}
-  .tabpanel{display:none}
-  .tabpanel.active{display:block}
   .table-scroll{overflow-x:auto}
   table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
   th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
   th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  /* Sección de interacción: sin pestañas -- chat del agente como panel
+     principal (con los logs abajo) y la pantalla del dispositivo fija a la
+     derecha, tipo consola de pentest (referencia: djini.ai). En pantallas
+     angostas se apila. */
+  .interaction-grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start}
+  .interaction-side{position:sticky;top:16px}
+  #emulator-img{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;display:block}
+  @media (max-width:1000px){
+    .interaction-grid{grid-template-columns:1fr}
+    .interaction-side{position:static}
+  }
   tr.clickable{cursor:pointer}
   tr.clickable:hover{background:var(--panel2)}
   .job-id-link{color:var(--accent);text-decoration:none;font-weight:600}
@@ -71,7 +77,6 @@
   #querylog .qassistant{color:var(--text)}
   #querylog .qerror{color:var(--critical)}
   #querylog .qimg{max-width:260px;border-radius:6px;border:1px solid var(--border);display:block;margin-top:4px}
-  .tab.disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
   svg.trend{width:100%;height:160px;overflow:visible}
   .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
   @media (max-width:600px){
@@ -154,82 +159,87 @@
   </section>
 
   <section class="card">
-    <div class="tabs">
-      <div class="tab active" data-tab="logs">Logs en vivo</div>
-      <div class="tab" data-tab="device">Dispositivo</div>
-      <div class="tab" data-tab="agent">Agente / Chat</div>
-      <div class="tab" data-tab="query" id="tab-query-label">Pentest asistido</div>
-    </div>
+    <div class="interaction-grid">
+      <div class="interaction-main">
+        <h2 style="margin-top:0">Agente — pentest asistido</h2>
+        <p style="font-size:12px;color:var(--dim)" id="query-hint">
+          Co-piloto interactivo: preguntá sobre findings/componentes/secretos ya analizados
+          (funciona sin ningún job corriendo), o pedile en lenguaje natural que use Frida/ADB
+          con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
+        </p>
+        <div class="row">
+          <input id="query-package" placeholder="package id" style="width:220px">
+          <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px">
+          <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (panel Dispositivo → Relay)">
+            <input type="checkbox" id="query-relay" style="width:auto"> usar relay
+          </label>
+          <button class="secondary" id="query-connect-btn" onclick="connectQuery()">Conectar</button>
+        </div>
+        <div id="querylog"></div>
+        <div class="row">
+          <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
+          <button onclick="sendQuery()">Enviar</button>
+        </div>
 
-    <div class="tabpanel active" id="tab-logs">
-      <div class="row">
-        <input id="log-job-id" placeholder="job id" style="width:100px">
-        <button class="secondary" onclick="connectJobLog()">Ver logs</button>
-      </div>
-      <pre id="log">(elegí un job id de la cola de arriba)</pre>
-    </div>
+        <h2 style="margin-top:18px" id="logs-title">Logs en vivo</h2>
+        <div class="row">
+          <input id="log-job-id" placeholder="job id" style="width:100px">
+          <button class="secondary" onclick="connectJobLog()">Ver logs</button>
+        </div>
+        <pre id="log">(elegí un job id de la cola de arriba)</pre>
 
-    <div class="tabpanel" id="tab-device">
-      <div class="row">
-        <button id="webusb-btn" class="secondary" style="display:none" onclick="connectWebUsb()">🔌 USB directo (fluido)</button>
-        <button id="webusb-stop-btn" class="secondary" style="display:none" onclick="disconnectWebUsb()">⏏ Soltar USB</button>
-        <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB">🔪 adb kill-server</button>
+        <details style="margin-top:18px">
+          <summary style="cursor:pointer;color:var(--dim);font-size:13px">Chat con job aipwn en curso / system prompt del agente</summary>
+          <h3>System prompt del agente aipwn</h3>
+          <pre id="agent-prompt" style="max-height:200px;overflow:auto;background:var(--panel2);padding:10px;border-radius:8px;font-size:11px">cargando…</pre>
+          <h3>Chat</h3>
+          <div class="row">
+            <input id="chat-package" placeholder="package id" style="width:220px">
+            <button class="secondary" onclick="connectChat()">Conectar</button>
+          </div>
+          <div id="chatlog"></div>
+          <div class="row">
+            <input id="chat-text" placeholder="mensaje para el agente…" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
+            <button onclick="sendChat()">Enviar</button>
+          </div>
+        </details>
       </div>
-      <div class="device-status" id="device-status">cargando…</div>
-      <canvas id="webusb-canvas" width="720" height="1600"></canvas>
 
-      <h3 style="margin-top:16px">Relay (frida/adb desde un backend remoto)</h3>
-      <p style="font-size:12px;color:var(--muted,#888)">
-        Puentea `frida`/`adb` corriendo en este backend hacia el device conectado
-        acá. `adb` (shell/install/pull/screencap) reusa la misma conexión USB de
-        arriba (conectá "USB directo" primero). `frida` va por un WebSocket nativo
-        directo a la IP de LAN del device (Tango no sostiene bien el handshake
-        WebSocket que usa frida moderno, verificado en vivo — ver plan.md) —
-        necesita que ESTA PC tenga alcance de red al device, y puede pedir el
-        permiso "Acceso a Red Local" de Chrome la primera vez.
-      </p>
-      <div class="row">
-        <input id="relay-session-id" placeholder="session id (ej. el serial del device)" style="width:220px">
-        <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" style="width:220px">
-        <button id="relay-btn" class="secondary" onclick="connectRelay()">🌐 Activar relay</button>
-        <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()">⏏ Detener relay</button>
-      </div>
-      <div class="device-status" id="relay-status"></div>
-    </div>
+      <div class="interaction-side">
+        <h2 style="margin-top:0">Dispositivo</h2>
+        <div class="row" id="emulator-controls" style="display:none">
+          <input id="emulator-serial" placeholder="emulator-5554 (vacío = autodetectar)" style="width:200px">
+          <button id="emulator-btn" class="secondary" onclick="connectEmulator()" title="Vista de pantalla vía screencap del adb del backend (~1 fps) -- para emuladores y devices de red, donde WebUSB no aplica">📱 Ver emulador</button>
+          <button id="emulator-stop-btn" class="secondary" style="display:none" onclick="disconnectEmulator()">⏏ Soltar</button>
+        </div>
+        <div class="row">
+          <button id="webusb-btn" class="secondary" style="display:none" onclick="connectWebUsb()">🔌 USB directo (fluido)</button>
+          <button id="webusb-stop-btn" class="secondary" style="display:none" onclick="disconnectWebUsb()">⏏ Soltar USB</button>
+          <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB">🔪 adb kill-server</button>
+        </div>
+        <div class="device-status" id="device-status">cargando…</div>
+        <canvas id="webusb-canvas" width="720" height="1600"></canvas>
+        <img id="emulator-img" style="display:none" alt="pantalla del emulador">
 
-    <div class="tabpanel" id="tab-agent">
-      <h2 style="margin-top:0">System prompt del agente aipwn</h2>
-      <pre id="agent-prompt" style="max-height:200px;overflow:auto;background:var(--panel2);padding:10px;border-radius:8px;font-size:11px">cargando…</pre>
-      <h2>Chat</h2>
-      <div class="row">
-        <input id="chat-package" placeholder="package id" style="width:220px">
-        <button class="secondary" onclick="connectChat()">Conectar</button>
-      </div>
-      <div id="chatlog"></div>
-      <div class="row">
-        <input id="chat-text" placeholder="mensaje para el agente…" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
-        <button onclick="sendChat()">Enviar</button>
-      </div>
-    </div>
-
-    <div class="tabpanel" id="tab-query">
-      <p style="font-size:12px;color:var(--dim)">
-        Co-piloto interactivo: preguntá sobre findings/componentes/secretos ya analizados
-        (funciona sin ningún job corriendo), o pedile en lenguaje natural que use Frida/ADB
-        con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
-      </p>
-      <div class="row">
-        <input id="query-package" placeholder="package id" style="width:220px">
-        <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px">
-        <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay)">
-          <input type="checkbox" id="query-relay" style="width:auto"> usar relay
-        </label>
-        <button class="secondary" onclick="connectQuery()">Conectar</button>
-      </div>
-      <div id="querylog"></div>
-      <div class="row">
-        <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
-        <button onclick="sendQuery()">Enviar</button>
+        <details style="margin-top:16px">
+          <summary style="cursor:pointer;color:var(--dim);font-size:13px">Relay (frida/adb desde un backend remoto)</summary>
+          <p style="font-size:12px;color:var(--muted,#888)">
+            Puentea `frida`/`adb` corriendo en este backend hacia el device conectado
+            acá. `adb` (shell/install/pull/screencap) reusa la misma conexión USB de
+            arriba (conectá "USB directo" primero). `frida` va por un WebSocket nativo
+            directo a la IP de LAN del device (Tango no sostiene bien el handshake
+            WebSocket que usa frida moderno, verificado en vivo) — necesita que ESTA PC
+            tenga alcance de red al device, y puede pedir el permiso "Acceso a Red
+            Local" de Chrome la primera vez.
+          </p>
+          <div class="row">
+            <input id="relay-session-id" placeholder="session id (ej. el serial del device)" style="width:220px">
+            <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" style="width:220px">
+            <button id="relay-btn" class="secondary" onclick="connectRelay()">🌐 Activar relay</button>
+            <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()">⏏ Detener relay</button>
+          </div>
+          <div class="device-status" id="relay-status"></div>
+        </details>
       </div>
     </div>
   </section>
@@ -447,19 +457,6 @@ async function runBatch(){
   refreshQueue();
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────────
-function activateTab(name){
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
-  document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active');
-  document.getElementById('tab-' + name).classList.add('active');
-  if (name === 'agent') loadAgentPrompt();
-}
-
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => activateTab(tab.dataset.tab));
-});
-
 // ── Logs en vivo ─────────────────────────────────────────────────────────
 let logSocket = null;
 function connectJobLog(){
@@ -479,12 +476,11 @@ function connectJobLog(){
   };
 }
 
-// Click en el "#id" de un job (tabla de la cola) -- lleva directo a "Logs en
-// vivo" con ese job ya cargado, sin tener que copiar el id a mano al campo de
-// texto de al lado.
+// Click en el "#id" de un job (tabla de la cola) -- baja directo a "Logs en
+// vivo" (abajo del chat, ya no hay pestañas) con ese job ya cargado.
 function goToJobLog(jobId){
   document.getElementById('log-job-id').value = jobId;
-  activateTab('logs');
+  document.getElementById('logs-title').scrollIntoView({behavior: 'smooth'});
   connectJobLog();
 }
 
@@ -571,6 +567,69 @@ async function disconnectWebUsb(){
     console.error('disconnectWebUsb falló:', e);
     status.textContent = `Error soltando el USB: ${e.message || e}`;
   }
+}
+
+// ── Emulador / device de red (screencap polling) ─────────────────────────
+// WebUSB solo aplica a un device FÍSICO por cable (el navegador reclama el
+// USB). Para emuladores y seriales de red la pantalla se trae frame a frame
+// del adb del backend (GET /api/device/screenshot) -- por eso esta vista no
+// necesita Chrome ni el bundle webusb compilado.
+let emuTimer = null;
+let emuSerial = null;
+
+function _isEmulatorSerial(s){
+  return !!s && (s.startsWith('emulator-') || s.startsWith('127.0.0.1:') || s.startsWith('localhost:'));
+}
+
+function setEmulatorConnectedUi(connected){
+  document.getElementById('emulator-btn').style.display = connected ? 'none' : '';
+  document.getElementById('emulator-stop-btn').style.display = connected ? '' : 'none';
+  document.getElementById('emulator-img').style.display = connected ? 'block' : 'none';
+  document.getElementById('webusb-canvas').style.display = connected ? 'none' : '';
+}
+
+function refreshEmulatorFrame(){
+  if (!emuSerial) return;
+  document.getElementById('emulator-img').src =
+    `/api/device/screenshot?serial=${encodeURIComponent(emuSerial)}&t=${Date.now()}`;
+}
+
+async function connectEmulator(){
+  const status = document.getElementById('device-status');
+  let serial = document.getElementById('emulator-serial').value.trim();
+  try {
+    if (!serial) {
+      // Autodetección: primer emulador vivo que vea el adb del backend (o el
+      // primer device disponible, si no hay emulador).
+      const list = await j('/api/device/list');
+      const alive = (list.devices || []).filter(d => d.state === 'device');
+      const emu = alive.find(d => d.kind === 'emulator') || alive[0];
+      if (!emu) { status.textContent = 'No hay ningún device/emulador visible para el adb del backend.'; return; }
+      serial = emu.serial;
+      document.getElementById('emulator-serial').value = serial;
+    }
+    // Validar con un frame antes de prender el polling
+    const probe = await fetch(`/api/device/screenshot?serial=${encodeURIComponent(serial)}`);
+    if (!probe.ok) {
+      status.textContent = `screencap falló para ${serial}: ${(await probe.text()).slice(0, 200)}`;
+      return;
+    }
+    emuSerial = serial;
+    setEmulatorConnectedUi(true);
+    status.textContent = `Viendo pantalla de ${serial} (screencap ~1 fps).`;
+    refreshEmulatorFrame();
+    emuTimer = setInterval(refreshEmulatorFrame, 900);
+  } catch (e) {
+    console.error('connectEmulator falló:', e);
+    status.textContent = `Error conectando al emulador: ${e.message || e}`;
+  }
+}
+
+function disconnectEmulator(){
+  if (emuTimer) { clearInterval(emuTimer); emuTimer = null; }
+  emuSerial = null;
+  setEmulatorConnectedUi(false);
+  document.getElementById('device-status').textContent = 'Vista de emulador detenida.';
 }
 
 // Mata el daemon adb por las dos vías (WSL + Windows, ver
@@ -681,9 +740,9 @@ async function checkQueryAvailable(){
   try {
     const data = await j('/api/query/available');
     if (!data.available) {
-      const tab = document.getElementById('tab-query-label');
-      tab.classList.add('disabled');
-      tab.title = 'no disponible -- falta el plugin aipwn o el bloque llm: en config.yaml';
+      document.getElementById('query-connect-btn').disabled = true;
+      document.getElementById('query-hint').textContent =
+        'Co-piloto no disponible -- falta el plugin aipwn o el bloque llm: en config.yaml.';
     }
   } catch(e){}
 }
@@ -902,10 +961,24 @@ async function reQueue(){
 // 5555`) para no tener que escribirlo a mano y para que no compita por el
 // cable USB con el video WebUSB. Solo si el campo está vacío -- no pisa lo
 // que el operador ya haya escrito.
+// Además: si la config está apuntando a un emulador (strategies.runtime_target:
+// emulator, o un default_device_id con pinta de emulador), se muestran los
+// controles "📱 Ver emulador" del panel Dispositivo y se precarga ese serial
+// en el chat del co-piloto.
 (async () => {
   try {
-    const { serial } = await j('/api/config/default-serial');
+    const { serial, runtime_target } = await j('/api/config/default-serial');
+    const emulatorMode = runtime_target === 'emulator' || _isEmulatorSerial(serial);
+    if (emulatorMode) {
+      document.getElementById('emulator-controls').style.display = '';
+    }
     if (!serial) return;
+    if (emulatorMode) {
+      const emuInput = document.getElementById('emulator-serial');
+      if (emuInput && !emuInput.value) emuInput.value = serial;
+      const qInput = document.getElementById('query-serial');
+      if (qInput && !qInput.value) qInput.value = serial;
+    }
     for (const id of ['q-serial', 'batch-serial']) {
       const el = document.getElementById(id);
       if (el && !el.value) el.value = serial;
@@ -916,6 +989,7 @@ async function reQueue(){
 refreshAll();
 setInterval(refreshAll, 5000);
 checkQueryAvailable();
+loadAgentPrompt();
 </script>
 </body>
 </html>

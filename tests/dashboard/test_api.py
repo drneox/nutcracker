@@ -5,6 +5,7 @@ levantar un servidor de verdad ni tocar la red."""
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import time
 
@@ -72,7 +73,7 @@ def test_summary_empty_db(client):
 def test_default_serial_null_when_not_configured(client):
     r = client.get("/api/config/default-serial")
     assert r.status_code == 200
-    assert r.json() == {"serial": None}
+    assert r.json() == {"serial": None, "runtime_target": None}
 
 
 def test_default_serial_reflects_configured_value(db_path, engine):
@@ -80,7 +81,81 @@ def test_default_serial_reflects_configured_value(db_path, engine):
     client_with_serial = TestClient(app)
     r = client_with_serial.get("/api/config/default-serial")
     assert r.status_code == 200
-    assert r.json() == {"serial": "172.20.10.6:5555"}
+    assert r.json() == {"serial": "172.20.10.6:5555", "runtime_target": None}
+
+
+def test_default_serial_reflects_runtime_target(db_path, engine):
+    """runtime_target (strategies.runtime_target: emulator|device) viaja en el
+    mismo endpoint -- el panel Dispositivo lo usa para ofrecer la vista de
+    emulador por screencap polling en vez de WebUSB."""
+    app = create_app(db_path=db_path, engine=engine,
+                     default_serial="emulator-5554", runtime_target="emulator")
+    r = TestClient(app).get("/api/config/default-serial")
+    assert r.status_code == 200
+    assert r.json() == {"serial": "emulator-5554", "runtime_target": "emulator"}
+
+
+# ── /api/device/* -- vista de emulador/device de red (screencap polling) ────
+
+def test_device_list_without_adb(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = client.get("/api/device/list")
+    assert r.status_code == 200
+    assert r.json() == {"available": False, "devices": []}
+
+
+def test_device_list_classifies_devices(client, monkeypatch):
+    fake = subprocess.CompletedProcess(
+        args=[], returncode=0,
+        stdout="List of devices attached\n"
+               "emulator-5554\tdevice\n"
+               "172.20.10.6:5555\tdevice\n"
+               "0A123ABC\tdevice\n",
+        stderr="",
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake)
+    r = client.get("/api/device/list")
+    assert r.status_code == 200
+    assert r.json() == {
+        "available": True,
+        "devices": [
+            {"serial": "emulator-5554", "state": "device", "kind": "emulator"},
+            {"serial": "172.20.10.6:5555", "state": "device", "kind": "network"},
+            {"serial": "0A123ABC", "state": "device", "kind": "usb"},
+        ],
+    }
+
+
+def test_device_screenshot_returns_png_with_serial(client, monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"\x89PNG-fake", stderr=b"")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = client.get("/api/device/screenshot?serial=emulator-5554")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content == b"\x89PNG-fake"
+    assert captured["cmd"] == ["/usr/bin/adb", "-s", "emulator-5554", "exec-out", "screencap", "-p"]
+
+
+def test_device_screenshot_failure_is_502(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        args=[], returncode=1, stdout=b"", stderr=b"error: no devices/emulators found"))
+    r = client.get("/api/device/screenshot?serial=emulator-9999")
+    assert r.status_code == 502
+    assert "no devices" in r.json()["detail"]
+
+
+def test_device_screenshot_without_adb_is_503(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = client.get("/api/device/screenshot")
+    assert r.status_code == 503
 
 
 def test_adb_kill_server_calls_adb_transport_and_returns_its_result(client, monkeypatch):
