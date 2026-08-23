@@ -47,8 +47,17 @@
   #code-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:0}
   #code-tabs .ftab{background:var(--panel2);border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;padding:3px 8px;font-size:11px;cursor:pointer;color:var(--dim)}
   #code-tabs .ftab.active{color:var(--text);border-color:var(--accent);background:var(--panel)}
+  #code-tabs .ftab.chat-tab{font-weight:600}
   #code-tabs .ftab .x{margin-left:6px;color:var(--dim)}
   #code-tabs .ftab .x:hover{color:var(--critical)}
+  /* Coloreado de sintaxis del visor (paleta tipo One Dark sobre #05070a) */
+  #code-view .hl-k{color:#c678dd}          /* keyword */
+  #code-view .hl-s{color:#98c379}          /* string */
+  #code-view .hl-c{color:#7f848e;font-style:italic}  /* comentario */
+  #code-view .hl-n{color:#d19a66}          /* número */
+  #code-view .hl-a{color:#e5c07b}          /* anotación / directiva */
+  #code-view .hl-t{color:#e06c75}          /* tag xml */
+  #code-view .hl-at{color:#d19a66}         /* atributo xml / key json */
   @media (max-width:1100px){
     .interaction-grid{grid-template-columns:1fr}
     .interaction-side{position:static}
@@ -188,19 +197,22 @@
           El package lo fija el job que elijas en la cola de arriba (click en su #).
         </p>
 
-        <div id="code-panel" style="display:none">
-          <div id="code-tabs"></div>
-          <div id="code-path"></div>
-          <pre id="code-view"></pre>
+        <div id="code-tabs" style="display:none"></div>
+
+        <div id="chat-panel">
+          <div class="row">
+            <input id="query-serial" placeholder="serial (vacío = default de config/USB)" style="width:220px" onkeydown="if(event.key==='Enter'&&chatPackage)connectQuery(chatPackage)" title="Serial adb directo (emulator-5554, ip:5555…). Se precarga solo al conectar el device en el panel de la derecha. Si hay una sesión de relay activa y escribís su session id, se detecta solo.">
+          </div>
+          <div id="querylog"></div>
+          <div class="row">
+            <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
+            <button onclick="sendQuery()">Enviar</button>
+          </div>
         </div>
 
-        <div class="row">
-          <input id="query-serial" placeholder="serial (vacío = default de config/USB)" style="width:220px" onkeydown="if(event.key==='Enter'&&chatPackage)connectQuery(chatPackage)" title="Serial adb directo (emulator-5554, ip:5555…). Se precarga solo al conectar el device en el panel de la derecha. Si hay una sesión de relay activa y escribís su session id, se detecta solo.">
-        </div>
-        <div id="querylog"></div>
-        <div class="row">
-          <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
-          <button onclick="sendQuery()">Enviar</button>
+        <div id="code-panel" style="display:none">
+          <div id="code-path"></div>
+          <pre id="code-view"></pre>
         </div>
 
         <h2 style="margin-top:18px" id="logs-title">Logs en vivo</h2>
@@ -568,10 +580,12 @@ function _renderFile(container, root, path, name){
 }
 
 // Click en un archivo del explorador: lo abre (o activa si ya estaba) en una
-// pestaña del panel de código que está sobre el chat, estilo IDE. El contenido
-// se cachea en memoria -- el decompilado en disco no cambia durante la sesión.
+// pestaña estilo IDE. La pestaña "Chat" es fija (sin ✕) y siempre está primera
+// -- permite volver a la conversación sin cerrar los archivos abiertos.
+// El contenido se cachea en memoria: el decompilado en disco no cambia
+// durante la sesión.
 const openTabs = new Map();  // `${root}:${path}` -> {root, path, name, content, truncated}
-let activeTab = null;
+let activeTab = 'chat';      // 'chat' | key de openTabs
 
 async function openDecompiledFile(root, path){
   const key = `${root}:${path}`;
@@ -600,14 +614,14 @@ function activateTab(key){
 function closeTab(key, ev){
   ev.stopPropagation();
   openTabs.delete(key);
-  if (activeTab === key) activeTab = openTabs.size ? [...openTabs.keys()].pop() : null;
+  if (activeTab === key) activeTab = openTabs.size ? [...openTabs.keys()].pop() : 'chat';
   _renderTabs();
   _renderActiveTab();
 }
 
 function closeAllTabs(){
   openTabs.clear();
-  activeTab = null;
+  activeTab = 'chat';
   _renderTabs();
   _renderActiveTab();
 }
@@ -615,6 +629,13 @@ function closeAllTabs(){
 function _renderTabs(){
   const bar = document.getElementById('code-tabs');
   bar.innerHTML = '';
+  if (!openTabs.size) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  const chatEl = document.createElement('span');
+  chatEl.className = 'ftab chat-tab' + (activeTab === 'chat' ? ' active' : '');
+  chatEl.textContent = '💬 Chat';
+  chatEl.onclick = () => activateTab('chat');
+  bar.appendChild(chatEl);
   for (const [key, tab] of openTabs) {
     const el = document.createElement('span');
     el.className = 'ftab' + (key === activeTab ? ' active' : '');
@@ -634,13 +655,63 @@ function _renderTabs(){
 }
 
 function _renderActiveTab(){
+  const onChat = !openTabs.size || activeTab === 'chat';
+  document.getElementById('chat-panel').style.display = onChat ? '' : 'none';
   const panel = document.getElementById('code-panel');
-  if (!activeTab || !openTabs.has(activeTab)) { panel.style.display = 'none'; return; }
+  if (onChat || !openTabs.has(activeTab)) { panel.style.display = 'none'; return; }
   panel.style.display = '';
   const tab = openTabs.get(activeTab);
   document.getElementById('code-path').textContent =
     `${tab.root === 'runtime' ? 'runtime dump' : 'jadx'}: ${tab.path}` + (tab.truncated ? '  [truncado a 512 KB]' : '');
-  document.getElementById('code-view').textContent = tab.content === null ? 'cargando…' : tab.content;
+  const view = document.getElementById('code-view');
+  if (tab.content === null) {
+    view.textContent = 'cargando…';
+  } else {
+    view.innerHTML = highlightCode(tab.content, tab.path);
+  }
+}
+
+// ── Coloreado de sintaxis (local, sin CDN) ────────────────────────────────
+// Tokenizer de una pasada: cada match cae en un grupo (comentario, string,
+// keyword, número, anotación) y el texto plano intermedio se escapa tal cual.
+// Cubre java/kt/smali, xml y json -- lo que produce jadx/FART; el resto se
+// muestra plano.
+function _esc(s){
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function _tokenize(src, re, classes){
+  let out = '', last = 0;
+  for (const m of src.matchAll(re)) {
+    out += _esc(src.slice(last, m.index));
+    const cls = classes[m.slice(1).findIndex(g => g !== undefined)];
+    out += `<span class="${cls}">${_esc(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + _esc(src.slice(last));
+}
+
+const _RE_CODELIKE = /(\/\/[^\n]*|\/\*[\s\S]*?\*\*)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|(@[\w.]+|\.(?:class|super|method|end|field|annotation|implements|locals|registers|param|line|prologue|instance|directive)\b)|\b(package|import|public|private|protected|class|interface|enum|extends|implements|static|final|void|int|long|boolean|char|byte|short|float|double|new|return|if|else|for|while|do|switch|case|default|break|continue|try|catch|finally|throw|throws|this|super|null|true|false|instanceof|synchronized|volatile|transient|native|abstract|var|const|val|fun|when|object|companion|override|init|lateinit|sealed|data|inline|suspend|move|invoke|goto|iget|iput|sget|sput|aget|aput|new-instance|check-cast|instance-of|throw|monitor|nop)\b|(\b\d[\d_]*(?:\.\d+)?(?:[fLdD]|L)?\b|0x[0-9a-fA-F]+)/g;
+const _CLASSES_CODELIKE = ['hl-c', 'hl-s', 'hl-a', 'hl-k', 'hl-n'];
+
+const _RE_XML = /(<!--[\s\S]*?-->)|(<\/?[\w:.-]+|\/?>)|([\w:.-]+)(?=\s*=\s*")|("[^"\n]*")/g;
+const _CLASSES_XML = ['hl-c', 'hl-t', 'hl-at', 'hl-s'];
+
+const _RE_JSON = /("(?:[^"\\\n]|\\.)*"(?=\s*:))|("(?:[^"\\\n]|\\.)*")|(\b(?:true|false|null)\b)|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g;
+const _CLASSES_JSON = ['hl-at', 'hl-s', 'hl-k', 'hl-n'];
+
+function highlightCode(src, path){
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  const codelike = ['java', 'kt', 'smali'].includes(ext);
+  const xmllike = ['xml', 'html', 'iml'].includes(ext);
+  if (!codelike && !xmllike && ext !== 'json') return _esc(src);
+  try {
+    if (xmllike) return _tokenize(src, _RE_XML, _CLASSES_XML);
+    if (ext === 'json') return _tokenize(src, _RE_JSON, _CLASSES_JSON);
+    return _tokenize(src, _RE_CODELIKE, _CLASSES_CODELIKE);
+  } catch (e) {
+    return _esc(src);  // un archivo raro no debe romper el visor
+  }
 }
 
 async function searchExplorer(){
