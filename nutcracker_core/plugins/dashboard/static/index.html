@@ -634,6 +634,11 @@ async function connectEmulator(){
       return;
     }
     emuSerial = serial;
+    // El chat del co-piloto actúa sobre el mismo device que se está viendo
+    // -- precargar el serial detectado/configurado para no pedirlo dos veces
+    // (solo si el campo está vacío: no pisar lo que el operador escribió).
+    const qInput = document.getElementById('query-serial');
+    if (qInput && !qInput.value) qInput.value = serial;
     _showEmulatorImg(true);
     setDeviceToggle(true);
     status.textContent = `Viendo pantalla de ${serial} (screencap ~1 fps).`;
