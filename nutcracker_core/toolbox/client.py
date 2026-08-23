@@ -128,7 +128,7 @@ def run(
     usuario normal.
 
     FIX (verificado en vivo, 2026-08-03): sin límite propio, un `jadx --deobf`
-    desbocado contra un APK grande/ofuscado (visto con com.example.app) podía
+    desbocado contra un APK grande/ofuscado podía
     agotar TODA la memoria compartida de la VM de WSL2 -- Docker Desktop en
     modo "WSL2 based engine" comparte el mismo pool que la distro principal
     (confirmado: `docker info` "Total Memory" sigue en lockstep los cambios de

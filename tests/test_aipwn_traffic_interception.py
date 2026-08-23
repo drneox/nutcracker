@@ -2,8 +2,8 @@
 nutcracker_core/plugins/aipwn/frida_agent_tools.py: ``capture_traffic``
 (captura pasiva Java+nativa, cubre Flutter/React Native) e
 ``intercept_and_modify`` (MITM activo). Pedido del usuario, 2026-08-21: el
-co-piloto no podía ver tráfico de una app Flutter real (com.example.
-example_organizer) porque `sniff_network_calls` solo hookea el stack Java.
+co-piloto no podía ver tráfico de una app Flutter real porque
+`sniff_network_calls` solo hookea el stack Java.
 
 Ambas comparten el mismo helper de resolución de símbolos que ya se
 estandarizó por el bug de Frida 17 (Module.findExportByName/getExportByName

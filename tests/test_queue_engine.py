@@ -689,7 +689,7 @@ def test_job_with_package_id_reuses_local_apk(monkeypatch, tmp_path, engine):
     (no una ruta .apk) debe resolver downloads/<package>/<package>.apk y
     construir `analyze <path>` (local) en vez de `scan <package>` (que
     fuerza descarga y falla si no hay credenciales)."""
-    pkg = "com.example.app"
+    pkg = "com.example.queued"
     dl_dir = tmp_path / "downloads" / pkg
     dl_dir.mkdir(parents=True)
     apk = dl_dir / f"{pkg}.apk"

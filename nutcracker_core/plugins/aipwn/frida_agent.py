@@ -151,7 +151,7 @@ function names you plan to hook. If any address is null or throws "TypeError: no
     \n      - App shows a functional screen: login form, home screen, dashboard, menu, or \
     any interactive UI with buttons/fields, text labels, navigation elements.\
     \n      - **App's branded color scheme is visible AND a content panel/card/form area is \
-    present** — e.g. teal/green background (Acme) + white login panel, blue background + card, \
+    present** — e.g. teal/green background + white login panel, blue background + card, \
     brand logo + input fields. If you can see the brand's signature color AND a non-empty content \
     area, that IS a successful bypass even if individual labels are not fully legible.\
     \n      - You can describe at least one specific UI element (button label, text, icon, \
