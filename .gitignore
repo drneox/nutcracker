@@ -47,13 +47,14 @@ AGENTS.md
 GEMINI.md
 
 # Plugin outputs / memory -- todos los plugins quedan fuera del repo principal
-# EXCEPTO dashboard/, que pasó a ser parte del proyecto principal (ya no es un
-# repo git separado). El patrón debe ser "*" (no "plugins/" a secas): git no
-# puede des-ignorar algo dentro de un directorio que ya está ignorado como
-# unidad completa, solo dentro de uno cuyo contenido se ignora entrada por
-# entrada.
+# EXCEPTO dashboard/ y aipwn/, que pasaron a ser parte del proyecto principal
+# (ya no son repos git separados). El patrón debe ser "*" (no "plugins/" a
+# secas): git no puede des-ignorar algo dentro de un directorio que ya está
+# ignorado como unidad completa, solo dentro de uno cuyo contenido se ignora
+# entrada por entrada.
 nutcracker_core/plugins/*
 !nutcracker_core/plugins/dashboard/
+!nutcracker_core/plugins/aipwn/
 aipwn_memory/
 
 # Backup files
