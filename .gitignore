@@ -58,3 +58,9 @@ aipwn_memory/
 
 # Backup files
 *.bk
+
+# Artefactos de build del dashboard (se regeneran con pnpm build en webusb/)
+# El HTML los carga de forma perezosa -- sin build, esa funcionalidad queda
+# deshabilitada con un warning, no rompe el dashboard.
+nutcracker_core/plugins/dashboard/static/webusb-video.bundle.js
+nutcracker_core/plugins/dashboard/static/assets/worker-*.js
