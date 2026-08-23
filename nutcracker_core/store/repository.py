@@ -49,7 +49,8 @@ def get_app(conn: sqlite3.Connection, package: str) -> sqlite3.Row | None:
 
 
 def apps_due(conn: sqlite3.Connection, before: str | None = None) -> list[sqlite3.Row]:
-    """Apps cuyo next_due_at <= before (por defecto: ahora), incluyendo las sin next_due_at."""
+    """Apps cuyo next_due_at <= before (por defecto: ahora). Las apps sin
+    next_due_at (sin schedule configurado) NO se devuelven."""
     before = before or _utcnow()
     return conn.execute(
         "SELECT * FROM apps WHERE next_due_at IS NOT NULL AND next_due_at <= ? ORDER BY next_due_at",
@@ -125,21 +126,19 @@ class FindingRecord:
     cwe: list[str] = field(default_factory=list)
     file: str = ""
     line: int = 0
-    confirmed: bool | None = None
 
 
 def record_findings(conn: sqlite3.Connection, run_id: int, findings: list[FindingRecord]) -> None:
     conn.executemany(
         """
-        INSERT INTO findings (run_id, rule_id, title, severity, category, masvs, maswe, cwe, file, line, confirmed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO findings (run_id, rule_id, title, severity, category, masvs, maswe, cwe, file, line)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 run_id, f.rule_id, f.title, f.severity, f.category,
                 ",".join(f.masvs), ",".join(f.maswe), ",".join(f.cwe),
                 f.file, f.line,
-                None if f.confirmed is None else int(f.confirmed),
             )
             for f in findings
         ],

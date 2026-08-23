@@ -9,9 +9,9 @@
  * ws.py::ws_relay -- ESTE archivo es la contraparte de ese diseño, léanse
  * juntos):
  *   - Conexión: WebSocket a /ws/relay/{session_id}. El backend manda primero
- *     {"type":"ready","ports":{"frida":N,"adb":N}} (informativo).
+ *     {"type":"ready","ports":{"frida":N}} (informativo).
  *   - Control (frames de TEXTO, JSON): el backend anuncia una conexión TCP
- *     local nueva con {"type":"open","tunnel":"frida"|"adb","conn_id":N} --
+ *     local nueva con {"type":"open","tunnel":"frida","conn_id":N} --
  *     acá se abre `adb.createSocket("tcp:PORT")` hacia el device y se la
  *     asocia a ese conn_id. {"type":"close","conn_id":N} pide cerrarla.
  *   - Datos (frames BINARIOS): 4 bytes big-endian = conn_id, seguido del

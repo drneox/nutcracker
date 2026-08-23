@@ -492,7 +492,7 @@ function goToJobLog(jobId){
 // Único modo de video: WebUSB + WebCodecs ("USB directo (fluido)"), 100%
 // opt-in vía su propio botón -- no hay fallback de screenshots/scrcpy, a
 // pedido explícito del usuario. Import perezoso: si el bundle no existe
-// porque nadie corrió `npm run build` en webusb/, o el navegador no soporta
+// porque nadie corrió `pnpm run build` en webusb/, o el navegador no soporta
 // WebUSB, el botón simplemente no aparece.
 // Reconexión tras F5: se guarda en sessionStorage (NO localStorage) el serial
 // del device que el usuario conectó a mano. sessionStorage tiene justo la vida
@@ -515,7 +515,7 @@ function setWebUsbConnectedUi(connected){
   document.getElementById('webusb-stop-btn').style.display = connected ? '' : 'none';
 }
 
-// Import perezoso: si el bundle no existe porque nadie corrió `npm run build`
+// Import perezoso: si el bundle no existe porque nadie corrió `pnpm run build`
 // en webusb/, o el navegador no soporta WebUSB, el botón simplemente no aparece.
 (async () => {
   const status = document.getElementById('device-status');

@@ -7,10 +7,3 @@ Pool paralelo para jobs estáticos + lock por dispositivo para jobs dinámicos
 job corre en un subproceso aislado del CLI existente (`nutcracker analyze`/
 `scan`), así que reutiliza el pipeline de análisis tal cual sin duplicarlo.
 """
-
-from __future__ import annotations
-
-from .job import Job
-from .engine import QueueEngine, JobOutcome
-
-__all__ = ["Job", "QueueEngine", "JobOutcome"]
