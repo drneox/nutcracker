@@ -1012,3 +1012,51 @@ def test_recover_interrupted_jobs_noop_when_nothing_running(tmp_path):
     engine = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
     engine.submit("com.example.app", kind="static")
     assert engine.recover_interrupted_jobs() == 0
+
+
+def test_log_dir_persists_streamed_lines_to_disk(monkeypatch, tmp_path, engine):
+    """engine.log_dir (dashboard): cada línea streameada debe quedar también
+    en <log_dir>/job-<id>.log -- es la única copia que sobrevive a un reinicio
+    del proceso y la que /ws/jobs/{id} usa de replay cuando el EventBus en
+    memoria ya no tiene el historial."""
+
+    class _FakePopen:
+        def __init__(self, cmd, env=None, stdout=None, stderr=None, text=None, bufsize=None):
+            self.stdout = iter(["línea uno\n", "línea dos\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.Popen", _FakePopen)
+
+    engine.on_line = lambda job_id, line: None
+    engine.log_dir = str(tmp_path / "job_logs")
+
+    job = engine.submit(str(_touch_apk(tmp_path, "persist.apk")), kind="static")
+    outcomes = engine.drain()
+
+    assert outcomes[0].ok is True
+    log_path = tmp_path / "job_logs" / f"job-{job.db_id}.log"
+    assert log_path.read_text(encoding="utf-8") == "línea uno\nlínea dos\n"
+
+
+def test_without_log_dir_does_not_write_files(monkeypatch, tmp_path, engine):
+    """Default (log_dir=None): el comportamiento no cambia -- no se crea
+    ningún archivo (CLI, tests de Fase 1)."""
+
+    class _FakePopen:
+        def __init__(self, cmd, env=None, stdout=None, stderr=None, text=None, bufsize=None):
+            self.stdout = iter(["línea\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.Popen", _FakePopen)
+    engine.on_line = lambda job_id, line: None
+
+    engine.submit(str(_touch_apk(tmp_path, "nopersist.apk")), kind="static")
+    engine.drain()
+
+    assert list(tmp_path.glob("job-*")) == []

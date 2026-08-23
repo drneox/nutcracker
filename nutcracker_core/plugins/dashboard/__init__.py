@@ -171,6 +171,11 @@ def register(cli) -> None:
         # subprocess.run clásico de Fase 1, en vez de pasar siempre por
         # _run_streaming/subprocess.Popen.
         engine.on_line = lambda job_id, line: bus.publish(str(job_id), "log", line)
+        # Persistencia de logs por job (logs/jobs/job-<id>.log): sin esto el
+        # historial vive solo en el EventBus en memoria y se pierde con el
+        # proceso -- un click en un job corrido antes de un reinicio mostraba
+        # el panel de logs vacío (ver ws.py::ws_job, que lo usa de replay).
+        engine.log_dir = "logs/jobs"
         # Wiring del chat (Fase 3, follow-up del plan): el subproceso de un job
         # "aipwn" lee esta env var para saber a dónde hacer polling del mailbox
         # de chat (ver plugins/aipwn/frida_agent.py::_check_operator_chat).
@@ -210,6 +215,7 @@ def register(cli) -> None:
         app = create_app(
             db_path=db_path, engine=engine, default_serial=default_serial,
             auth=auth, llm_config=llm_config, runtime_target=runtime_target,
+            job_log_dir=engine.log_dir,
         )
 
         console.print(

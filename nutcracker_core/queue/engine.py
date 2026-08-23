@@ -189,6 +189,13 @@ class QueueEngine:
         # (default) mantiene solo el chequeo por-job, que ya es suficiente para
         # invocaciones puntuales del CLI.
         self.transport_keepalive: adb_transport.TransportKeepAlive | None = None
+        # Directorio donde persistir el log de cada job (<log_dir>/job-<id>.log,
+        # una línea por línea publicada a on_line). Sin esto los logs viven solo
+        # en el EventBus en memoria: si el proceso muere a mitad de corrida (o
+        # se reinicia el dashboard), el historial del job se pierde para
+        # siempre y el panel "Logs en vivo" queda vacío al hacer click.
+        # None (default) = no persistir (CLI, tests de Fase 1).
+        self.log_dir: str | None = None
 
     # ── Encolado ─────────────────────────────────────────────────────────────
 
@@ -448,17 +455,36 @@ class QueueEngine:
     def _run_streaming(self, job_id: int, cmd: list[str], env: dict) -> subprocess.CompletedProcess:
         """Como subprocess.run(), pero publica cada línea de salida a
         self.on_line(job_id, line) en cuanto se produce (stdout+stderr
-        combinados, orden real de aparición) en vez de solo al terminar."""
+        combinados, orden real de aparición) en vez de solo al terminar.
+        Si self.log_dir está seteado, además persiste cada línea (ya sin
+        ANSI) en <log_dir>/job-<id>.log -- es la única copia que sobrevive
+        a un reinicio del proceso (ver ws.py::ws_job, que la usa de replay
+        cuando el EventBus en memoria ya no tiene el historial)."""
         proc = subprocess.Popen(
             cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
+        log_file = None
+        if self.log_dir:
+            os.makedirs(self.log_dir, exist_ok=True)
+            log_file = open(  # noqa: SIM115 -- se cierra en el finally de abajo
+                os.path.join(self.log_dir, f"job-{job_id}.log"),
+                "a", encoding="utf-8", errors="replace",
+            )
         lines: list[str] = []
         assert proc.stdout is not None
-        for raw_line in proc.stdout:
-            lines.append(raw_line)
-            self.on_line(job_id, _strip_ansi(raw_line.rstrip("\n")))  # type: ignore[misc]
-        proc.wait()
+        try:
+            for raw_line in proc.stdout:
+                lines.append(raw_line)
+                line = _strip_ansi(raw_line.rstrip("\n"))
+                if log_file is not None:
+                    log_file.write(line + "\n")
+                    log_file.flush()
+                self.on_line(job_id, line)  # type: ignore[misc]
+            proc.wait()
+        finally:
+            if log_file is not None:
+                log_file.close()
         return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(lines), stderr="")
 
     def _run_dynamic(self, job: Job) -> JobOutcome:

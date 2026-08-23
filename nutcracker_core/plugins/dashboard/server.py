@@ -37,6 +37,7 @@ def create_app(
     llm_config: dict | None = None,
     runtime_target: str | None = None,
     decompiled_dir: Path | None = None,
+    job_log_dir: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="nutcracker dashboard")
 
@@ -46,6 +47,10 @@ def create_app(
     # Config del co-piloto de consulta (/ws/query, ver plugins/aipwn/query_agent.py)
     # -- ``llm_config`` es el mismo bloque `llm:` de config.yaml que ya usa aipwn.
     ws.set_query_config(llm_config, db_path)
+    # Replay de logs persistidos para /ws/jobs/{id} cuando el EventBus ya no
+    # tiene el historial (reinicio a mitad de corrida) -- mismo directorio
+    # donde el engine escribe (engine.log_dir).
+    ws.set_job_log_dir(job_log_dir)
 
     app.include_router(create_router(
         db_path=db_path, engine=engine, default_serial=default_serial, llm_config=llm_config,
