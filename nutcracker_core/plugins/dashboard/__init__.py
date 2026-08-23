@@ -153,6 +153,16 @@ def register(cli) -> None:
             static_workers=int(cfg_get(config, "queue", "static_workers", default=4)),
             dynamic_workers=int(cfg_get(config, "queue", "dynamic_workers", default=2)),
         )
+        # Los jobs que quedaron 'running' de un dashboard anterior (murió a
+        # mitad de corrida) son zombis: su subproceso y sus logs ya no existen
+        # y nadie los va a retomar. Marcarlos como error con la causa, para
+        # que no se muestren eternamente "en ejecución" en la cola.
+        recovered = engine.recover_interrupted_jobs()
+        if recovered:
+            console.print(
+                f"[yellow]![/yellow] cola: {recovered} job(s) que quedaron 'running' "
+                "de un proceso anterior marcados como error (interrumpidos por el reinicio)"
+            )
         # Streaming de logs en vivo (Fase 3): cada línea de stdout de un job
         # corrido por ESTA instancia de engine se publica al EventBus, que
         # /ws/jobs/{id} consume. Se asigna aquí (no en api.py/create_router) a

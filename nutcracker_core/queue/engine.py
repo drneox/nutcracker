@@ -271,6 +271,25 @@ class QueueEngine:
                 frida_host=row["frida_host"],
             ))
 
+    def recover_interrupted_jobs(self) -> int:
+        """Marca como 'error' los jobs que quedaron en 'running' de un proceso
+        anterior que murió a mitad de corrida (reinicio del dashboard/daemon).
+        A diferencia de los 'queued' (que _load_queued_from_db retoma), un
+        'running' huérfano ya no tiene subproceso ni logs -- su salida vivía
+        en el pipe del proceso muerto -- así que re-encolarlo en silencio
+        gastaría una corrida (y LLM) que nadie pidió; mejor dejar constancia
+        del corte y que el operador decida re-encolar. Llamar UNA vez al
+        arranque, antes de empezar a drenar. Retorna cuántos jobs se
+        marcaron. Asume un solo proceso drenando esta DB (misma suposición
+        que _load_queued_from_db)."""
+        conn = db.connect(self.db_path)
+        try:
+            return repository.fail_running_jobs(
+                conn, "interrumpido: el servidor se reinició mientras el job corría"
+            )
+        finally:
+            conn.close()
+
     def enqueue_due_apps(self) -> int:
         """Encola como jobs estáticos las apps cuyo next_due_at ya venció (lo
         llama el scheduler en cada tick). Retorna cuántas se encolaron."""

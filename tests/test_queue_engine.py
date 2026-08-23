@@ -968,3 +968,47 @@ def test_non_relay_job_still_has_none_relay_fields_after_restart(tmp_path):
     reloaded = e2._pending[0]
     assert reloaded.relay_session_id is None
     assert reloaded.frida_host is None
+
+
+def test_recover_interrupted_jobs_marks_orphaned_running_as_error(tmp_path):
+    """Escenario real reportado en vivo (2026-08-23): el dashboard muere (o se
+    reinicia) con jobs en 'running'; esos jobs son zombis -- su subproceso y
+    sus logs se fueron con el proceso muerto -- pero la cola los mostraba
+    eternamente como "en ejecución". Al arrancar, el engine nuevo los marca
+    como 'error' con la causa, y NO toca los 'queued' (esos sí se retoman
+    vía _load_queued_from_db)."""
+    db_path = str(tmp_path / "queue_test.db")
+
+    engine_before_restart = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    zombie = engine_before_restart.submit("com.example.zombie", kind="static")
+    still_queued = engine_before_restart.submit("com.example.queued", kind="static")
+    conn = db.connect(db_path)
+    try:
+        repository.update_job_status(conn, zombie.db_id, "running")
+    finally:
+        conn.close()
+
+    # "Reinicio": engine nuevo sobre la misma DB.
+    engine_after_restart = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    assert engine_after_restart.recover_interrupted_jobs() == 1
+
+    conn = db.connect(db_path)
+    try:
+        zombie_row = repository.get_job(conn, zombie.db_id)
+        queued_row = repository.get_job(conn, still_queued.db_id)
+    finally:
+        conn.close()
+
+    assert zombie_row["status"] == "error"
+    assert "interrumpido" in zombie_row["error"]
+    assert zombie_row["finished_at"] is not None
+    assert queued_row["status"] == "queued", (
+        "los jobs 'queued' no son zombis: se retoman, no se marcan como error"
+    )
+
+
+def test_recover_interrupted_jobs_noop_when_nothing_running(tmp_path):
+    db_path = str(tmp_path / "queue_test.db")
+    engine = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    engine.submit("com.example.app", kind="static")
+    assert engine.recover_interrupted_jobs() == 0
