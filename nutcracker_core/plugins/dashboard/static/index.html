@@ -23,7 +23,7 @@
   header h1 span{color:var(--accent)}
   .stats{display:flex;flex-wrap:wrap;gap:16px;margin-left:auto;font-size:12px;color:var(--dim)}
   .stats b{color:var(--text);font-size:14px}
-  main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px}
+  main{max-width:1500px;margin:0 auto;padding:16px;display:grid;gap:16px}
   .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
   .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);margin:0 0 12px}
   .table-scroll{overflow-x:auto}
@@ -31,9 +31,9 @@
   th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
   th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
   /* Sección de interacción tipo IDE (referencia: djini.ai): explorador del
-     decompilado a la izquierda, workbench central con tabs Chat/Código/Logs,
-     y la pantalla del dispositivo fija a la derecha. Se apila en pantallas
-     angostas. */
+     decompilado a la izquierda, columna central con chat + visor de código +
+     logs TODO visible a la vez (sin tabs), y la pantalla del dispositivo fija
+     a la derecha. Se apila en pantallas angostas. */
   .interaction-grid{display:grid;grid-template-columns:240px minmax(0,1fr) 360px;gap:18px;align-items:start}
   .interaction-side{position:sticky;top:16px}
   #emulator-img{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;display:block}
@@ -42,13 +42,8 @@
   .explorer-tree .tnode:hover{background:var(--panel)}
   .explorer-tree .tdir{color:var(--accent)}
   .explorer-tree .tchildren{margin-left:14px}
-  .wtabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:12px}
-  .wtab{padding:6px 12px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
-  .wtab.active{color:var(--text);border-color:var(--accent)}
-  .wtabpanel{display:none}
-  .wtabpanel.active{display:block}
   #code-path{font-size:11px;color:var(--dim);margin-bottom:6px;word-break:break-all}
-  #code-view{background:#05070a;color:#c9d1d9;padding:12px;border-radius:8px;max-height:60vh;overflow:auto;white-space:pre;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  #code-view{background:#05070a;color:#c9d1d9;padding:12px;border-radius:8px;max-height:50vh;overflow:auto;white-space:pre;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
   @media (max-width:1100px){
     .interaction-grid{grid-template-columns:1fr}
     .interaction-side{position:static}
@@ -183,45 +178,36 @@
       </div>
 
       <div class="interaction-main">
-        <div class="wtabs">
-          <div class="wtab active" data-wtab="chat">Chat</div>
-          <div class="wtab" data-wtab="code">Código</div>
-          <div class="wtab" data-wtab="logs">Logs en vivo</div>
+        <h2 style="margin-top:0">Agente — pentest asistido</h2>
+        <p style="font-size:12px;color:var(--dim)" id="query-hint">
+          Co-piloto interactivo: preguntá sobre findings/componentes/secretos ya analizados
+          (funciona sin ningún job corriendo), o pedile en lenguaje natural que use Frida/ADB
+          con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
+        </p>
+        <div class="row">
+          <input id="query-package" placeholder="package id" style="width:220px">
+          <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px">
+          <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (panel Dispositivo → Avanzado)">
+            <input type="checkbox" id="query-relay" style="width:auto"> usar relay
+          </label>
+          <button class="secondary" id="query-connect-btn" onclick="connectQuery()">Conectar</button>
+        </div>
+        <div id="querylog"></div>
+        <div class="row">
+          <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
+          <button onclick="sendQuery()">Enviar</button>
         </div>
 
-        <div class="wtabpanel active" id="wtab-chat">
-          <p style="font-size:12px;color:var(--dim)" id="query-hint">
-            Co-piloto interactivo: preguntá sobre findings/componentes/secretos ya analizados
-            (funciona sin ningún job corriendo), o pedile en lenguaje natural que use Frida/ADB
-            con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
-          </p>
-          <div class="row">
-            <input id="query-package" placeholder="package id" style="width:220px">
-            <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px">
-            <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (panel Dispositivo → Avanzado)">
-              <input type="checkbox" id="query-relay" style="width:auto"> usar relay
-            </label>
-            <button class="secondary" id="query-connect-btn" onclick="connectQuery()">Conectar</button>
-          </div>
-          <div id="querylog"></div>
-          <div class="row">
-            <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
-            <button onclick="sendQuery()">Enviar</button>
-          </div>
-        </div>
+        <h2 style="margin-top:18px">Código</h2>
+        <div id="code-path">(elegí un archivo del explorador de la izquierda)</div>
+        <pre id="code-view"></pre>
 
-        <div class="wtabpanel" id="wtab-code">
-          <div id="code-path">(elegí un archivo del explorador de la izquierda)</div>
-          <pre id="code-view"></pre>
+        <h2 style="margin-top:18px" id="logs-title">Logs en vivo</h2>
+        <div class="row">
+          <input id="log-job-id" placeholder="job id" style="width:100px">
+          <button class="secondary" onclick="connectJobLog()">Ver logs</button>
         </div>
-
-        <div class="wtabpanel" id="wtab-logs">
-          <div class="row">
-            <input id="log-job-id" placeholder="job id" style="width:100px">
-            <button class="secondary" onclick="connectJobLog()">Ver logs</button>
-          </div>
-          <pre id="log">(elegí un job id de la cola de arriba)</pre>
-        </div>
+        <pre id="log">(elegí un job id de la cola de arriba)</pre>
 
         <details style="margin-top:18px">
           <summary style="cursor:pointer;color:var(--dim);font-size:13px">Chat con job aipwn en curso / system prompt del agente</summary>
@@ -506,25 +492,14 @@ function connectJobLog(){
   };
 }
 
-// Click en el "#id" de un job (tabla de la cola) -- abre el tab "Logs en
-// vivo" del workbench con ese job ya cargado.
+// Click en el "#id" de un job (tabla de la cola) -- baja directo al bloque
+// "Logs en vivo" (abajo del chat/código, todo visible sin tabs) con ese job
+// ya cargado.
 function goToJobLog(jobId){
   document.getElementById('log-job-id').value = jobId;
-  activateWTab('logs');
-  document.getElementById('wtab-logs').scrollIntoView({behavior: 'smooth'});
+  document.getElementById('logs-title').scrollIntoView({behavior: 'smooth'});
   connectJobLog();
 }
-
-// ── Tabs del workbench (Chat / Código / Logs) ─────────────────────────────
-function activateWTab(name){
-  document.querySelectorAll('.wtab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.wtabpanel').forEach(p => p.classList.remove('active'));
-  document.querySelector(`.wtab[data-wtab="${name}"]`).classList.add('active');
-  document.getElementById('wtab-' + name).classList.add('active');
-}
-document.querySelectorAll('.wtab').forEach(tab => {
-  tab.addEventListener('click', () => activateWTab(tab.dataset.wtab));
-});
 
 // ── Explorador del decompilado (árbol lazy vía /api/decompiled/*) ─────────
 // Raíces: "static" = decompiled/<package> (jadx), "runtime" =
@@ -589,10 +564,10 @@ function _renderFile(container, root, path, name){
 }
 
 async function openDecompiledFile(root, path){
-  activateWTab('code');
   const pathEl = document.getElementById('code-path');
   const view = document.getElementById('code-view');
   pathEl.textContent = `${root === 'runtime' ? 'runtime dump' : 'jadx'}: ${path}`;
+  pathEl.scrollIntoView({behavior: 'smooth', block: 'nearest'});
   view.textContent = 'cargando…';
   try {
     const data = await j(`/api/decompiled/${encodeURIComponent(explorerPackage)}/file?root=${root}&path=${encodeURIComponent(path)}`);
