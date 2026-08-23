@@ -80,9 +80,6 @@
   .kpi b{display:block;font-size:18px}
   .kpi span{color:var(--dim);font-size:11px;text-transform:uppercase}
   .close-x{float:right;cursor:pointer;color:var(--dim);font-size:20px;line-height:1}
-  #chatlog{height:180px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
-  #chatlog .msg{margin-bottom:6px}
-  #chatlog .op{color:var(--accent)}
   #querylog{height:360px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
   #querylog .qmsg{margin-bottom:8px;white-space:pre-wrap}
   #querylog .qtool{color:var(--dim);font-style:italic}
@@ -212,22 +209,6 @@
           <button class="secondary" onclick="connectJobLog()">Ver logs</button>
         </div>
         <pre id="log">(elegí un job id de la cola de arriba)</pre>
-
-        <details style="margin-top:18px">
-          <summary style="cursor:pointer;color:var(--dim);font-size:13px">Chat con job aipwn en curso / system prompt del agente</summary>
-          <h3>System prompt del agente aipwn</h3>
-          <pre id="agent-prompt" style="max-height:200px;overflow:auto;background:var(--panel2);padding:10px;border-radius:8px;font-size:11px">cargando…</pre>
-          <h3>Chat</h3>
-          <div class="row">
-            <input id="chat-package" placeholder="package id" style="width:220px">
-            <button class="secondary" onclick="connectChat()">Conectar</button>
-          </div>
-          <div id="chatlog"></div>
-          <div class="row">
-            <input id="chat-text" placeholder="mensaje para el agente…" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
-            <button onclick="sendChat()">Enviar</button>
-          </div>
-        </details>
       </div>
 
       <div class="interaction-side">
@@ -950,36 +931,6 @@ async function disconnectRelay(){
   }
 }
 
-// ── Agente / Chat ────────────────────────────────────────────────────────
-async function loadAgentPrompt(){
-  const data = await j('/api/agent/prompt');
-  document.getElementById('agent-prompt').textContent =
-    data.available ? data.prompt : '(plugin aipwn no instalado/disponible en este entorno)';
-}
-
-let chatSocket = null;
-function connectChat(){
-  const pkg = document.getElementById('chat-package').value.trim();
-  if (!pkg) return;
-  if (chatSocket) chatSocket.close();
-  document.getElementById('chatlog').innerHTML = '';
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  chatSocket = new WebSocket(`${proto}://${location.host}/ws/chat/${encodeURIComponent(pkg)}`);
-  chatSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
-  chatSocket.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    const log = document.getElementById('chatlog');
-    log.innerHTML += `<div class="msg"><span class="op">[${msg.data.from}]</span> ${msg.data.text}</div>`;
-    log.scrollTop = log.scrollHeight;
-  };
-}
-function sendChat(){
-  const input = document.getElementById('chat-text');
-  if (!chatSocket || !input.value.trim()) return;
-  chatSocket.send(input.value.trim());
-  input.value = '';
-}
-
 // ── Pentest asistido (co-piloto de consulta) ────────────────────────────
 async function checkQueryAvailable(){
   try {
@@ -1233,7 +1184,6 @@ async function reQueue(){
 refreshAll();
 setInterval(refreshAll, 5000);
 checkQueryAvailable();
-loadAgentPrompt();
 </script>
 </body>
 </html>
