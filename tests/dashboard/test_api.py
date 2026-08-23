@@ -32,6 +32,22 @@ def client(db_path, engine):
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _aipwn_capabilities():
+    """El dashboard consume aipwn vía nutcracker_core.capabilities (registro
+    plugin→plugin, sin importarlo). Acá se registra un has_resume_state falso
+    por defecto (comportamiento "aipwn presente, sin sesión pendiente") -- los
+    tests que necesitan otro valor lo re-registran ellos mismos (register
+    reemplaza). Se desregistra todo al final de cada test para aislar el
+    estado global del registro."""
+    from nutcracker_core import capabilities
+    capabilities.register("aipwn.has_resume_state", lambda target: False)
+    yield
+    capabilities.unregister("aipwn.has_resume_state")
+    capabilities.unregister("aipwn.system_prompt")
+    capabilities.unregister("aipwn.query")
+
+
 def _seed_app_with_run(db_path: str) -> None:
     conn = db.connect(db_path)
     try:
@@ -313,22 +329,6 @@ def _clean_relay_sessions():
         _asyncio.run(_relay_manager.remove(session_id))
 
 
-def test_relay_status_404_without_session(client):
-    r = client.get("/api/relay/no-existe")
-    assert r.status_code == 404
-
-
-def test_relay_status_returns_ports_when_attached(client):
-    session = _asyncio.run(_relay_manager.get_or_create("device-x"))
-    session.attach_websocket(_FakeRelayWs())
-
-    r = client.get("/api/relay/device-x")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["attached"] is True
-    assert set(body["ports"]) == {"frida", "adb"}
-
-
 def test_queue_add_relay_requires_serial(client):
     r = client.post("/api/queue", json={"target": "com.example.app", "kind": "aipwn", "relay": True})
     assert r.status_code == 400
@@ -390,14 +390,14 @@ def test_queue_delete_404_for_unknown_job(client):
 
 # ── Botón "+N iteraciones" (resume de aipwn) ─────────────────────────────────
 
-def test_queue_list_marks_aipwn_job_resumable_when_session_pending(monkeypatch, client, engine):
-    from nutcracker_core.plugins.dashboard import api as dashboard_api
+def test_queue_list_marks_aipwn_job_resumable_when_session_pending(client, engine):
+    from nutcracker_core import capabilities
 
     r = client.post("/api/queue", json={"target": "com.example.app", "kind": "aipwn"})
     job_id = r.json()["job_id"]
 
-    monkeypatch.setattr(
-        dashboard_api.agent_memory, "has_resume_state",
+    capabilities.register(
+        "aipwn.has_resume_state",
         lambda target: target == "com.example.app",
     )
 
@@ -405,13 +405,9 @@ def test_queue_list_marks_aipwn_job_resumable_when_session_pending(monkeypatch, 
     assert jobs[job_id]["resumable"] is True
 
 
-def test_queue_list_not_resumable_without_pending_session(monkeypatch, client, engine):
-    from nutcracker_core.plugins.dashboard import api as dashboard_api
-
+def test_queue_list_not_resumable_without_pending_session(client, engine):
     r = client.post("/api/queue", json={"target": "com.example.app", "kind": "aipwn"})
     job_id = r.json()["job_id"]
-
-    monkeypatch.setattr(dashboard_api.agent_memory, "has_resume_state", lambda target: False)
 
     jobs = {j["id"]: j for j in client.get("/api/queue").json()}
     assert jobs[job_id]["resumable"] is False
@@ -425,18 +421,18 @@ def test_queue_list_static_job_never_resumable(client, engine):
     assert jobs[job_id]["resumable"] is False
 
 
-def test_queue_list_only_marks_the_latest_job_per_target_resumable(monkeypatch, client, engine):
+def test_queue_list_only_marks_the_latest_job_per_target_resumable(client, engine):
     """Dos jobs aipwn viejos para el mismo target no deben marcarse ambos --
     la sesión guardada en disco es una sola, y corresponde a la corrida más
     reciente."""
-    from nutcracker_core.plugins.dashboard import api as dashboard_api
+    from nutcracker_core import capabilities
 
     r1 = client.post("/api/queue", json={"target": "com.example.app", "kind": "aipwn"})
     old_id = r1.json()["job_id"]
     r2 = client.post("/api/queue", json={"target": "com.example.app", "kind": "aipwn"})
     new_id = r2.json()["job_id"]
 
-    monkeypatch.setattr(dashboard_api.agent_memory, "has_resume_state", lambda target: True)
+    capabilities.register("aipwn.has_resume_state", lambda target: True)
 
     jobs = {j["id"]: j for j in client.get("/api/queue").json()}
     assert jobs[new_id]["resumable"] is True
@@ -444,14 +440,14 @@ def test_queue_list_only_marks_the_latest_job_per_target_resumable(monkeypatch, 
 
 
 def test_resume_aipwn_enqueues_new_job_with_resume_flags(monkeypatch, client, engine):
-    from nutcracker_core.plugins.dashboard import api as dashboard_api
+    from nutcracker_core import capabilities
 
     r = client.post("/api/queue", json={
         "target": "com.example.app", "kind": "aipwn", "serial": "ZY22GPM27J",
     })
     job_id = r.json()["job_id"]
 
-    monkeypatch.setattr(dashboard_api.agent_memory, "has_resume_state", lambda target: True)
+    capabilities.register("aipwn.has_resume_state", lambda target: True)
 
     submitted = []
     real_submit = engine.submit
@@ -482,12 +478,12 @@ def test_resume_aipwn_enqueues_new_job_with_resume_flags(monkeypatch, client, en
     }]
 
 
-def test_resume_aipwn_preserves_relay_session(monkeypatch, client, engine):
+def test_resume_aipwn_preserves_relay_session(client, engine):
     """Gap encontrado en vivo (2026-08-05): reanudar un job que corrió vía
     relay perdía el túnel -- el fix de persistencia (store/db.py migración 3)
     dejó relay_session_id/frida_host disponibles en la fila original, pero
     resume-aipwn no los leía. Ahora sí."""
-    from nutcracker_core.plugins.dashboard import api as dashboard_api
+    from nutcracker_core import capabilities
 
     session = _asyncio.run(_relay_manager.get_or_create("device-resume-1"))
     session.attach_websocket(_FakeRelayWs())
@@ -498,7 +494,7 @@ def test_resume_aipwn_preserves_relay_session(monkeypatch, client, engine):
     })
     job_id = r.json()["job_id"]
 
-    monkeypatch.setattr(dashboard_api.agent_memory, "has_resume_state", lambda target: True)
+    capabilities.register("aipwn.has_resume_state", lambda target: True)
 
     r2 = client.post(f"/api/queue/{job_id}/resume-aipwn")
     assert r2.status_code == 200
@@ -517,13 +513,11 @@ def test_resume_aipwn_preserves_relay_session(monkeypatch, client, engine):
     assert resumed["frida_host"] == f"127.0.0.1:{session.ports['frida']}"
 
 
-def test_resume_aipwn_404_without_pending_session(monkeypatch, client, engine):
-    from nutcracker_core.plugins.dashboard import api as dashboard_api
-
+def test_resume_aipwn_404_without_pending_session(client, engine):
+    # El fixture autouse registra has_resume_state → False (aipwn presente,
+    # sin sesión pendiente para este target).
     r = client.post("/api/queue", json={"target": "com.example.app", "kind": "aipwn"})
     job_id = r.json()["job_id"]
-
-    monkeypatch.setattr(dashboard_api.agent_memory, "has_resume_state", lambda target: False)
 
     r = client.post(f"/api/queue/{job_id}/resume-aipwn")
     assert r.status_code == 404

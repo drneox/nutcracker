@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from nutcracker_core.plugins.aipwn import register_capabilities
 from nutcracker_core.plugins.aipwn.frida_agent import LLMClient, _LLMResponse
 from nutcracker_core.plugins.dashboard.events import bus as global_bus
 from nutcracker_core.plugins.dashboard.relay import relay_manager
@@ -32,11 +33,19 @@ def _clean_bus():
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    # El dashboard consume aipwn vía nutcracker_core.capabilities (registro
+    # plugin→plugin, ver capabilities.py) -- hay que registrarlas explícito
+    # porque estos tests arman la app sin pasar por el CLI (load_plugins).
+    register_capabilities()
     engine = QueueEngine(config_path="config.yaml", db_path=str(tmp_path / "query_ws.db"))
     app = create_app(
         db_path=str(tmp_path / "query_ws.db"), engine=engine, llm_config=_FAKE_LLM_CONFIG,
     )
-    return TestClient(app)
+    yield TestClient(app)
+    from nutcracker_core import capabilities
+    capabilities.unregister("aipwn.has_resume_state")
+    capabilities.unregister("aipwn.system_prompt")
+    capabilities.unregister("aipwn.query")
 
 
 def _text_response(text: str) -> _LLMResponse:
