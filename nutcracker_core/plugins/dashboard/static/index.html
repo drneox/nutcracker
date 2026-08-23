@@ -77,7 +77,6 @@
   button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
   button:disabled{opacity:.5;cursor:not-allowed}
   .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
-  #log{background:#05070a;color:#c9d1d9;padding:12px;border-radius:8px;height:320px;overflow:auto;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
   #webusb-canvas{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;min-height:280px;display:block}
   .device-status{font-size:12px;color:var(--dim);margin:6px 0}
   .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
@@ -95,6 +94,11 @@
   #querylog .qassistant{color:var(--text)}
   #querylog .qerror{color:var(--critical)}
   #querylog .qimg{max-width:260px;border-radius:6px;border:1px solid var(--border);display:block;margin-top:4px}
+  /* Tarjeta de logs de un job dentro del stream del chat: crece en el sitio
+     (no una burbuja por línea -- un scan son miles) y queda en orden
+     cronológico con las respuestas del agente. */
+  #querylog .qlog-head{font-size:11px;color:var(--accent);margin-bottom:4px;font-weight:600}
+  #querylog .qlog-body{background:#05070a;color:#c9d1d9;padding:8px;border-radius:6px;max-height:220px;overflow:auto;white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
   svg.trend{width:100%;height:160px;overflow:visible}
   .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
   @media (max-width:600px){
@@ -214,13 +218,6 @@
           <div id="code-path"></div>
           <pre id="code-view"></pre>
         </div>
-
-        <h2 style="margin-top:18px" id="logs-title" data-i18n="sec.logs">Logs en vivo</h2>
-        <div class="row">
-          <input id="log-job-id" placeholder="job id" data-i18n-ph="ph.jobId" style="width:100px">
-          <button class="secondary" onclick="connectJobLog()" data-i18n="btn.viewLogs">Ver logs</button>
-        </div>
-        <pre id="log" data-i18n="log.empty">(elige un job id de la cola de arriba)</pre>
       </div>
 
       <div class="interaction-side">
@@ -321,7 +318,6 @@ const I18N = {
     'btn.enqueue': 'Enqueue',
     'btn.batch': 'Batch',
     'btn.send': 'Send',
-    'btn.viewLogs': 'View logs',
     'btn.release': '⏏ Release',
     'btn.reconnect': '🔄 Reconnect',
     'btn.relayOn': '🌐 Start relay',
@@ -334,7 +330,6 @@ const I18N = {
     'sec.queue': 'Analysis queue',
     'sec.explorer': 'Explorer',
     'sec.agent': 'Agent — assisted pentest',
-    'sec.logs': 'Live logs',
     'sec.device': 'Device',
     'sec.advanced': 'Advanced: relay (remote frida/adb) / adb kill-server',
     'sec.trend': 'MASVS trend',
@@ -372,7 +367,6 @@ const I18N = {
     'ph.filterFile': 'filter file…',
     'ph.querySerial': 'serial (empty = config/USB default)',
     'ph.queryText': 'pick a run from the queue ↑ and ask the co-pilot something…',
-    'ph.jobId': 'job id',
     'ph.relaySession': 'session id (e.g. the device serial)',
     'ph.relayIp': 'device LAN IP (e.g. 192.168.1.42)',
     'tip.relaySerial': "The 'serial' field above becomes the session id of an already-connected relay session (Device tab → Relay) instead of a direct adb serial.",
@@ -434,9 +428,9 @@ const I18N = {
     'msg.truncated': '  [truncated to 512 KB]',
     'msg.saved': '✔ saved',
     'chat.you': '[you]',
+    'chat.logCard': '📜 logs — job #{id}',
     'word.ok': 'OK',
     'word.failed': 'failed',
-    'log.empty': '(pick a job id from the queue above)',
     'findings.empty': '(no findings)',
     'findings.run': 'Findings from run #{id}',
     'findings.lastRun': 'Findings from the latest run',
@@ -453,7 +447,6 @@ const I18N = {
     'btn.enqueue': 'Encolar',
     'btn.batch': 'Batch',
     'btn.send': 'Enviar',
-    'btn.viewLogs': 'Ver logs',
     'btn.release': '⏏ Soltar',
     'btn.reconnect': '🔄 Reconectar',
     'btn.relayOn': '🌐 Activar relay',
@@ -466,7 +459,6 @@ const I18N = {
     'sec.queue': 'Cola de análisis',
     'sec.explorer': 'Explorador',
     'sec.agent': 'Agente — pentest asistido',
-    'sec.logs': 'Logs en vivo',
     'sec.device': 'Dispositivo',
     'sec.advanced': 'Avanzado: relay (frida/adb remoto) / adb kill-server',
     'sec.trend': 'Tendencia MASVS',
@@ -504,7 +496,6 @@ const I18N = {
     'ph.filterFile': 'filtrar archivo…',
     'ph.querySerial': 'serial (vacío = default de config/USB)',
     'ph.queryText': 'elige una ejecución de la cola ↑ y pídele algo al co-piloto…',
-    'ph.jobId': 'job id',
     'ph.relaySession': 'session id (ej. el serial del device)',
     'ph.relayIp': 'IP LAN del device (ej. 192.168.1.42)',
     'tip.relaySerial': "El campo 'serial' de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) en vez de un serial adb directo.",
@@ -566,9 +557,9 @@ const I18N = {
     'msg.truncated': '  [truncado a 512 KB]',
     'msg.saved': '✔ guardado',
     'chat.you': '[tú]',
+    'chat.logCard': '📜 logs del job #{id}',
     'word.ok': 'OK',
     'word.failed': 'falló',
-    'log.empty': '(elige un job id de la cola de arriba)',
     'findings.empty': '(sin hallazgos)',
     'findings.run': 'Hallazgos del run #{id}',
     'findings.lastRun': 'Hallazgos del último run',
@@ -759,29 +750,42 @@ async function runBatch(){
   refreshQueue();
 }
 
-// ── Logs en vivo ─────────────────────────────────────────────────────────
+// ── Logs en vivo (integrados al stream del chat) ──────────────────────────
+// Los logs del job se muestran como una tarjeta DENTRO de la conversación:
+// una sola tarjeta por attach que crece en el sitio (no una burbuja por
+// línea -- un scan estático son miles), en orden cronológico con las
+// respuestas del agente.
 let logSocket = null;
-function connectJobLog(){
-  const id = document.getElementById('log-job-id').value.trim();
-  if (!id) return;
+function connectJobLog(jobId){
   if (logSocket) logSocket.close();
-  const log = document.getElementById('log');
-  log.textContent = '';
+  const log = document.getElementById('querylog');
+  const card = document.createElement('div');
+  card.className = 'qmsg';
+  const head = document.createElement('div');
+  head.className = 'qlog-head';
+  head.textContent = T('chat.logCard', {id: jobId});
+  const body = document.createElement('pre');
+  body.className = 'qlog-body';
+  card.appendChild(head);
+  card.appendChild(body);
+  log.appendChild(card);
+  log.scrollTop = log.scrollHeight;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  logSocket = new WebSocket(`${proto}://${location.host}/ws/jobs/${id}`);
+  logSocket = new WebSocket(`${proto}://${location.host}/ws/jobs/${jobId}`);
   logSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
   logSocket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     const line = msg.kind === 'status' ? `\n[status] ${JSON.stringify(msg.data)}\n` : (msg.data + '\n');
-    log.textContent += line;
+    body.textContent += line;
+    body.scrollTop = body.scrollHeight;
     log.scrollTop = log.scrollHeight;
   };
 }
 
-// Click en el "#id" de un job (tabla de la cola): baja al bloque "Logs en
-// vivo" con ese job cargado Y fija el package como contexto de todo el
-// workbench (chat del co-piloto + explorador del decompilado) -- el package
-// se toma del job, no de un campo a mano.
+// Click en el "#id" de un job (tabla de la cola): adjunta sus logs como
+// tarjeta en el chat Y fija el package como contexto de todo el workbench
+// (chat del co-piloto + explorador del decompilado) -- el package se toma
+// del job, no de un campo a mano.
 let lastJobs = [];
 
 function _pkgFromJob(job){
@@ -796,9 +800,11 @@ function _pkgFromJob(job){
 }
 
 function openJobContext(jobId){
-  document.getElementById('log-job-id').value = jobId;
-  document.getElementById('logs-title').scrollIntoView({behavior: 'smooth'});
-  connectJobLog();
+  // Si hay un archivo abierto en pestaña, vuelve a la pestaña Chat: la
+  // tarjeta de logs vive en el stream de la conversación.
+  if (openTabs.size && activeTab !== 'chat') activateTab('chat');
+  connectJobLog(jobId);
+  document.getElementById('querylog').scrollIntoView({behavior: 'smooth'});
   const job = lastJobs.find(x => x.id === jobId);
   const pkg = job && _pkgFromJob(job);
   // Reconectar el chat pisa la conversación visible -- solo si cambia el package.
