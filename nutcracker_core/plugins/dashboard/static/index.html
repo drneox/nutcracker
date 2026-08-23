@@ -185,11 +185,8 @@
           con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
         </p>
         <div class="row">
-          <input id="query-package" placeholder="package id" style="width:220px">
-          <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px">
-          <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (panel Dispositivo → Avanzado)">
-            <input type="checkbox" id="query-relay" style="width:auto"> usar relay
-          </label>
+          <input id="query-package" placeholder="package id" style="width:220px" onkeydown="if(event.key==='Enter')connectQuery()">
+          <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px" onkeydown="if(event.key==='Enter')connectQuery()" title="Serial adb directo (emulator-5554, ip:5555…). Si hay una sesión de relay activa (panel Dispositivo → Avanzado) y escribís su session id, se detecta solo.">
           <button class="secondary" id="query-connect-btn" onclick="connectQuery()">Conectar</button>
         </div>
         <div id="querylog"></div>
@@ -815,6 +812,7 @@ async function adbKillServer(){
 // (mod.getAdb() -- ver webusb/src/main.ts/relay.ts). No abre una segunda
 // conexión USB: eso pisaría a la del video (WebUSB es exclusivo por interfaz).
 let relayClient = null;
+let relaySessionId = null;  // session id activo -- connectQuery lo auto-detecta
 
 function setRelayConnectedUi(connected){
   document.getElementById('relay-btn').style.display = connected ? 'none' : '';
@@ -840,17 +838,20 @@ async function connectRelay(){
   try {
     relayClient = new mod.RelayClient(adb, sessionId, (s) => { status.textContent = s; }, fridaWsUrl);
     await relayClient.start();
+    relaySessionId = sessionId;
     setRelayConnectedUi(true);
   } catch (e) {
     console.error('connectRelay falló:', e);
     status.textContent = `Error activando el relay: ${e.message || e}`;
     relayClient = null;
+    relaySessionId = null;
   }
 }
 
 async function disconnectRelay(){
   const status = document.getElementById('relay-status');
   setRelayConnectedUi(false);
+  relaySessionId = null;
   if (!relayClient) return;
   try {
     await relayClient.stop();
@@ -916,7 +917,9 @@ function connectQuery(){
   if (querySocket) querySocket.close();
   document.getElementById('querylog').innerHTML = '';
   const serial = document.getElementById('query-serial').value.trim();
-  const relay = document.getElementById('query-relay').checked;
+  // Sin checkbox "usar relay": si hay una sesión de relay activa y el serial
+  // escrito es su session id, se detecta solo.
+  const relay = !!(relaySessionId && serial && serial === relaySessionId);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   querySocket = new WebSocket(`${proto}://${location.host}/ws/query/${encodeURIComponent(pkg)}`);
   querySocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
