@@ -158,6 +158,100 @@ def test_device_screenshot_without_adb_is_503(client, monkeypatch):
     assert r.status_code == 503
 
 
+# ── /api/decompiled/* -- explorador del decompilado (workbench IDE) ─────────
+
+@pytest.fixture
+def decompiled_client(db_path, engine, tmp_path):
+    """App con un decompiled/ fake: <pkg>/ (jadx) y runtime_dump_<pkg>/."""
+    base = tmp_path / "decompiled"
+    (base / "com.example.app" / "sources" / "com" / "example").mkdir(parents=True)
+    (base / "com.example.app" / "resources").mkdir(parents=True)
+    (base / "com.example.app" / "sources" / "com" / "example" / "MainActivity.java").write_text(
+        "package com.example;\nclass MainActivity {}\n", encoding="utf-8")
+    (base / "com.example.app" / "sources" / "com" / "example" / "payload.png").write_bytes(b"\x89PNG")
+    (base / "com.example.app" / "resources" / "AndroidManifest.xml").write_text(
+        "<manifest/>\n", encoding="utf-8")
+    (base / "runtime_dump_com.example.app").mkdir(parents=True)
+    (base / "runtime_dump_com.example.app" / "Dumped.java").write_text(
+        "class Dumped {}\n", encoding="utf-8")
+    app = create_app(db_path=db_path, engine=engine, decompiled_dir=base)
+    return TestClient(app)
+
+
+def test_decompiled_tree_lists_dirs_first(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/tree")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["exists"] is True
+    assert [e["name"] for e in data["entries"]] == ["resources", "sources"]
+
+    r2 = decompiled_client.get(
+        "/api/decompiled/com.example.app/tree?path=sources/com/example")
+    names = [(e["name"], e["type"]) for e in r2.json()["entries"]]
+    assert names == [("MainActivity.java", "file"), ("payload.png", "file")]
+    assert r2.json()["entries"][0]["size"] > 0
+
+
+def test_decompiled_tree_runtime_root(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/tree?root=runtime")
+    assert [e["name"] for e in r.json()["entries"]] == ["Dumped.java"]
+
+
+def test_decompiled_tree_unknown_package(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.unknown.app/tree")
+    assert r.status_code == 200
+    assert r.json() == {"exists": False, "entries": []}
+
+
+def test_decompiled_tree_rejects_traversal(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/tree",
+                              params={"path": "../.."})
+    assert r.status_code == 400
+
+
+def test_decompiled_file_returns_content(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/file",
+                              params={"path": "sources/com/example/MainActivity.java"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "class MainActivity" in data["content"]
+    assert data["truncated"] is False
+
+
+def test_decompiled_file_rejects_binary_extension(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/file",
+                              params={"path": "sources/com/example/payload.png"})
+    assert r.status_code == 415
+
+
+def test_decompiled_file_rejects_traversal(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/file",
+                              params={"path": "../../config.yaml"})
+    assert r.status_code == 400
+
+
+def test_decompiled_file_too_big_is_413(decompiled_client, tmp_path):
+    big = tmp_path / "decompiled" / "com.example.app" / "big.java"
+    big.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+    r = decompiled_client.get("/api/decompiled/com.example.app/file",
+                              params={"path": "big.java"})
+    assert r.status_code == 413
+
+
+def test_decompiled_search_by_filename(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/search",
+                              params={"q": "mainact"})
+    assert r.status_code == 200
+    assert r.json()["results"] == ["sources/com/example/MainActivity.java"]
+
+
+def test_decompiled_search_requires_two_chars(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/search",
+                              params={"q": "m"})
+    assert r.status_code == 400
+
+
+
 def test_adb_kill_server_calls_adb_transport_and_returns_its_result(client, monkeypatch):
     """El endpoint es un pass-through directo a adb_transport.kill_server()
     (WSL + Windows) -- no reimplementa nada acá, ver test_adb_transport.py

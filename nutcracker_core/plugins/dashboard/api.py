@@ -28,6 +28,13 @@ from . import chat_mailbox, store_reader
 from .events import bus
 from .relay import RelayError, RpcError, RpcTimeoutError, relay_manager
 
+# Extensiones servibles por el explorador del decompilado (/api/decompiled/*/file)
+# -- solo texto; binarios del APK (png, dex, so, arsc...) no se sirven por acá.
+_DECOMPILED_TEXT_EXTS = frozenset({
+    "java", "kt", "xml", "txt", "json", "smali", "md", "properties",
+    "yml", "yaml", "gradle", "kts", "html", "css", "js", "mf", "sf", "csv",
+})
+
 
 def classify_batch_target(
     target: str, payload_source: str | None = None, downloads_dir: Path | str = "downloads",
@@ -222,6 +229,7 @@ async def _run_relay_rpc(session, op: str, **fields):
 def create_router(
     db_path: str, engine: QueueEngine, default_serial: str | None = None,
     llm_config: dict | None = None, runtime_target: str | None = None,
+    decompiled_dir: Path | None = None,
 ) -> APIRouter:
     """No toca ``engine.on_line`` a propósito: ese wiring (streaming de logs en
     vivo al EventBus) lo hace ``plugins/dashboard/__init__.py::dashboard()``
@@ -304,6 +312,99 @@ def create_router(
                 detail=proc.stderr.decode(errors="replace").strip() or "screencap falló",
             )
         return Response(content=proc.stdout, media_type="image/png")
+
+    # ── Explorador del decompilado (workbench IDE del dashboard) ─────────────
+    # Sirve el árbol de decompiled/<package>/ (jadx) y runtime_dump_<package>/
+    # (FART) directo de disco. Carga perezosa por directorio (un árbol plano de
+    # un jadx real puede superar los 30k archivos) y guards estrictas: nada de
+    # path traversal fuera de la raíz del package, solo extensiones de texto y
+    # caps de tamaño.
+    decompiled_base = decompiled_dir if decompiled_dir is not None else Path("decompiled")
+
+    def _decompiled_root(package: str, root: str) -> Path:
+        if package in ("", ".", "..") or "/" in package or "\\" in package:
+            raise HTTPException(status_code=400, detail="package inválido")
+        name = f"runtime_dump_{package}" if root == "runtime" else package
+        return decompiled_base / name
+
+    def _resolve_within(base: Path, rel: str) -> Path:
+        try:
+            target = (base / rel).resolve()
+            target.relative_to(base.resolve())
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail="path fuera del decompilado") from exc
+        return target
+
+    @router.get("/api/decompiled/{package}/tree")
+    def decompiled_tree(package: str, root: str = "static", path: str = ""):
+        """Hijos inmediatos de ``path`` dentro del decompilado del package --
+        el explorador carga directorio por directorio al expandir nodos."""
+        base = _decompiled_root(package, root)
+        if not base.is_dir():
+            return {"exists": False, "entries": []}
+        target = _resolve_within(base, path)
+        if not target.is_dir():
+            raise HTTPException(status_code=404, detail="directorio no encontrado")
+        entries = []
+        for child in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+            if child.name.startswith("."):
+                continue
+            try:
+                size = child.stat().st_size if child.is_file() else 0
+            except OSError:
+                continue
+            entries.append({
+                "name": child.name,
+                "type": "dir" if child.is_dir() else "file",
+                "size": size,
+            })
+            if len(entries) >= 2000:
+                break
+        return {"exists": True, "entries": entries}
+
+    @router.get("/api/decompiled/{package}/file")
+    def decompiled_file(package: str, root: str = "static", path: str = ""):
+        """Contenido de un archivo del decompilado, como JSON {content, truncated}.
+        Solo extensiones de texto; >2 MB se rechaza; >512 KB se trunca."""
+        base = _decompiled_root(package, root)
+        target = _resolve_within(base, path)
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="archivo no encontrado")
+        ext = target.suffix.lower().lstrip(".")
+        if ext and ext not in _DECOMPILED_TEXT_EXTS:
+            raise HTTPException(status_code=415, detail=f"extensión .{ext} no es de texto")
+        try:
+            size = target.stat().st_size
+        except OSError as exc:
+            raise HTTPException(status_code=404, detail="archivo no legible") from exc
+        if size > 2 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="archivo demasiado grande (>2 MB)")
+        content = target.read_text(encoding="utf-8", errors="replace")
+        truncated = len(content) > 512 * 1024
+        if truncated:
+            content = content[:512 * 1024] + "\n[... truncado a 512 KB ...]"
+        return {"path": path, "content": content, "truncated": truncated}
+
+    @router.get("/api/decompiled/{package}/search")
+    def decompiled_search(package: str, root: str = "static", q: str = ""):
+        """Filtro por nombre de archivo (substring case-insensitive) sobre todo
+        el árbol del package -- la caja de filtro del explorador. Cap 200."""
+        needle = q.strip().lower()
+        if len(needle) < 2:
+            raise HTTPException(status_code=400, detail="q debe tener al menos 2 caracteres")
+        base = _decompiled_root(package, root)
+        if not base.is_dir():
+            return {"exists": False, "results": []}
+        results = []
+        for p in base.rglob("*"):
+            try:
+                if p.is_file() and needle in p.name.lower():
+                    results.append(str(p.relative_to(base)))
+            except OSError:
+                continue
+            if len(results) >= 200:
+                break
+        return {"exists": True, "results": sorted(results)}
 
     @router.post("/api/adb/kill-server")
     def adb_kill_server():

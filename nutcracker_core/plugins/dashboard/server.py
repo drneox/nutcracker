@@ -36,6 +36,7 @@ def create_app(
     auth: AuthConfig | None = None,
     llm_config: dict | None = None,
     runtime_target: str | None = None,
+    decompiled_dir: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="nutcracker dashboard")
 
@@ -48,7 +49,7 @@ def create_app(
 
     app.include_router(create_router(
         db_path=db_path, engine=engine, default_serial=default_serial, llm_config=llm_config,
-        runtime_target=runtime_target,
+        runtime_target=runtime_target, decompiled_dir=decompiled_dir,
     ))
     app.include_router(ws.router)
 
