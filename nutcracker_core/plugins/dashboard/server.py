@@ -38,6 +38,7 @@ def create_app(
     runtime_target: str | None = None,
     decompiled_dir: Path | None = None,
     job_log_dir: str | None = None,
+    language: str = "en",
 ) -> FastAPI:
     app = FastAPI(title="nutcracker dashboard")
 
@@ -54,7 +55,7 @@ def create_app(
 
     app.include_router(create_router(
         db_path=db_path, engine=engine, default_serial=default_serial, llm_config=llm_config,
-        runtime_target=runtime_target, decompiled_dir=decompiled_dir,
+        runtime_target=runtime_target, decompiled_dir=decompiled_dir, language=language,
     ))
     app.include_router(ws.router)
 

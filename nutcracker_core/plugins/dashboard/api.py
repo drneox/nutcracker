@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from nutcracker_core import adb_transport
 from nutcracker_core import capabilities
+from nutcracker_core.i18n import SUPPORTED_LANGUAGES
 from nutcracker_core.queue.engine import QueueEngine
 from nutcracker_core.store import db, repository
 
@@ -229,7 +230,7 @@ async def _run_relay_rpc(session, op: str, **fields):
 def create_router(
     db_path: str, engine: QueueEngine, default_serial: str | None = None,
     llm_config: dict | None = None, runtime_target: str | None = None,
-    decompiled_dir: Path | None = None,
+    decompiled_dir: Path | None = None, language: str = "en",
 ) -> APIRouter:
     """No toca ``engine.on_line`` a propósito: ese wiring (streaming de logs en
     vivo al EventBus) lo hace ``plugins/dashboard/__init__.py::dashboard()``
@@ -266,6 +267,14 @@ def create_router(
         dice al panel Dispositivo si debe ofrecer la vista de emulador por
         screencap polling (WebUSB solo aplica a devices físicos por cable)."""
         return {"serial": default_serial, "runtime_target": runtime_target}
+
+    @router.get("/api/i18n")
+    def i18n_config():
+        """Idioma de la UI del dashboard: la key top-level ``language:`` de
+        config.yaml (la misma que usa el CLI -- ver orchestrator._init_i18n),
+        ya validada por el comando dashboard contra i18n.SUPPORTED_LANGUAGES.
+        El frontend elige su diccionario (en|es) con esto; default 'en'."""
+        return {"language": language, "supported": sorted(SUPPORTED_LANGUAGES)}
 
     @router.get("/api/device/list")
     def device_list():

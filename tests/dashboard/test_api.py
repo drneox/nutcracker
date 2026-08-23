@@ -1327,3 +1327,20 @@ def test_upload_apk_requires_auth_when_enabled(tmp_path, monkeypatch, db_path, e
         files={"file": ("app.apk", _FAKE_APK_BYTES, "application/octet-stream")},
     )
     assert r.status_code == 401
+
+
+def test_i18n_endpoint_defaults_to_english(client):
+    r = client.get("/api/i18n")
+    assert r.status_code == 200
+    assert r.json() == {"language": "en", "supported": ["en", "es"]}
+
+
+def test_i18n_endpoint_returns_configured_language(db_path, engine):
+    """El comando dashboard valida `language:` de config.yaml contra
+    i18n.SUPPORTED_LANGUAGES y se lo pasa a create_app -- el frontend elige
+    su diccionario con esto (ver static/index.html)."""
+    app = create_app(db_path=db_path, engine=engine, language="es")
+    c = TestClient(app)
+    r = c.get("/api/i18n")
+    assert r.status_code == 200
+    assert r.json()["language"] == "es"

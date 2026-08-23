@@ -114,6 +114,15 @@ def register(cli) -> None:
         bind = host or str(cfg_get(config, "dashboard", "bind", default="127.0.0.1"))
         listen_port = port or int(cfg_get(config, "dashboard", "port", default=8765))
 
+        # Idioma de la UI: la key top-level `language:` (misma convención que
+        # el CLI, ver orchestrator._init_i18n) -- el frontend la consulta vía
+        # GET /api/i18n y elige su diccionario. Valores fuera de
+        # i18n.SUPPORTED_LANGUAGES caen a 'en'.
+        from nutcracker_core import i18n as _i18n
+        language = str(cfg_get(config, "language", default="en")).strip().lower()
+        if language not in _i18n.SUPPORTED_LANGUAGES:
+            language = "en"
+
         # Auth (login por sesión) -- ver auth.py y deploy/README.md. Se activa
         # solo si `dashboard.auth.enabled` es true; sin eso el dashboard queda
         # abierto (uso local/dev). El `internal_token` es una credencial de
@@ -215,7 +224,7 @@ def register(cli) -> None:
         app = create_app(
             db_path=db_path, engine=engine, default_serial=default_serial,
             auth=auth, llm_config=llm_config, runtime_target=runtime_target,
-            job_log_dir=engine.log_dir,
+            job_log_dir=engine.log_dir, language=language,
         )
 
         console.print(
