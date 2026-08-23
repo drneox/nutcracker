@@ -205,7 +205,7 @@
           </div>
           <div id="querylog"></div>
           <div class="row">
-            <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
+            <input id="query-text" placeholder="elegí una ejecución de la cola ↑ y pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
             <button onclick="sendQuery()">Enviar</button>
           </div>
         </div>
@@ -1059,7 +1059,13 @@ function connectQuery(pkg){
 }
 function sendQuery(){
   const input = document.getElementById('query-text');
-  if (!querySocket || !input.value.trim()) return;
+  if (!input.value.trim()) return;
+  // Sin job elegido no hay socket (la conexión la fija openJobContext) --
+  // antes esto retornaba en silencio y parecía que el agente no respondía.
+  if (!querySocket || querySocket.readyState !== WebSocket.OPEN) {
+    _qAppend('qerror', '⚠ sin conexión -- elegí una ejecución en la cola (click en su #) para fijar el package y conectar el co-piloto.');
+    return;
+  }
   _qAppend('qassistant', `<span style="color:var(--accent)">[vos]</span> ${input.value.trim().replace(/</g, '&lt;')}`);
   querySocket.send(input.value.trim());
   input.value = '';
