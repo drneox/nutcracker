@@ -400,6 +400,7 @@ const I18N = {
     'status.usbBundleMissing': 'WebUSB bundle not available (see webusb/ README).',
     'status.noDevice': 'No device/emulator visible to the backend adb.',
     'status.viewing': 'Viewing screen of {serial} (screencap ~1 fps).',
+    'status.emuUnstable': 'Screen stream unstable ({serial}) -- emulator busy, retrying…',
     'status.stopped': 'View stopped -- "🔄 Reconnect" to resume.',
     'status.killingAdb': 'Killing adb (WSL + Windows)…',
     'status.winNa': 'Windows: n/a (not WSL)',
@@ -529,6 +530,7 @@ const I18N = {
     'status.usbBundleMissing': 'Bundle WebUSB no disponible (ver README de webusb/).',
     'status.noDevice': 'No hay ningún device/emulador visible para el adb del backend.',
     'status.viewing': 'Viendo pantalla de {serial} (screencap ~1 fps).',
+    'status.emuUnstable': 'Stream de pantalla inestable ({serial}) -- emulador ocupado, reintentando…',
     'status.stopped': 'Vista detenida -- "🔄 Reconectar" para retomar.',
     'status.killingAdb': 'Matando adb (WSL + Windows)…',
     'status.winNa': 'Windows: n/a (no es WSL)',
@@ -1153,10 +1155,39 @@ async function disconnectWebUsb(){
 // WebUSB no aplica acá (no hay cable que reclamar): la pantalla se trae frame
 // a frame del adb del backend (GET /api/device/screenshot). No necesita
 // Chrome ni el bundle webusb compilado.
-function refreshEmulatorFrame(){
-  if (!emuSerial) return;
-  document.getElementById('emulator-img').src =
-    `/api/device/screenshot?serial=${encodeURIComponent(emuSerial)}&t=${Date.now()}`;
+let emuInflight = false;
+let emuFailCount = 0;
+
+async function refreshEmulatorFrame(){
+  // Sin apilar: cada request colgado retiene un hilo del server hasta 10s,
+  // y a 900ms de intervalo se acumulaban ~11 durante cualquier saturación.
+  if (!emuSerial || emuInflight) return;
+  emuInflight = true;
+  try {
+    const r = await fetch(`/api/device/screenshot?serial=${encodeURIComponent(emuSerial)}&t=${Date.now()}`);
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob();
+    const img = document.getElementById('emulator-img');
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    const url = URL.createObjectURL(blob);
+    img.src = url;
+    img.dataset.url = url;
+    if (emuFailCount >= 8) {
+      document.getElementById('device-status').textContent = T('status.viewing', {serial: emuSerial});
+    }
+    emuFailCount = 0;
+  } catch (e) {
+    // Transitorio típico: emulador saturado (un `adb install` en curso deja
+    // el screencap >10s y el backend devuelve 504). Se conserva el último
+    // frame bueno y se reintenta en silencio; solo se avisa si la racha
+    // se alarga (~7s de fallos seguidos).
+    emuFailCount++;
+    if (emuFailCount === 8) {
+      document.getElementById('device-status').textContent = T('status.emuUnstable', {serial: emuSerial});
+    }
+  } finally {
+    emuInflight = false;
+  }
 }
 
 async function connectEmulator(){
@@ -1172,12 +1203,20 @@ async function connectEmulator(){
       if (!emu) { status.textContent = T('status.noDevice'); return; }
       serial = emu.serial;
     }
-    // Validar con un frame antes de prender el polling
-    const probe = await fetch(`/api/device/screenshot?serial=${encodeURIComponent(serial)}`);
+    // Validar con un frame antes de prender el polling. Hasta 3 intentos:
+    // el fallo típico es transitorio (emulador ocupado instalando/booteando)
+    // y rendirse al primer 504 obligaba a reconectar a mano sin motivo.
+    let probe = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      probe = await fetch(`/api/device/screenshot?serial=${encodeURIComponent(serial)}`);
+      if (probe.ok) break;
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
+    }
     if (!probe.ok) {
       status.textContent = T('err.screencap', {serial, text: (await probe.text()).slice(0, 200)});
       return;
     }
+    emuFailCount = 0;
     emuSerial = serial;
     // El chat del co-piloto actúa sobre el mismo device que se está viendo
     // -- precargar el serial detectado/configurado para no pedirlo dos veces
