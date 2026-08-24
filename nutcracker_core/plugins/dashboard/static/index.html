@@ -398,7 +398,7 @@ const I18N = {
     'ph.batchSerial': 'serial / relay session id',
     'ph.filterFile': 'filter file…',
     'ph.querySerial': 'serial (empty = config/USB default)',
-    'ph.queryText': 'pick a run from the queue ↑ and ask the co-pilot something…',
+    'ph.queryText': 'ask the co-pilot something… (or type a package id to connect: com.example.app)',
     'ph.relaySession': 'session id (e.g. the device serial)',
     'ph.relayIp': 'device LAN IP (e.g. 192.168.1.42)',
     'tip.relaySerial': "The 'serial' field above becomes the session id of an already-connected relay session (Device tab → Relay) instead of a direct adb serial.",
@@ -419,7 +419,7 @@ const I18N = {
     'explorer.noDecompiled': '(no decompiled output on disk for {pkg} — run an analysis first)',
     'explorer.emptyDir': '(empty)',
     'explorer.noMatches': '(no matches)',
-    'hint.query': 'Interactive co-pilot: ask about already-analyzed findings/components/secrets (works without any running job), or ask it in natural language to use Frida/ADB with a connected device -- view screen, tap/type on the UI, run hooks. The package is set by the job you pick in the queue above (click its #).',
+    'hint.query': 'Interactive co-pilot: ask about already-analyzed findings/components/secrets (works without any running job), or ask it in natural language to use Frida/ADB with a connected device -- view screen, tap/type on the UI, run hooks. The package is set by the job you pick in the queue above (click its #), or by typing the package id right here in the chat.',
     'hint.historyRow': '(click a row to see its findings)',
     'hint.consolidated': '(deduplicated across all runs)',
     'info.relay': 'The relay bridges `frida`/`adb` running on this backend to the device connected here. `adb` (shell/install/pull/screencap) reuses the USB connection (requires the USB video to be active). `frida` goes over a direct native WebSocket to the device LAN IP (Tango does not handle well the WebSocket handshake used by modern frida, verified live) — THIS PC needs network reachability to the device, and Chrome may ask for the "Local Network Access" permission the first time. `adb kill-server` kills the adb daemon (WSL + Windows) to release the cable before WebUSB claims it.',
@@ -449,7 +449,7 @@ const I18N = {
     'err.adbKill': 'Error killing adb: {e}',
     'err.relayConnect': 'Error starting relay: {e}',
     'err.relayStop': 'Error stopping relay: {e}',
-    'err.noConnection': '⚠ not connected -- pick a run in the queue (click its #) to set the package and connect the co-pilot.',
+    'err.noPackageInMessage': '⚠ not connected -- write the package id in your message (e.g. "analyze com.example.app") or send just the package id to connect.',
     'alert.batch': 'Queued: {n}. Skipped ({m}):\n{lines}',
     'badge.present': '● present',
     'badge.resolved': '✔ resolved',
@@ -537,7 +537,7 @@ const I18N = {
     'ph.batchSerial': 'serial / session id de relay',
     'ph.filterFile': 'filtrar archivo…',
     'ph.querySerial': 'serial (vacío = default de config/USB)',
-    'ph.queryText': 'elige una ejecución de la cola ↑ y pídele algo al co-piloto…',
+    'ph.queryText': 'pídele algo al co-piloto… (o escribe un package id para conectar: com.example.app)',
     'ph.relaySession': 'session id (ej. el serial del device)',
     'ph.relayIp': 'IP LAN del device (ej. 192.168.1.42)',
     'tip.relaySerial': "El campo 'serial' de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) en vez de un serial adb directo.",
@@ -558,7 +558,7 @@ const I18N = {
     'explorer.noDecompiled': '(sin decompilado en disco para {pkg} — ejecuta un análisis primero)',
     'explorer.emptyDir': '(vacío)',
     'explorer.noMatches': '(sin coincidencias)',
-    'hint.query': 'Co-piloto interactivo: pregunta sobre findings/componentes/secretos ya analizados (funciona sin ningún job corriendo), o pídele en lenguaje natural que use Frida/ADB con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks. El package lo fija el job que elijas en la cola de arriba (click en su #).',
+    'hint.query': 'Co-piloto interactivo: pregunta sobre findings/componentes/secretos ya analizados (funciona sin ningún job corriendo), o pídele en lenguaje natural que use Frida/ADB con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks. El package lo fija el job que elijas en la cola de arriba (click en su #), o escribiéndolo directamente acá en el chat.',
     'hint.historyRow': '(clic en una fila para ver sus hallazgos)',
     'hint.consolidated': '(deduplicados de todas las corridas)',
     'info.relay': 'El relay puentea `frida`/`adb` corriendo en este backend hacia el device conectado acá. `adb` (shell/install/pull/screencap) reusa la conexión USB (requiere el video USB activo). `frida` va por un WebSocket nativo directo a la IP de LAN del device (Tango no sostiene bien el handshake WebSocket que usa frida moderno, verificado en vivo) — necesita que ESTA PC tenga alcance de red al device, y puede pedir el permiso "Acceso a Red Local" de Chrome la primera vez. `adb kill-server` mata el daemon adb (WSL + Windows) para soltar el cable antes de que WebUSB lo reclame.',
@@ -588,7 +588,7 @@ const I18N = {
     'err.adbKill': 'Error matando adb: {e}',
     'err.relayConnect': 'Error activando el relay: {e}',
     'err.relayStop': 'Error deteniendo el relay: {e}',
-    'err.noConnection': '⚠ sin conexión -- elige una ejecución en la cola (click en su #) para fijar el package y conectar el co-piloto.',
+    'err.noPackageInMessage': '⚠ sin conexión -- escribe el package id en tu mensaje (ej: "analiza com.example.app") o envía solo el package id para conectar.',
     'alert.batch': 'Encolados: {n}. Omitidos ({m}):\n{lines}',
     'badge.present': '● presente',
     'badge.resolved': '✔ resuelto',
@@ -1491,7 +1491,7 @@ async function checkQueryAvailable(){
 }
 
 let querySocket = null;
-let chatPackage = null;   // package de la conversación actual (lo fija openJobContext)
+let chatPackage = null;   // package de la conversación actual (lo fija openJobContext o sendQuery)
 function _qAppend(cls, html){
   const log = document.getElementById('querylog');
   log.innerHTML += `<div class="qmsg ${cls}">${html}</div>`;
@@ -1533,17 +1533,47 @@ function connectQuery(pkg){
     }
   };
 }
+// Package id: al menos dos puntos, segmentos estilo java (com.example.app,
+// pe.foo.bar). Se usa para (a) conectar el chat cuando el operador escribe el
+// package en el mensaje y (b) detectar el mensaje "solo package" como comando
+// de conexión/cambio de contexto.
+const _PKG_RE = /[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,}/i;
+
 function sendQuery(){
   const input = document.getElementById('query-text');
-  if (!input.value.trim()) return;
-  // Sin job elegido no hay socket (la conexión la fija openJobContext) --
-  // antes esto retornaba en silencio y parecía que el agente no respondía.
-  if (!querySocket || querySocket.readyState !== WebSocket.OPEN) {
-    _qAppend('qerror', T('err.noConnection'));
+  const text = input.value.trim();
+  if (!text) return;
+
+  // Mensaje que ES solo un package id → comando de (re)conexión: fija el
+  // contexto del chat + explorador sin mandar nada al agente.
+  const onlyPkg = text.match(_PKG_RE);
+  if (onlyPkg && onlyPkg[0] === text) {
+    connectQuery(text);
+    input.value = '';
     return;
   }
-  _qAppend('qassistant', `<span style="color:var(--accent)">${T('chat.you')}</span> ${input.value.trim().replace(/</g, '&lt;')}`);
-  querySocket.send(input.value.trim());
+
+  if (!querySocket || querySocket.readyState !== WebSocket.OPEN) {
+    // Sin job elegido no hay socket -- pero el package puede venir escrito en
+    // el propio mensaje ("analiza com.example.app"): se conecta solo y el
+    // mensaje se manda en cuanto el socket abre (después del frame de
+    // conexión, que connectQuery manda en su propio onopen, registrado antes).
+    const m = text.match(_PKG_RE);
+    if (!m) {
+      _qAppend('qerror', T('err.noPackageInMessage'));
+      return;
+    }
+    connectQuery(m[0]);
+    querySocket.addEventListener('open', () => {
+      _qAppend('qassistant', `<span style="color:var(--accent)">${T('chat.you')}</span> ${text.replace(/</g, '&lt;')}`);
+      querySocket.send(text);
+      input.value = '';
+    }, {once: true});
+    return;
+  }
+
+  _qAppend('qassistant', `<span style="color:var(--accent)">${T('chat.you')}</span> ${text.replace(/</g, '&lt;')}`);
+  querySocket.send(text);
   input.value = '';
 }
 
