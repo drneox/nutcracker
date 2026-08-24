@@ -1,8 +1,8 @@
 """Tests de find_split_apks — sets coherentes por generación de nombres.
 
-Bug (visto en vivo, job 20, 2026-08-23): downloads/com.krealo.tenpo/ tenía
-DOS descargas de distinta fecha — apkeep nuevo (com.krealo.tenpo.apk +
-com.krealo.tenpo.config.*) y la clásica (base.apk + split_config.*) — y
+Bug (visto en vivo): un dir downloads/com.example.app/ tenía
+DOS descargas de distinta fecha — apkeep nuevo (com.example.app.apk +
+com.example.app.config.*) y la clásica (base.apk + split_config.*) — y
 find_split_apks devolvía la UNION (7 APKs), que install-multiple rechaza con
 INSTALL_FAILED_INVALID_APK: "Split null was defined multiple times". Con el
 set coherente de su propia generación la instalación funciona.
