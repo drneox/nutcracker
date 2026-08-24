@@ -108,8 +108,17 @@
   /* Tarjeta de logs de un job dentro del stream del chat: crece en el sitio
      (no una burbuja por línea -- un scan son miles) y queda en orden
      cronológico con las respuestas del agente. */
-  #querylog .qlog-head{font-size:11px;color:var(--accent);margin-bottom:4px;font-weight:600}
-  #querylog .qlog-body{background:#05070a;color:#c9d1d9;padding:8px;border-radius:6px;max-height:220px;overflow:auto;white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  #querylog .qlog-head{font-size:11px;color:var(--accent);margin-bottom:4px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none}
+  #querylog .qlog-toggle{display:inline-block;width:10px}
+  #querylog .qlog-status{margin-left:auto;font-weight:400;font-size:10px;color:var(--dim);border:1px solid rgba(127,127,127,.35);border-radius:8px;padding:0 6px}
+  #querylog .qlog-status[data-st="done"]{color:#3fb27f;border-color:#3fb27f}
+  #querylog .qlog-status[data-st="error"]{color:#e5534b;border-color:#e5534b}
+  #querylog .qlog-wrap{position:relative}
+  #querylog .qlog-body{background:#05070a;color:#c9d1d9;padding:8px;border-radius:6px;max-height:320px;overflow:auto;white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  /* Colapsada (estilo output de tool de un agente): solo ~3 líneas con fade,
+     click en el header para expandir. Se pliega sola cuando el job termina. */
+  #querylog .qlog-collapsed .qlog-body{max-height:57px;overflow:hidden}
+  #querylog .qlog-collapsed .qlog-wrap::after{content:'';position:absolute;left:0;right:0;bottom:0;height:28px;background:linear-gradient(transparent,#05070a);border-radius:0 0 6px 6px;pointer-events:none}
   svg.trend{width:100%;height:160px;overflow:visible}
   .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
   @media (max-width:600px){
@@ -462,6 +471,7 @@ const I18N = {
     'msg.saved': '✔ saved',
     'chat.you': '[you]',
     'chat.logCard': '📜 logs — job #{id}',
+    'chat.jobFinished': '✔ job #{id} finished: {status} — you can keep interacting here, the context stays on this package.',
     'word.ok': 'OK',
     'word.failed': 'failed',
     'findings.empty': '(no findings)',
@@ -601,6 +611,7 @@ const I18N = {
     'msg.saved': '✔ guardado',
     'chat.you': '[tú]',
     'chat.logCard': '📜 logs del job #{id}',
+    'chat.jobFinished': '✔ job #{id} terminó: {status} — puedes seguir interactuando acá, el contexto queda en este package.',
     'word.ok': 'OK',
     'word.failed': 'falló',
     'findings.empty': '(sin hallazgos)',
@@ -797,20 +808,40 @@ async function runBatch(){
 // Los logs del job se muestran como una tarjeta DENTRO de la conversación:
 // una sola tarjeta por attach que crece en el sitio (no una burbuja por
 // línea -- un scan estático son miles), en orden cronológico con las
-// respuestas del agente.
+// respuestas del agente. Estilo "output de tool" de un agente (Kimi Code):
+// streamea expandida mientras el job corre y se pliega sola al terminar
+// (click en el header para expandir/colapsar).
 let logSocket = null;
 function connectJobLog(jobId){
   if (logSocket) logSocket.close();
   const log = document.getElementById('querylog');
   const card = document.createElement('div');
-  card.className = 'qmsg';
+  card.className = 'qmsg qlog';
   const head = document.createElement('div');
   head.className = 'qlog-head';
-  head.textContent = T('chat.logCard', {id: jobId});
+  const toggle = document.createElement('span');
+  toggle.className = 'qlog-toggle';
+  toggle.textContent = '▾';
+  const title = document.createElement('span');
+  title.textContent = T('chat.logCard', {id: jobId});
+  const pill = document.createElement('span');
+  pill.className = 'qlog-status';
+  pill.textContent = 'running';
+  head.appendChild(toggle);
+  head.appendChild(title);
+  head.appendChild(pill);
+  const wrap = document.createElement('div');
+  wrap.className = 'qlog-wrap';
   const body = document.createElement('pre');
   body.className = 'qlog-body';
+  wrap.appendChild(body);
   card.appendChild(head);
-  card.appendChild(body);
+  card.appendChild(wrap);
+  const setCollapsed = (collapsed) => {
+    card.classList.toggle('qlog-collapsed', collapsed);
+    toggle.textContent = collapsed ? '▸' : '▾';
+  };
+  head.onclick = () => setCollapsed(!card.classList.contains('qlog-collapsed'));
   log.appendChild(card);
   log.scrollTop = log.scrollHeight;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -818,11 +849,44 @@ function connectJobLog(jobId){
   logSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
   logSocket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    const line = msg.kind === 'status' ? `\n[status] ${JSON.stringify(msg.data)}\n` : (msg.data + '\n');
-    body.textContent += line;
-    body.scrollTop = body.scrollHeight;
+    if (msg.kind === 'status') {
+      body.textContent += `\n[status] ${JSON.stringify(msg.data)}\n`;
+      // El job terminó: plegar la tarjeta (como el output de una tool al
+      // completar), marcar el estado en el pill y avisar en la conversación
+      // con una burbuja propia. El chat sigue vivo con el contexto del
+      // package — el operador puede seguir interactuando.
+      const st = (msg.data && msg.data.status) || '?';
+      pill.textContent = st;
+      pill.dataset.st = st;
+      setCollapsed(true);
+      _qAppend(st === 'done' ? 'qassistant' : 'qerror', T('chat.jobFinished', {id: jobId, status: st}));
+      refreshQueue();
+    } else {
+      body.textContent += msg.data + '\n';
+    }
+    if (!card.classList.contains('qlog-collapsed')) body.scrollTop = body.scrollHeight;
     log.scrollTop = log.scrollHeight;
   };
+}
+
+// Cuando el co-piloto encola un job desde el chat (tool enqueue_scan),
+// adoptar el contexto de esa ejecución automáticamente: la tarjeta de logs
+// vivos del job se adjunta a la conversación, la cola se refresca y el
+// explorador/device quedan en el package del job. Sin esto el job corría
+// "invisible" — había que hacer clic a mano en su #id para ver algo.
+function _adoptEnqueuedJob(resultText){
+  let payload = null;
+  try { payload = JSON.parse(resultText); } catch { return; }
+  const jobId = payload && payload.job_id;
+  if (!jobId) return;
+  // Si hay un archivo abierto en pestaña, volver al Chat: la tarjeta de logs
+  // vive en el stream de la conversación.
+  if (typeof openTabs !== 'undefined' && openTabs.size && activeTab !== 'chat') activateTab('chat');
+  connectJobLog(jobId);
+  const pkg = payload.target || chatPackage;
+  // Reconectar el chat pisa la conversación visible — solo si cambia el package.
+  if (pkg && pkg !== chatPackage) connectQuery(pkg);
+  refreshQueue();
 }
 
 // Click en el "#id" de un job (tabla de la cola): adjunta sus logs como
@@ -1494,7 +1558,14 @@ let querySocket = null;
 let chatPackage = null;   // package de la conversación actual (lo fija openJobContext o sendQuery)
 function _qAppend(cls, html){
   const log = document.getElementById('querylog');
-  log.innerHTML += `<div class="qmsg ${cls}">${html}</div>`;
+  // appendChild en vez de innerHTML += : este último re-parsea TODOS los
+  // hijos y destruye los nodos vivos (se llevaba puesto el onclick de la
+  // tarjeta de logs y dejaba su <pre> desconectado del DOM — encontrado en
+  // el E2E: tras la burbuja de "job finished" el toggle dejaba de responder).
+  const div = document.createElement('div');
+  div.className = `qmsg ${cls}`;
+  div.innerHTML = html;
+  log.appendChild(div);
   log.scrollTop = log.scrollHeight;
 }
 function connectQuery(pkg){
@@ -1524,6 +1595,9 @@ function connectQuery(pkg){
       _qAppend('qtool', T('msg.runningTool', {name: msg.data.name, args: JSON.stringify(msg.data.arguments)}));
     } else if (msg.kind === 'tool_result') {
       _qAppend('qtool', `  ↳ ${msg.data.name}: ${msg.data.result.slice(0, 400)}`);
+      // El co-piloto encoló un scan/aipwn: adoptar el contexto de esa
+      // ejecución (logs vivos en el chat + cola refrescada + explorador).
+      if (msg.data.name === 'enqueue_scan') _adoptEnqueuedJob(msg.data.result);
     } else if (msg.kind === 'image') {
       _qAppend('qtool', `<img class="qimg" src="data:image/${msg.data.format};base64,${msg.data.b64}">`);
     } else if (msg.kind === 'assistant') {
