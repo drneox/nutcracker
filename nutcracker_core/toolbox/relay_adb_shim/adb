@@ -40,8 +40,9 @@ Alcance actual: `shell` (Etapa 1), `install`/`install-multiple` (Etapa 2),
 `pull` (Etapa 4), `logcat` (Etapa 5 -- NO es streaming línea-a-línea real, ver
 docstring de _cmd_logcat: aipwn solo consume el log DESPUÉS de la ventana de
 captura de todos modos, así que alcanza con juntar todo y devolverlo en un
-solo RPC). `push` (nadie lo usa todavía en el codebase) sigue sin implementar
--- falla explícito con mensaje claro en vez de colgarse o dar un error
+solo RPC). `push` sigue sin implementar -- OJO: `device.py::setup_frida_server`
+sí usa `adb push`, así que en un job relay sin SDK local ese paso falla
+explícito con mensaje claro en vez de colgarse o dar un error
 confuso tipo "device offline" (el síntoma que llevó a este rediseño)."""
 
 from __future__ import annotations

@@ -16,7 +16,8 @@
  * `@yume-chan/fetch-scrcpy-server` NO es un módulo pre-construido: su
  * `index.js`/`server.bin` los genera el propio paquete la primera vez que se
  * corre `npx fetch-scrcpy-server <version>` (ver package.json de este
- * subproyecto, script "prebuild") -- sin ese paso, este import falla porque
+ * subproyecto: los scripts "check"/"build" lo invocan primero via
+ * "fetch-server") -- sin ese paso, este import falla porque
  * los archivos literalmente no existen todavía en node_modules/.
  *
  * Restricciones reales (no ocultar, ver README.md de este subproyecto):

@@ -197,7 +197,7 @@ def test_ws_relay_sends_ready_message_with_tunnel_ports(client):
     with client.websocket_connect("/ws/relay/test-target-1") as ws:
         msg = ws.receive_json()
         assert msg["type"] == "ready"
-        assert set(msg["ports"]) == {"frida", "adb"}
+        assert set(msg["ports"]) == {"frida"}
         assert all(isinstance(p, int) and p > 0 for p in msg["ports"].values())
 
 
@@ -226,9 +226,9 @@ def test_ws_relay_forwards_local_tcp_connection_to_client_as_open_then_bytes(cli
 def test_ws_relay_client_bytes_reach_local_tcp_connection(client):
     with client.websocket_connect("/ws/relay/test-target-3") as ws:
         ready = ws.receive_json()
-        adb_port = ready["ports"]["adb"]
+        frida_port = ready["ports"]["frida"]
 
-        sock = _open_tcp(adb_port)
+        sock = _open_tcp(frida_port)
         try:
             sock.sendall(b"hola")  # dispara el "open" del lado navegador
             open_msg = ws.receive_json()

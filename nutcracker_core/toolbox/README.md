@@ -51,11 +51,12 @@ docker build -f nutcracker_core/toolbox/docker/Dockerfile.static \
 
 ## Integración actual
 
-Por ahora, **solo `decompiler.py`** (jadx/apktool para `decompile()` y
-`extract_manifest()`) enruta a través del toolbox cuando está habilitado.
-Extender a `native_scanner.py` (nm/objdump/readelf/radare2) o
-`leak_scanner.py` (gitleaks) es sencillo con el mismo patrón (`toolbox.run()`
-con rutas absolutas), pero no está hecho todavía.
+Enrutan a través del toolbox cuando está habilitado: `decompiler.py`
+(jadx/apktool), `analyzer.py` (apkid), `leak_scanner.py` (apkleaks/gitleaks),
+`native_scanner.py` (nm/objdump/strings), `deobfuscator.py` (jadx por DEX) y
+`pipeline.py` (apktool d/b) — todos con el mismo patrón (`toolbox.run()` con
+rutas absolutas) y con fallback al binario local (`shutil.which`) cuando el
+toolbox está deshabilitado o Docker no está disponible.
 
 ## Diseño del montaje de volumen
 

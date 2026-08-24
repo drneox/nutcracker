@@ -106,9 +106,6 @@ def scan(url: str, config_path: str, source: str | None, serial: str | None,
         Path(reports_dir).mkdir(parents=True, exist_ok=True)
         pkg = url.split("id=")[-1].split("&")[0].rstrip("/")
         report = str(Path(reports_dir) / f"{pkg}.json")
-    save_pdf = bool(
-        cfg_get(config, "features", "report_pdf", default=cfg_get(config, "reports", "save_pdf", default=True))
-    )
 
     def _token_resolver(email: str, cfg: dict) -> str | None:
         """Genera el aas_token interactivamente si falta, recarga config y lo devuelve."""
@@ -135,10 +132,6 @@ def scan(url: str, config_path: str, source: str | None, serial: str | None,
             console.print(f"[red]Error:[/red] {t('cli_token_still_empty')}")
             sys.exit(1)
         return token
-
-    def _on_start(label: str) -> None:
-        _on_start._progress_ctx.__enter__()
-        _on_start._progress_ctx.add_task(t("cli_downloading_from", label=label), total=None)
 
     # Progreso para URL directa (con BarColumn) o spinner para stores
     _progress_direct: Progress | None = None

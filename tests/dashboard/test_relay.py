@@ -50,13 +50,12 @@ def _run(coro):
 
 # ── start()/stop() ──────────────────────────────────────────────────────────
 
-def test_start_opens_one_listener_per_tunnel_with_distinct_ports():
+def test_start_opens_listener_with_valid_port():
     async def body():
         session = RelaySession("s1")
         try:
             await session.start()
-            assert set(session.ports) == {"frida", "adb"}
-            assert session.ports["frida"] != session.ports["adb"]
+            assert set(session.ports) == {"frida"}
             assert all(isinstance(p, int) and p > 0 for p in session.ports.values())
         finally:
             await session.stop()
@@ -124,7 +123,7 @@ def test_local_connection_close_notifies_browser_with_close_message():
         session.attach_websocket(ws)
         try:
             reader, writer = await asyncio.open_connection(
-                "127.0.0.1", session.ports["adb"]
+                "127.0.0.1", session.ports["frida"]
             )
             await _wait_until(lambda: len(ws.sent) >= 1)
             conn_id = ws.sent[0][1]["conn_id"]
@@ -233,7 +232,7 @@ def test_handle_browser_control_closed_closes_local_connection_without_reannounc
         session.attach_websocket(ws)
         try:
             reader, writer = await asyncio.open_connection(
-                "127.0.0.1", session.ports["adb"]
+                "127.0.0.1", session.ports["frida"]
             )
             await _wait_until(lambda: len(ws.sent) >= 1)
             conn_id = ws.sent[0][1]["conn_id"]

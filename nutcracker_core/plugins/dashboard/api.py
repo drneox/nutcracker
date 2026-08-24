@@ -12,16 +12,15 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from nutcracker_core import adb_transport
+from nutcracker_core import capabilities
 from nutcracker_core.queue.engine import QueueEngine
 from nutcracker_core.store import db, repository
 
 # aipwn es un plugin opcional (repo git separado, puede no estar presente en
-# el checkout) -- import perezoso/tolerante para no romper el resto del
-# dashboard si falta.
-try:
-    from nutcracker_core.plugins.aipwn import agent_memory
-except ImportError:
-    agent_memory = None
+# el checkout) -- sus capacidades (resume de sesiones, system prompt,
+# co-piloto de consulta) se consumen vía nutcracker_core.capabilities, sin
+# importar aipwn directamente: si falta, get() devuelve None y las features
+# ligadas a él se apagan solas sin romper el resto del dashboard.
 
 from . import chat_mailbox, store_reader
 from .events import bus
@@ -439,29 +438,15 @@ def create_router(
         for j in jobs:
             if j["kind"] == "aipwn":
                 _latest_aipwn_id_by_target.setdefault(j["target"], j["id"])
+        has_resume_state = capabilities.get("aipwn.has_resume_state")
         for j in jobs:
             j["resumable"] = bool(
-                agent_memory is not None
+                has_resume_state is not None
                 and j["kind"] == "aipwn"
                 and _latest_aipwn_id_by_target.get(j["target"]) == j["id"]
-                and agent_memory.has_resume_state(j["target"])
+                and has_resume_state(j["target"])
             )
         return jobs
-
-    @router.get("/api/relay/{session_id}")
-    def relay_status(session_id: str):
-        """Estado de una sesión de relay (ver relay.py) -- el navegador debe
-        estar conectado a ``/ws/relay/{session_id}`` para que exista. Usado
-        por el frontend antes de ofrecer "encolar con relay", y por
-        ``queue_add`` para resolver ``payload.relay=True``."""
-        session = relay_manager.get(session_id)
-        if session is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"no hay sesión de relay para '{session_id}' -- conectá el "
-                       "navegador a /ws/relay/{session_id} primero (WebUSB).",
-            )
-        return {"session_id": session_id, "attached": session.attached, "ports": session.ports}
 
     @router.post("/api/relay/{session_id}/rpc/shell")
     async def relay_rpc_shell(session_id: str, payload: RelayShellPayload):
@@ -607,7 +592,8 @@ def create_router(
         conclusión de ``job_id`` (mismo target/serial) en vez de arrancar de
         cero -- ver agent_memory.save_resume_state(). Botón "+N iteraciones"
         del dashboard."""
-        if agent_memory is None:
+        has_resume_state = capabilities.get("aipwn.has_resume_state")
+        if has_resume_state is None:
             raise HTTPException(status_code=404, detail="plugin aipwn no instalado en este entorno")
         conn = _conn()
         try:
@@ -618,7 +604,7 @@ def create_router(
             raise HTTPException(status_code=404, detail="job no encontrado")
         if job["kind"] != "aipwn":
             raise HTTPException(status_code=400, detail="solo se pueden reanudar jobs 'aipwn'")
-        if not agent_memory.has_resume_state(job["target"]):
+        if not has_resume_state(job["target"]):
             raise HTTPException(
                 status_code=404,
                 detail=f"no hay sesión pendiente para reanudar de '{job['target']}'",
@@ -670,17 +656,16 @@ def create_router(
 
     @router.get("/api/agent/prompt")
     def agent_prompt():
-        try:
-            from nutcracker_core.plugins.aipwn.frida_agent import _SYSTEM_PROMPT
-        except Exception:  # noqa: BLE001
+        prompt = capabilities.get("aipwn.system_prompt")
+        if prompt is None:
             return {"available": False}
-        return {"available": True, "prompt": _SYSTEM_PROMPT}
+        return {"available": True, "prompt": prompt}
 
     @router.get("/api/query/available")
     def query_available():
         """Si el co-piloto de consulta (/ws/query, pestaña "Pentest asistido")
         puede usarse: requiere el plugin aipwn instalado y el bloque `llm:`
         de config.yaml configurado (ver plugins/aipwn/query_agent.py)."""
-        return {"available": agent_memory is not None and bool(llm_config)}
+        return {"available": capabilities.available("aipwn.query") and bool(llm_config)}
 
     return router

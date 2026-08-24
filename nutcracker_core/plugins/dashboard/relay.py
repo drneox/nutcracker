@@ -73,8 +73,11 @@ def _debug_log(message: str) -> None:
     except OSError:
         pass
 
-# Tuneles que soporta una sesión -- ver plan.md M1 (frida) / M2 (adb).
-TUNNELS = ("frida", "adb")
+# Tuneles que soporta una sesión. Solo frida: el túnel crudo de adb NO es
+# viable (ver el FIX de diseño en el docstring del módulo -- Android bloquea
+# reenviar bytes hacia el puerto de control de adbd) y fue reemplazado por
+# RPC estructurado sobre esta misma WebSocket (shell/install/pull/...).
+TUNNELS = ("frida",)
 
 
 class RelayError(Exception):

@@ -35,10 +35,8 @@ instalado en WSL para esta sesión — ver sección de fricción más abajo):
   `Promise | undefined`, no un método) — corregidos leyendo los `.d.ts` reales
   en `node_modules/@yume-chan/*/esm/*.d.ts`, exactamente para eso sirve este
   paso antes de confiar en el código.
-- `pnpm run build`: bundle real de **315.21 KB** + chunk de worker de
-  **173.49 KB** (`static/webusb-video.bundle.js` + `static/assets/worker-*.js`)
-  — coincide con el orden de magnitud documentado en `plan.md`
-  (~290-294KB + ~174KB de worker).
+- `pnpm run build`: bundle real de **~335 KB** (`static/webusb-video.bundle.js`)
+  — el decoder va por WebCodecs puro, sin chunk de worker aparte.
 - El `scrcpy-server` real (v3.3.1) queda embebido como data URI dentro del
   bundle — **verificado byte a byte**: los 90.788 bytes decodificados
   coinciden exactamente con `node_modules/@yume-chan/fetch-scrcpy-server/server.bin`.
@@ -80,7 +78,7 @@ pnpm install
 pnpm run build
 ```
 
-Esto produce `../static/webusb-video.bundle.js` (+ un chunk de worker) — el
+Esto produce `../static/webusb-video.bundle.js` — el
 `scrcpy-server` real queda embebido como data URI dentro del bundle (Vite lo
 detecta automáticamente vía el patrón `new URL(..., import.meta.url)` que usa
 `@yume-chan/fetch-scrcpy-server`), así que no hay ningún `.bin` suelto que

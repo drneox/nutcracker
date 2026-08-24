@@ -172,3 +172,78 @@ def test_second_ask_call_continues_same_conversation(tmp_path):
 
     user_messages = [m["content"] for m in agent.messages if m.get("role") == "user"]
     assert user_messages == ["primer mensaje", "segundo mensaje"]
+
+
+# ── Handoff desde corridas autónomas previas (Enfoque A) ────────────────────
+#
+# Si existen sesiones previas de `nutcracker aipwn` para el paquete
+# (aipwn_memory/<pkg>_memory.json) o un script de bypass generado
+# (frida_scripts/bypass_<pkg>_*.js), QueryAgent debe arrancar la conversación
+# con un mensaje semilla que trae ese contexto -- el operador puede pedir
+# "afina el bypass" sin que el co-piloto empiece de cero.
+
+def _seed_memory(tmp_path: Path, package: str = "com.example.app") -> None:
+    memory_dir = tmp_path / "aipwn_memory"
+    memory_dir.mkdir()
+    (memory_dir / f"{package}_memory.json").write_text(
+        json.dumps({
+            "package": package,
+            "sessions": [{
+                "date": "2026-08-20",
+                "outcome": "success",
+                "frida_runs": 2,
+                "iterations": 9,
+                "protections": ["root_detection"],
+                "working_hooks": ["RootCheck.isRooted"],
+                "failed_hooks": ["SslContext.init"],
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+
+def _seed_script(tmp_path: Path, package: str = "com.example.app") -> Path:
+    scripts_dir = tmp_path / "frida_scripts"
+    scripts_dir.mkdir(exist_ok=True)
+    script = scripts_dir / f"bypass_{package}_20260820_120000_agent.js"
+    script.write_text("Java.perform(function(){ /* bypass */ });", encoding="utf-8")
+    return script
+
+
+def test_handoff_seed_includes_memory_and_latest_script(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # aipwn_memory/ y frida_scripts/ son relativos al cwd
+    _seed_memory(tmp_path)
+    script = _seed_script(tmp_path)
+
+    agent = _make_agent(tmp_path)
+
+    assert len(agent.messages) == 2  # system + semilla
+    seed = agent.messages[1]
+    assert seed["role"] == "user"
+    assert "Past Sessions Memory" in seed["content"]
+    assert "RootCheck.isRooted" in seed["content"]
+    assert script.name in seed["content"]
+    assert "/* bypass */" in seed["content"]
+
+
+def test_handoff_seed_absent_without_previous_runs(tmp_path, monkeypatch):
+    """Sin memoria ni scripts previos, la conversación arranca solo con el
+    system prompt -- comportamiento de siempre."""
+    monkeypatch.chdir(tmp_path)
+
+    agent = _make_agent(tmp_path)
+
+    assert len(agent.messages) == 1
+    assert agent.messages[0]["role"] == "system"
+
+
+def test_handoff_seed_works_with_memory_only(tmp_path, monkeypatch):
+    """La memoria y el script son independientes: con solo memoria también hay
+    semilla (y no crashea por la ausencia del script)."""
+    monkeypatch.chdir(tmp_path)
+    _seed_memory(tmp_path)
+
+    agent = _make_agent(tmp_path)
+
+    assert len(agent.messages) == 2
+    assert "Past Sessions Memory" in agent.messages[1]["content"]

@@ -12,14 +12,10 @@ tocar el flujo JSON/PDF existente. La config se lee en el momento del hook
 from __future__ import annotations
 
 from . import db, repository
-from .db import DEFAULT_DB_PATH, connect, migrate
 from .hooks import install as install_persistence
 
 __all__ = [
     "db",
     "repository",
-    "connect",
-    "migrate",
-    "DEFAULT_DB_PATH",
     "install_persistence",
 ]
