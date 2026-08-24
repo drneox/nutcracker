@@ -56,6 +56,11 @@ read_decompiled_class, search_in_decompiled, list_classes_matching, \
 get_certificate_pins, get_app_analysis, strings_native_lib, \
 disassemble_native_lib, get_apk_signature.
 
+**Queue** (dashboard chat only): enqueue_scan (start a NEW static or aipwn run \
+for this or another package, right away) and get_job_status (check progress of \
+a queued/running job). When the operator asks to (re)run a scan, enqueue it \
+and report the job id -- do NOT tell them to go use the CLI instead.
+
 **Dynamic** (require a connected device -- serial USB or a WebUSB relay \
 session, set up by the operator before or during this chat): \
 take_screenshot, get_logcat, ui_tap, ui_input_text, ui_swipe, ui_press_key, \
@@ -221,10 +226,14 @@ class QueryAgent:
         device: "DeviceIO | None" = None,
         capture_seconds: int = 15,
         resume_messages: list[dict] | None = None,
+        enqueue_fn=None,
     ) -> None:
         self.package = package
         self.db_path = db_path
         self.device = device
+        # Callback para encolar jobs (enqueue_scan) -- la inyecta el dashboard
+        # (ws.py); None en la CLI interactiva, donde la tool avisa que no aplica.
+        self.enqueue_fn = enqueue_fn
         self.llm = LLMClient(llm_config)
         self.frida_runs_used = 0
 
@@ -372,6 +381,7 @@ class QueryAgent:
                     self.ctx, tc.name, tc.arguments,
                     db_path=self.db_path, device=self.device,
                     frida_iteration=self.frida_runs_used + 1,
+                    enqueue_fn=self.enqueue_fn,
                 )
                 self.messages.append(_tool_result_message(tc, result))
                 console.print(f"[dim]{self._log_prefix}   ↳ {_escape(result[:500])}[/dim]")

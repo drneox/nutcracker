@@ -327,6 +327,58 @@ _QUERY_TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "enqueue_scan",
+            "description": (
+                "Enqueue a NEW analysis job in the nutcracker queue and start it right "
+                "away: kind='static' runs the static pipeline (decompile + semgrep/regex "
+                "+ manifest + secrets), kind='aipwn' runs the autonomous bypass/"
+                "exploitation agent. Default target is this chat's package. Use this "
+                "when the operator asks to (re)run a scan from the chat -- e.g. after "
+                "refining a bypass, to re-verify with a fresh run. Returns the job id; "
+                "follow progress with get_job_status. Only available from the dashboard "
+                "chat (the interactive CLI has no queue engine)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Package id (or path to a local .apk). Empty = this chat's package.",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "description": "'static' (default) or 'aipwn'.",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Only for kind='static' with a package id: 'device' extracts the APK from the connected device, 'store' forces store download. Empty = automatic.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_job_status",
+            "description": (
+                "Get queue job status: one job by id, or the 5 most recent jobs when "
+                "omitted. Each job has id, target, kind, status (queued/running/done/"
+                "error), timestamps, and error text when it failed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "integer", "description": "Job id, e.g. the one returned by enqueue_scan. Empty = 5 most recent."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "take_screenshot",
             "description": (
                 "Capture the current device screen (via the device connection of this "
@@ -669,6 +721,58 @@ def tool_get_exploit_results(ctx: ToolContext) -> str:
     return json.dumps(report, default=str)
 
 
+# ── Tools nuevas: cola de análisis (enqueue_scan / get_job_status) ──────────
+
+def tool_enqueue_scan(
+    ctx: ToolContext,
+    enqueue_fn,
+    target: str = "",
+    kind: str = "static",
+    source: str = "",
+) -> str:
+    """Encola un job nuevo vía la callback que inyecta el dashboard (engine.
+    submit + drain en background -- ver server.py). ``enqueue_fn`` es None en
+    la CLI interactiva: ahí no hay motor de cola y la tool lo dice claro en
+    vez de fallar raro."""
+    if enqueue_fn is None:
+        return json.dumps({
+            "error": "encolar jobs solo está disponible desde el chat del dashboard "
+                     "(la CLI interactiva no tiene motor de cola).",
+        })
+    target = (target or ctx.package).strip()
+    if kind not in ("static", "aipwn"):
+        return json.dumps({"error": f"kind inválido: {kind!r} -- usar 'static' o 'aipwn'"})
+    source = source.strip() or None
+    if source not in (None, "device", "store"):
+        return json.dumps({"error": f"source inválido: {source!r} -- usar 'device', 'store' o vacío"})
+    try:
+        job = enqueue_fn(target=target, kind=kind, serial=ctx.serial, source=source)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    except Exception as exc:  # noqa: BLE001 -- el LLM necesita ver el motivo para ajustar
+        return json.dumps({"error": f"no se pudo encolar: {exc}"})
+    return json.dumps({
+        "job_id": job.db_id, "target": target, "kind": kind, "status": "queued",
+        "note": "el job arranca en cuanto la cola lo tome -- seguilo con get_job_status",
+    })
+
+
+def tool_get_job_status(db_path: str, job_id: int | None = None) -> str:
+    from nutcracker_core.store import db, repository
+
+    conn = db.connect(db_path)
+    try:
+        if job_id is not None:
+            row = repository.get_job(conn, int(job_id))
+            if row is None:
+                return json.dumps({"error": f"no existe el job {job_id}"})
+            return json.dumps({"job": dict(row)}, default=str)
+        rows = repository.list_jobs(conn, limit=5)
+        return json.dumps({"jobs": [dict(r) for r in rows]}, default=str)
+    finally:
+        conn.close()
+
+
 # ── Tools nuevas: pantalla + interacción de UI (via DeviceIO) ───────────────
 
 def tool_take_screenshot(device: "DeviceIO | None") -> str:
@@ -895,6 +999,7 @@ def dispatch_query_tool(
     db_path: str,
     device: "DeviceIO | None" = None,
     frida_iteration: int = 1,
+    enqueue_fn=None,
 ) -> str:
     """Ejecuta la herramienta ``name`` y devuelve el resultado como string
     (JSON en casi todos los casos) para agregar al historial de mensajes.
@@ -925,6 +1030,15 @@ def dispatch_query_tool(
             return tool_list_secrets(ctx)
         if name == "get_exploit_results":
             return tool_get_exploit_results(ctx)
+        if name == "enqueue_scan":
+            return tool_enqueue_scan(
+                ctx, enqueue_fn,
+                target=arguments.get("target", ""),
+                kind=arguments.get("kind", "static"),
+                source=arguments.get("source", ""),
+            )
+        if name == "get_job_status":
+            return tool_get_job_status(db_path, job_id=arguments.get("job_id"))
         if name == "take_screenshot":
             return tool_take_screenshot(device)
         if name == "get_logcat":
