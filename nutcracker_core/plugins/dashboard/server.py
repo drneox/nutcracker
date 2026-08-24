@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from nutcracker_core.queue.engine import QueueEngine
 
 from . import ws
-from .api import create_router
+from .api import _drain_in_background, create_router
 from .auth import AuthConfig, AuthMiddleware
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -48,6 +48,15 @@ def create_app(
     # Config del co-piloto de consulta (/ws/query, ver plugins/aipwn/query_agent.py)
     # -- ``llm_config`` es el mismo bloque `llm:` de config.yaml que ya usa aipwn.
     ws.set_query_config(llm_config, db_path)
+
+    # Tool enqueue_scan del co-piloto: encola vía el engine real y arranca el
+    # drain en background (mismo patrón que POST /api/queue con run_now=true).
+    def _enqueue_from_chat(target: str, kind: str, serial: str | None, source: str | None):
+        job = engine.submit(target, kind=kind, serial=serial, source=source)
+        _drain_in_background(engine)
+        return job
+
+    ws.set_query_enqueue(_enqueue_from_chat)
     # Replay de logs persistidos para /ws/jobs/{id} cuando el EventBus ya no
     # tiene el historial (reinicio a mitad de corrida) -- mismo directorio
     # donde el engine escribe (engine.log_dir).

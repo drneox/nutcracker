@@ -320,3 +320,93 @@ def test_resume_messages_copies_the_list(tmp_path):
     assert agent.messages is not history
     assert len(history) == 2  # el reemplazo del system prompt no toca el original
     assert history[0]["content"] == "OLD"
+
+
+# ── Tools de cola: enqueue_scan / get_job_status ─────────────────────────────
+# El co-piloto puede encolar corridas nuevas (static/aipwn) y consultar su
+# estado -- la callback de enqueue la inyecta el dashboard (ws.py/server.py);
+# sin ella (CLI interactiva) la tool avisa que no aplica en vez de fallar raro.
+
+def test_enqueue_scan_without_engine_returns_clear_error(tmp_path):
+    from nutcracker_core.plugins.aipwn.query_tools import dispatch_query_tool
+
+    agent = _make_agent(tmp_path)
+    result = dispatch_query_tool(agent.ctx, "enqueue_scan", {}, db_path=agent.db_path)
+
+    error = json.loads(result)["error"]
+    assert "dashboard" in error
+
+
+def test_enqueue_scan_defaults_to_chat_package_and_reports_job_id(tmp_path):
+    from types import SimpleNamespace
+
+    from nutcracker_core.plugins.aipwn.query_tools import dispatch_query_tool
+
+    agent = _make_agent(tmp_path)
+    calls = {}
+
+    def fake_enqueue(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(db_id=42)
+
+    result = dispatch_query_tool(
+        agent.ctx, "enqueue_scan", {"kind": "aipwn"},
+        db_path=agent.db_path, enqueue_fn=fake_enqueue,
+    )
+
+    payload = json.loads(result)
+    assert payload["job_id"] == 42
+    assert payload["target"] == "com.example.app"
+    assert payload["kind"] == "aipwn"
+    assert calls == {"target": "com.example.app", "kind": "aipwn", "serial": None, "source": None}
+
+
+def test_enqueue_scan_rejects_invalid_kind_without_calling_engine(tmp_path):
+    from nutcracker_core.plugins.aipwn.query_tools import dispatch_query_tool
+
+    agent = _make_agent(tmp_path)
+    called = False
+
+    def fake_enqueue(**kwargs):
+        nonlocal called
+        called = True
+
+    result = dispatch_query_tool(
+        agent.ctx, "enqueue_scan", {"kind": "dynamic"},
+        db_path=agent.db_path, enqueue_fn=fake_enqueue,
+    )
+
+    assert "kind" in json.loads(result)["error"]
+    assert not called
+
+
+def test_get_job_status_by_id_and_recent(tmp_path):
+    from nutcracker_core.plugins.aipwn.query_tools import dispatch_query_tool
+    from nutcracker_core.store import db, repository
+
+    db_path = str(tmp_path / "q.db")
+    conn = db.connect(db_path)
+    job_id = repository.enqueue_job(conn, target="com.example.app", kind="static")
+    conn.close()
+
+    agent = _make_agent(tmp_path)
+    one = json.loads(dispatch_query_tool(
+        agent.ctx, "get_job_status", {"job_id": job_id}, db_path=db_path,
+    ))
+    assert one["job"]["id"] == job_id
+    assert one["job"]["status"] == "queued"
+
+    recent = json.loads(dispatch_query_tool(
+        agent.ctx, "get_job_status", {}, db_path=db_path,
+    ))
+    assert any(j["id"] == job_id for j in recent["jobs"])
+
+
+def test_get_job_status_unknown_id_returns_error(tmp_path):
+    from nutcracker_core.plugins.aipwn.query_tools import dispatch_query_tool
+
+    agent = _make_agent(tmp_path)
+    result = dispatch_query_tool(
+        agent.ctx, "get_job_status", {"job_id": 999}, db_path=str(tmp_path / "q.db"),
+    )
+    assert "999" in json.loads(result)["error"]

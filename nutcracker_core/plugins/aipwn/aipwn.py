@@ -28,7 +28,17 @@ from rich.rule import Rule
 from nutcracker_core.i18n import t
 
 from .frida_agent import FridaAgent, AgentResult
-from .frida_capture import FridaRunResult, check_app_installed, launch_frida_capture
+from .frida_capture import (
+    FridaRunResult,
+    any_device_online,
+    check_app_installed,
+    check_device_healthy,
+    find_emulator_binary,
+    launch_frida_capture,
+    list_avds,
+    reboot_device_and_wait,
+    start_emulator_and_wait,
+)
 
 if TYPE_CHECKING:
     from nutcracker_core.analyzer import AnalysisResult
@@ -243,8 +253,32 @@ def _run_aipwn_inner(
         console.print(f"  {t('aipwn_serial')}:     {serial}")
     console.print()
 
-    # ── Paso 0: verificar que la app está instalada; si no, descargar e instalar ─
+    # ── Paso 0a: asegurar dispositivo; auto-start del emulador si aplica ─────
+    # Si no hay NINGÚN dispositivo online y la config apunta a emulador
+    # (strategies.runtime_target: emulator), levantar el AVD solos en vez de
+    # morir después contra un "no device". AVD: strategies.default_emulator_avd,
+    # o el primero de la lista si hay uno solo/no está configurado.
     _adb = shutil.which("adb")
+    if _adb and not any_device_online(_adb):
+        _strategies = config.get("strategies", {})
+        if str(_strategies.get("runtime_target", "")).strip() == "emulator":
+            _emu_bin = find_emulator_binary()
+            _avds = list_avds(_emu_bin) if _emu_bin else []
+            _avd = str(_strategies.get("default_emulator_avd", "")).strip() or (
+                _avds[0] if _avds else ""
+            )
+            if _emu_bin and _avd:
+                console.print(f"[dim][aipwn] {t('aipwn_emulator_starting', avd=_avd)}[/dim]")
+                _booted = start_emulator_and_wait(_emu_bin, _avd, _adb)
+                if _booted:
+                    serial = serial or _booted
+                    console.print(f"[green][aipwn] {t('aipwn_emulator_started', serial=_booted)}[/green]")
+                else:
+                    console.print(f"[yellow][aipwn] {t('aipwn_emulator_start_failed')}[/yellow]")
+            else:
+                console.print(f"[yellow][aipwn] {t('aipwn_emulator_not_found')}[/yellow]")
+
+    # ── Paso 0: verificar que la app está instalada; si no, descargar e instalar ─
     if _adb:
         _adb_base = [_adb] + (["--", "-s", serial] if serial else [])
         # normalizar: -s debe ir antes de shell, no con --
@@ -273,6 +307,24 @@ def _run_aipwn_inner(
                     last_frida_result=None,
                 )
             console.print(f"[green][aipwn] {t('aipwn_auto_install_ok', package=package)}[/green]")
+
+    # ── Paso 0b: health check del emulador (system_server vivo) ──────────────
+    # Un system_server muerto hace fallar TODO spawn con DeadSystemException
+    # (job 18, 2026-08-24: el agente quemó 11 iteraciones contra un emulador
+    # muerto y la app nunca levantó). Mejor rebootear acá al inicio — solo
+    # emuladores locales; un físico jamás se rebootea automáticamente.
+    if _adb and serial and serial.startswith("emulator-") and not check_device_healthy(_adb_base):
+        console.print(f"[yellow][aipwn] {t('aipwn_device_unhealthy')}[/yellow]")
+        if reboot_device_and_wait(_adb_base):
+            console.print(f"[green][aipwn] {t('aipwn_device_recovered')}[/green]")
+        else:
+            msg = t('aipwn_device_recovery_failed')
+            console.print(f"[red][aipwn] {msg}[/red]")
+            return AgentResult(
+                success=False, script_path=None, explanation=msg,
+                failure_reason=msg, frida_runs=0, iterations=0,
+                last_frida_result=None,
+            )
 
     # ── Paso 1: intentar script previo ───────────────────────────────────────
     # Se salta también al reanudar: no tiene sentido re-probar un script viejo

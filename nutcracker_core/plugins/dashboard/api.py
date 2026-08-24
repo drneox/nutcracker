@@ -367,6 +367,46 @@ def create_router(
         steps.append("kill-server → start-server")
         return {"ok": _alive() if serial else True, "steps": steps}
 
+    # Keycodes aceptados por la botonera del panel Dispositivo (navegación de
+    # la UI del device). Whitelist cerrada: el valor termina como argumento de
+    # `input keyevent` en un shell adb.
+    _ALLOWED_KEYCODES = frozenset({
+        "BACK", "HOME", "APP_SWITCH", "ENTER", "DEL", "TAB",
+        "POWER", "VOLUME_UP", "VOLUME_DOWN", "MUTE",
+    })
+    _SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
+
+    @router.post("/api/device/key")
+    def device_key(serial: str, keycode: str):
+        """Envía un keyevent al device (``adb shell input keyevent``) -- los
+        botones ◀ 🏠 ▦ de la botonera del panel Dispositivo. Solo aplica a
+        devices alcanzables por el adb del backend (emulador/red); en modo USB
+        directo el cable lo tiene el navegador y el frontend ni siquiera
+        habilita los botones."""
+        if not serial or not _SERIAL_RE.match(serial):
+            raise HTTPException(status_code=400, detail="serial inválido")
+        keycode = keycode.strip().upper()
+        if keycode not in _ALLOWED_KEYCODES and not keycode.isdigit():
+            raise HTTPException(status_code=400, detail=f"keycode no permitido: {keycode!r}")
+        adb = shutil.which("adb")
+        if not adb:
+            raise HTTPException(status_code=503, detail="adb no está instalado en el backend")
+        try:
+            proc = subprocess.run(
+                [adb, "-s", serial, "shell", "input", "keyevent", keycode],
+                capture_output=True, timeout=5,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(status_code=504, detail="keyevent timeout") from exc
+        except OSError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if proc.returncode != 0:
+            raise HTTPException(
+                status_code=502,
+                detail=proc.stderr.decode(errors="replace").strip() or "keyevent falló",
+            )
+        return {"ok": True, "serial": serial, "keycode": keycode}
+
     # ── Explorador del decompilado (workbench IDE del dashboard) ─────────────
     # Sirve el árbol de decompiled/<package>/ (jadx) y runtime_dump_<package>/
     # (FART) directo de disco. Carga perezosa por directorio (un árbol plano de
@@ -792,6 +832,18 @@ def create_router(
                 detail="job no encontrado o ya no está en estado 'queued'",
             )
         return {"deleted": True}
+
+    @router.post("/api/queue/{job_id}/cancel")
+    def queue_cancel(job_id: int):
+        """Cancela un job: si está 'queued' lo borra de la cola; si está
+        'running' le manda SIGTERM a su subproceso (solo alcanzable si corre
+        en este proceso -- ver QueueEngine.cancel). Botón ■ de la tarjeta de
+        logs en el chat."""
+        try:
+            result = engine.cancel(job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"job_id": job_id, "result": result}
 
     @router.post("/api/queue/{job_id}/resume-aipwn")
     def queue_resume_aipwn(job_id: int, extra_iterations: int = 5):

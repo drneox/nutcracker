@@ -1060,3 +1060,90 @@ def test_without_log_dir_does_not_write_files(monkeypatch, tmp_path, engine):
     engine.drain()
 
     assert list(tmp_path.glob("job-*")) == []
+
+
+# ── Cancelación de jobs (botón ■ de la tarjeta de logs del dashboard) ───────
+# engine.cancel(): 'queued' → borra de la cola; 'running' con subproceso en
+# este proceso (modo streaming) → SIGTERM y la fila queda error="cancelled by
+# operator"; ya terminado / inexistente / en otro proceso → ValueError.
+
+def test_cancel_queued_job_deletes_it(engine, tmp_path):
+    job = engine.submit(str(_touch_apk(tmp_path, "queued.apk")), kind="static")
+
+    assert engine.cancel(job.db_id) == "deleted"
+
+    conn = db.connect(engine.db_path)
+    try:
+        assert repository.get_job(conn, job.db_id) is None
+    finally:
+        conn.close()
+    assert engine._pending == []
+
+
+def test_cancel_running_job_terminates_subprocess(monkeypatch, tmp_path, engine):
+    """Modo streaming (dashboard): cancel() le manda SIGTERM al Popen real y
+    _run_job registra el motivo real en vez del resumen de la salida cortada."""
+    engine.on_line = lambda job_id, line: None
+    monkeypatch.setattr(
+        "nutcracker_core.queue.engine.orch.build_job_cmd",
+        lambda *a, **kw: ["sleep", "30"],
+    )
+    job = engine.submit(str(_touch_apk(tmp_path, "running.apk")), kind="static")
+
+    t = threading.Thread(target=engine.drain)
+    t.start()
+    # Esperar a que el subproceso esté registrado (job efectivamente corriendo).
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with engine._procs_guard:
+            registered = job.db_id in engine._procs
+        if registered:
+            break
+        time.sleep(0.05)
+    else:
+        t.join(timeout=5)
+        pytest.fail("el subproceso del job nunca se registró en _procs")
+
+    assert engine.cancel(job.db_id) == "terminated"
+
+    t.join(timeout=15)
+    assert not t.is_alive(), "drain no volvió tras el SIGTERM"
+    conn = db.connect(engine.db_path)
+    try:
+        row = repository.get_job(conn, job.db_id)
+    finally:
+        conn.close()
+    assert row["status"] == "error"
+    assert row["error"] == "cancelled by operator"
+
+
+def test_cancel_finished_job_raises(monkeypatch, tmp_path, engine):
+    def fake_run(cmd, env=None, capture_output=True, text=True):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.run", fake_run)
+    job = engine.submit(str(_touch_apk(tmp_path, "done.apk")), kind="static")
+    engine.drain()
+
+    with pytest.raises(ValueError, match="ya terminó"):
+        engine.cancel(job.db_id)
+
+
+def test_cancel_nonexistent_job_raises(engine):
+    with pytest.raises(ValueError, match="no existe"):
+        engine.cancel(99999)
+
+
+def test_cancel_running_job_in_another_process_raises(engine, tmp_path):
+    """La fila dice 'running' pero _procs no tiene el subproceso (corre en
+    otro proceso, p.ej. un `nutcracker serve` distinto): cancel() no finge
+    éxito -- ValueError con mensaje claro."""
+    conn = db.connect(engine.db_path)
+    try:
+        job_id = repository.enqueue_job(conn, "com.example.app", kind="aipwn")
+        repository.update_job_status(conn, job_id, "running")
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError, match="no se puede cancelar"):
+        engine.cancel(job_id)

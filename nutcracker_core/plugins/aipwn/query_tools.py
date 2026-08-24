@@ -163,6 +163,16 @@ _RUNTIME_DEVICE_TOOL_NAMES: frozenset[str] = frozenset({
     "setup_mitm_proxy", "teardown_mitm_proxy",
 })
 
+# Subconjunto de _RUNTIME_DEVICE_TOOL_NAMES que INTERFIERE con una corrida
+# autónoma de aipwn sobre el mismo dispositivo: las que attachean Frida al
+# proceso o inyectan input a la UI (aipwn hace spawn-gating y mata/relaunch
+# de la app -- un attach o un tap concurrente rompe su corrida, y viceversa).
+# take_screenshot y get_logcat quedan FUERA a propósito: son solo lectura,
+# no molestan a la corrida en curso.
+_DEVICE_INTERFERING_TOOL_NAMES: frozenset[str] = _RUNTIME_DEVICE_TOOL_NAMES - {
+    "take_screenshot", "get_logcat",
+}
+
 
 # Tools dinámicas que SÍ saben usar el device conectado por relay (nunca
 # shellean a un `adb` local): las de UI/pantalla propias (siempre via
@@ -227,6 +237,48 @@ def _check_device_ready(ctx: ToolContext, device: "DeviceIO | None", name: str) 
             "ninguna herramienta dinámica (Frida/ADB) puede funcionar hasta que se "
             "instale, sin importar el dispositivo conectado. No tiene sentido "
             "reintentar otras herramientas dinámicas por este mismo motivo."
+        )
+    return None
+
+
+def _check_running_aipwn_job(ctx: ToolContext, db_path: str | None, name: str) -> str | None:
+    """Gate de interferencia chat vs. cola: si hay un job ``aipwn`` corriendo
+    sobre el mismo package (y mismo dispositivo, cuando ambos serials se
+    conocen), rechaza las tools que MUTAN el device -- el job autónomo es
+    dueño del proceso mientras corre (spawn-gating, kill/relaunch de la app)
+    y un attach de Frida o un tap concurrente rompe su corrida. El chat sigue
+    pudiendo usar tools estáticas y de solo lectura (screenshot/logcat).
+
+    Fail-open a propósito: si la cola no se puede leer, no bloquea -- el
+    peor caso es el comportamiento de siempre, no un chat inutilizable."""
+    if name not in _DEVICE_INTERFERING_TOOL_NAMES or not db_path:
+        return None
+    try:
+        from nutcracker_core.store import db, repository
+        conn = db.connect(db_path)
+        try:
+            rows = repository.list_jobs(conn, status="running", limit=20)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 -- la cola es best-effort, nunca rompe la tool
+        return None
+    for row in rows:
+        if row["kind"] != "aipwn":
+            continue
+        if (row["package"] or row["target"] or "") != ctx.package:
+            continue
+        job_serial = row["serial"]
+        if job_serial and ctx.serial and job_serial != ctx.serial:
+            continue  # otro dispositivo -- no hay interferencia real
+        return (
+            f"hay un job aipwn corriendo sobre {ctx.package} (job #{row['id']}) -- "
+            "las acciones que modifican el dispositivo están bloqueadas hasta que "
+            "termine para no interferir con la corrida autónoma (el job mata y "
+            "relanza la app, cualquier attach o tap concurrente la rompe). Mientras "
+            "tanto puedes usar las tools estáticas (findings, decompilado, secrets) "
+            "o de solo lectura (take_screenshot, get_logcat); si el operador quiere "
+            "retomar el control del device antes, que detenga el job o espere a que "
+            "finalice."
         )
     return None
 
@@ -322,6 +374,58 @@ _QUERY_TOOL_SCHEMAS: list[dict] = [
                 "ones, from the most recent aipwn run."
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "enqueue_scan",
+            "description": (
+                "Enqueue a NEW analysis job in the nutcracker queue and start it right "
+                "away: kind='static' runs the static pipeline (decompile + semgrep/regex "
+                "+ manifest + secrets), kind='aipwn' runs the autonomous bypass/"
+                "exploitation agent. Default target is this chat's package. Use this "
+                "when the operator asks to (re)run a scan from the chat -- e.g. after "
+                "refining a bypass, to re-verify with a fresh run. Returns the job id; "
+                "follow progress with get_job_status. Only available from the dashboard "
+                "chat (the interactive CLI has no queue engine)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Package id (or path to a local .apk). Empty = this chat's package.",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "description": "'static' (default) or 'aipwn'.",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Only for kind='static' with a package id: 'device' extracts the APK from the connected device, 'store' forces store download. Empty = automatic.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_job_status",
+            "description": (
+                "Get queue job status: one job by id, or the 5 most recent jobs when "
+                "omitted. Each job has id, target, kind, status (queued/running/done/"
+                "error), timestamps, and error text when it failed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "integer", "description": "Job id, e.g. the one returned by enqueue_scan. Empty = 5 most recent."},
+                },
+                "required": [],
+            },
         },
     },
     {
@@ -669,6 +773,58 @@ def tool_get_exploit_results(ctx: ToolContext) -> str:
     return json.dumps(report, default=str)
 
 
+# ── Tools nuevas: cola de análisis (enqueue_scan / get_job_status) ──────────
+
+def tool_enqueue_scan(
+    ctx: ToolContext,
+    enqueue_fn,
+    target: str = "",
+    kind: str = "static",
+    source: str = "",
+) -> str:
+    """Encola un job nuevo vía la callback que inyecta el dashboard (engine.
+    submit + drain en background -- ver server.py). ``enqueue_fn`` es None en
+    la CLI interactiva: ahí no hay motor de cola y la tool lo dice claro en
+    vez de fallar raro."""
+    if enqueue_fn is None:
+        return json.dumps({
+            "error": "encolar jobs solo está disponible desde el chat del dashboard "
+                     "(la CLI interactiva no tiene motor de cola).",
+        })
+    target = (target or ctx.package).strip()
+    if kind not in ("static", "aipwn"):
+        return json.dumps({"error": f"kind inválido: {kind!r} -- usar 'static' o 'aipwn'"})
+    source = source.strip() or None
+    if source not in (None, "device", "store"):
+        return json.dumps({"error": f"source inválido: {source!r} -- usar 'device', 'store' o vacío"})
+    try:
+        job = enqueue_fn(target=target, kind=kind, serial=ctx.serial, source=source)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    except Exception as exc:  # noqa: BLE001 -- el LLM necesita ver el motivo para ajustar
+        return json.dumps({"error": f"no se pudo encolar: {exc}"})
+    return json.dumps({
+        "job_id": job.db_id, "target": target, "kind": kind, "status": "queued",
+        "note": "el job arranca en cuanto la cola lo tome -- seguilo con get_job_status",
+    })
+
+
+def tool_get_job_status(db_path: str, job_id: int | None = None) -> str:
+    from nutcracker_core.store import db, repository
+
+    conn = db.connect(db_path)
+    try:
+        if job_id is not None:
+            row = repository.get_job(conn, int(job_id))
+            if row is None:
+                return json.dumps({"error": f"no existe el job {job_id}"})
+            return json.dumps({"job": dict(row)}, default=str)
+        rows = repository.list_jobs(conn, limit=5)
+        return json.dumps({"jobs": [dict(r) for r in rows]}, default=str)
+    finally:
+        conn.close()
+
+
 # ── Tools nuevas: pantalla + interacción de UI (via DeviceIO) ───────────────
 
 def tool_take_screenshot(device: "DeviceIO | None") -> str:
@@ -895,6 +1051,7 @@ def dispatch_query_tool(
     db_path: str,
     device: "DeviceIO | None" = None,
     frida_iteration: int = 1,
+    enqueue_fn=None,
 ) -> str:
     """Ejecuta la herramienta ``name`` y devuelve el resultado como string
     (JSON en casi todos los casos) para agregar al historial de mensajes.
@@ -902,6 +1059,12 @@ def dispatch_query_tool(
     ``{"error": ...}`` para que el LLM la vea y pueda reintentar/ajustar."""
     try:
         if name in _RUNTIME_DEVICE_TOOL_NAMES:
+            # Primero el gate de interferencia (mensaje más accionable: "hay
+            # un job corriendo, esperá o detenelo"), después el preflight de
+            # pipeline de dispositivo (genérico: "no hay device/adb").
+            conflict_error = _check_running_aipwn_job(ctx, db_path, name)
+            if conflict_error:
+                return json.dumps({"error": conflict_error})
             device_error = _check_device_ready(ctx, device, name)
             if device_error:
                 return json.dumps({"error": device_error})
@@ -925,6 +1088,15 @@ def dispatch_query_tool(
             return tool_list_secrets(ctx)
         if name == "get_exploit_results":
             return tool_get_exploit_results(ctx)
+        if name == "enqueue_scan":
+            return tool_enqueue_scan(
+                ctx, enqueue_fn,
+                target=arguments.get("target", ""),
+                kind=arguments.get("kind", "static"),
+                source=arguments.get("source", ""),
+            )
+        if name == "get_job_status":
+            return tool_get_job_status(db_path, job_id=arguments.get("job_id"))
         if name == "take_screenshot":
             return tool_take_screenshot(device)
         if name == "get_logcat":

@@ -158,6 +158,39 @@ def test_device_screenshot_without_adb_is_503(client, monkeypatch):
     assert r.status_code == 503
 
 
+def test_device_key_sends_keyevent(client, monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = client.post("/api/device/key?serial=emulator-5554&keycode=BACK")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "serial": "emulator-5554", "keycode": "BACK"}
+    assert captured["cmd"] == ["/usr/bin/adb", "-s", "emulator-5554", "shell", "input", "keyevent", "BACK"]
+
+
+def test_device_key_rejects_unknown_keycode(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    r = client.post("/api/device/key?serial=emulator-5554&keycode=RM%20-RF")
+    assert r.status_code == 400
+
+
+def test_device_key_rejects_invalid_serial(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    r = client.post("/api/device/key?serial=%24%28id%29&keycode=BACK")
+    assert r.status_code == 400
+
+
+def test_device_key_without_adb_is_503(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = client.post("/api/device/key?serial=emulator-5554&keycode=HOME")
+    assert r.status_code == 503
+
+
 # ── /api/decompiled/* -- explorador del decompilado (workbench IDE) ─────────
 
 @pytest.fixture

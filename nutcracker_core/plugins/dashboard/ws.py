@@ -41,6 +41,12 @@ _query_db_path: str | None = None
 # (reinicio del dashboard a mitad de corrida). None = sin fallback (tests).
 _job_log_dir: str | None = None
 
+# Callback para encolar jobs desde el chat del co-piloto (tool enqueue_scan,
+# ver plugins/aipwn/query_tools.py) -- la construye server.create_app() con
+# el QueueEngine real (submit + drain en background). None = chat sin cola
+# (tests o CLI interactiva): la tool responde con un error claro.
+_query_enqueue_fn = None
+
 
 def set_auth(auth: "AuthConfig | None") -> None:
     global _auth
@@ -51,6 +57,11 @@ def set_query_config(llm_config: dict | None, db_path: str | None) -> None:
     global _query_llm_config, _query_db_path
     _query_llm_config = llm_config
     _query_db_path = db_path
+
+
+def set_query_enqueue(enqueue_fn) -> None:
+    global _query_enqueue_fn
+    _query_enqueue_fn = enqueue_fn
 
 
 def set_job_log_dir(log_dir: str | None) -> None:
@@ -120,6 +131,22 @@ async def ws_job(websocket: WebSocket, job_id: str) -> None:
                                 chunk = []
                         if chunk:
                             await websocket.send_json({"kind": "log", "data": "\n".join(chunk)})
+            # El replay desde disco no incluye el evento de status final -- ese
+            # solo existe en el EventBus en memoria del proceso que corrió el
+            # job. Sin esto, tras un reinicio del dashboard un job terminado
+            # queda con pill "running" (y botón ■ activo) para siempre.
+            # db.connect(None) cae en DEFAULT_DB_PATH -- _query_db_path puede
+            # ser None si la config no fija un path explícito.
+            if job_id.isdigit():
+                from nutcracker_core.store import db as _db, repository as _repo
+                conn = _db.connect(_query_db_path)
+                try:
+                    row = _repo.get_job(conn, int(job_id))
+                finally:
+                    conn.close()
+                if row is not None and row["status"] != "running":
+                    await websocket.send_json(
+                        {"kind": "status", "data": {"status": row["status"]}})
 
         while True:
             try:
@@ -306,6 +333,7 @@ async def ws_query(websocket: WebSocket, package: str) -> None:
         serial=serial if not use_relay else None,
         frida_host=frida_host,
         device=device,
+        enqueue_fn=_query_enqueue_fn,
         **agent_kwargs,
     )
 

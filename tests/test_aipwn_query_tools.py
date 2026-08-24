@@ -572,3 +572,112 @@ def test_dispatch_query_tool_get_frida_output_history_ignores_preflight(tmp_path
     )
     # No es el mensaje del preflight de device -- distinto código de error/negocio.
     assert "no hay ningún dispositivo conectado a esta sesión de chat" not in result
+
+
+# ── Gate de interferencia chat vs. job aipwn corriendo ──────────────────────
+# Mientras un job aipwn autónomo corre sobre un package, es dueño del device
+# (spawn-gating, kill/relaunch de la app): las tools del chat que MUTAN el
+# device (Frida attach, input de UI, MITM) se rechazan con un error claro;
+# las de solo lectura (screenshot/logcat) y las estáticas siguen pasando.
+
+def _running_aipwn_job(db_file: str, package: str, serial: str | None = None,
+                       kind: str = "aipwn", status: str = "running") -> int:
+    conn = db.connect(db_file)
+    try:
+        job_id = repository.enqueue_job(conn, package, kind=kind, serial=serial)
+        repository.update_job_status(conn, job_id, status)
+    finally:
+        conn.close()
+    return job_id
+
+
+def test_gate_blocks_mutating_tool_when_aipwn_running(tmp_path):
+    db_file = str(tmp_path / "x.db")
+    job_id = _running_aipwn_job(db_file, "com.example.app")
+    ctx = _make_ctx("com.example.app")
+
+    result = json.loads(dispatch_query_tool(
+        ctx, "ui_tap", {"x": 1, "y": 2}, db_path=db_file, device=None,
+    ))
+
+    assert "error" in result
+    assert f"job #{job_id}" in result["error"]
+    assert "aipwn corriendo" in result["error"]
+
+
+def test_gate_allows_readonly_screenshot_while_running(tmp_path):
+    """take_screenshot es solo lectura: el gate la deja pasar (cae en el
+    preflight normal de device, NO en el mensaje de interferencia)."""
+    db_file = str(tmp_path / "x.db")
+    _running_aipwn_job(db_file, "com.example.app")
+    ctx = _make_ctx("com.example.app")
+
+    result = json.loads(dispatch_query_tool(
+        ctx, "take_screenshot", {}, db_path=db_file, device=None,
+    ))
+
+    assert "aipwn corriendo" not in result.get("error", "")
+    assert "no hay ningún dispositivo" in result["error"]
+
+
+def test_gate_ignores_job_of_another_package(tmp_path):
+    db_file = str(tmp_path / "x.db")
+    _running_aipwn_job(db_file, "com.other.app")
+    ctx = _make_ctx("com.example.app")
+
+    result = json.loads(dispatch_query_tool(
+        ctx, "ui_tap", {"x": 1, "y": 2}, db_path=db_file, device=None,
+    ))
+
+    assert "aipwn corriendo" not in result.get("error", "")
+
+
+def test_gate_ignores_job_on_another_serial(tmp_path):
+    """Mismo package pero el job corre en OTRO dispositivo: no hay
+    interferencia real -- la tool pasa el gate."""
+    db_file = str(tmp_path / "x.db")
+    _running_aipwn_job(db_file, "com.example.app", serial="EMU-1")
+    ctx = ToolContext(
+        package="com.example.app",
+        decompiled_dir=None,
+        analysis_result=None,
+        serial="USB-2",
+        capture_seconds=15,
+        scripts_dir=Path("/tmp"),
+        on_frida_run=lambda script_js, rationale, iteration: None,
+    )
+
+    result = json.loads(dispatch_query_tool(
+        ctx, "ui_tap", {"x": 1, "y": 2}, db_path=db_file, device=None,
+    ))
+
+    assert "aipwn corriendo" not in result.get("error", "")
+
+
+def test_gate_ignores_non_aipwn_kinds_and_finished_jobs(tmp_path):
+    db_file = str(tmp_path / "x.db")
+    # Un scan estático corriendo no es dueño del device...
+    _running_aipwn_job(db_file, "com.example.app", kind="static")
+    # ...y un job aipwn ya terminado tampoco.
+    _running_aipwn_job(db_file, "com.example.app", status="done")
+    ctx = _make_ctx("com.example.app")
+
+    result = json.loads(dispatch_query_tool(
+        ctx, "ui_tap", {"x": 1, "y": 2}, db_path=db_file, device=None,
+    ))
+
+    assert "aipwn corriendo" not in result.get("error", "")
+
+
+def test_gate_does_not_touch_static_tools(tmp_path):
+    """Las tools estáticas ni siquiera miran la cola: funcionan igual con un
+    job aipwn corriendo sobre el mismo package."""
+    db_file = str(tmp_path / "x.db")
+    _running_aipwn_job(db_file, "com.example.app")
+    ctx = _make_ctx("com.example.app")
+
+    result = dispatch_query_tool(
+        ctx, "list_components", {}, db_path=db_file, device=None,
+    )
+
+    assert "aipwn corriendo" not in result

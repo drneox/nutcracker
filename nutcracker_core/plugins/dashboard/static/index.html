@@ -3,21 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nutcracker dashboard</title>
+<title>Nutcracker</title>
 <style>
+  /* Paleta inspirada en nutcracker.sh: verde matrix (#00ff41) sobre negro,
+     bordes verdosos translúcidos, texto gris claro. */
   :root{
-    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --border:#2a2f3a;
-    --text:#e6e8ec; --dim:#9aa4b2; --accent:#4c8dff;
-    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+    --bg:#0a0a0a; --panel:#111213; --panel2:#141618; --border:rgba(0,255,65,.15);
+    --text:#d4d4d4; --dim:#7a7a7a; --accent:#00ff41; --accent-fg:#000;
+    --good:#00cc33; --warning:#f0a500; --serious:#ec835a; --critical:#ff4545;
   }
   @media (prefers-color-scheme: light){
     :root{
       --bg:#f4f5f7; --panel:#ffffff; --panel2:#f0f1f4; --border:#d9dce2;
-      --text:#1a1d24; --dim:#5b6472; --accent:#2f6fed;
+      --text:#1a1d24; --dim:#5b6472; --accent:#2f6fed; --accent-fg:#fff;
     }
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:var(--bg)}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
   header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel)}
   header h1{font-size:16px;margin:0;font-weight:700}
   header h1 span{color:var(--accent)}
@@ -34,23 +39,26 @@
      decompilado a la izquierda, columna central con chat + visor de código +
      logs TODO visible a la vez (sin tabs), y la pantalla del dispositivo fija
      a la derecha. Se apila en pantallas angostas. */
-  .interaction-grid{display:grid;grid-template-columns:240px minmax(0,1fr) 360px;gap:18px;align-items:start}
+  .interaction-grid{display:grid;grid-template-columns:var(--col-explorer,240px) 8px minmax(0,1fr) 8px var(--col-device,360px);gap:0 6px;align-items:start}
   .interaction-side{position:sticky;top:16px}
-  #emulator-img{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;display:block}
+  /* Handles de arrastre entre columnas: el ancho lo fijan las vars
+     --col-explorer / --col-device (ver el JS de splitters más abajo). */
+  .col-split{cursor:col-resize;border-radius:4px;align-self:stretch;touch-action:none}
+  .col-split:hover,.col-split.dragging{background:var(--border)}
   .explorer-tree{max-height:70vh;overflow:auto;background:var(--panel2);border-radius:8px;padding:8px;font-size:12px;color:var(--dim)}
   .explorer-tree .tnode{cursor:pointer;padding:2px 4px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
   .explorer-tree .tnode:hover{background:var(--panel)}
   .explorer-tree .tdir{color:var(--accent)}
   .explorer-tree .tchildren{margin-left:14px}
   #code-path{font-size:11px;color:var(--dim);margin-bottom:6px;word-break:break-all}
-  #code-view{background:#05070a;color:#c9d1d9;padding:12px;border-radius:0 8px 8px 8px;max-height:50vh;overflow:auto;white-space:pre;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  #code-view{background:#0d0f0d;color:var(--text);padding:12px;border-radius:0 8px 8px 8px;max-height:50vh;overflow:auto;white-space:pre;font:12px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;margin:0}
   #code-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:0}
   #code-tabs .ftab{background:var(--panel2);border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;padding:3px 8px;font-size:11px;cursor:pointer;color:var(--dim)}
   #code-tabs .ftab.active{color:var(--text);border-color:var(--accent);background:var(--panel)}
   #code-tabs .ftab.chat-tab{font-weight:600}
   #code-tabs .ftab .x{margin-left:6px;color:var(--dim)}
   #code-tabs .ftab .x:hover{color:var(--critical)}
-  /* Coloreado de sintaxis del visor (paleta tipo One Dark sobre #05070a) */
+  /* Coloreado de sintaxis del visor (paleta tipo One Dark sobre #0d0f0d) */
   #code-view .hl-k{color:#c678dd}          /* keyword */
   #code-view .hl-s{color:#98c379}          /* string */
   #code-view .hl-c{color:#7f848e;font-style:italic}  /* comentario */
@@ -61,6 +69,7 @@
   @media (max-width:1100px){
     .interaction-grid{grid-template-columns:1fr}
     .interaction-side{position:static}
+    .col-split{display:none}
   }
   tr.clickable{cursor:pointer}
   tr.clickable:hover{background:var(--panel2)}
@@ -68,16 +77,23 @@
   .job-id-link:hover{text-decoration:underline}
   .badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
   .badge.good{background:color-mix(in srgb, var(--good) 18%, transparent);color:var(--good)}
-  .badge.warning{background:color-mix(in srgb, var(--warning) 20%, transparent);color:#8a5d00}
+  .badge.warning{background:color-mix(in srgb, var(--warning) 20%, transparent);color:var(--warning)}
   .badge.serious{background:color-mix(in srgb, var(--serious) 20%, transparent);color:var(--serious)}
   .badge.critical{background:color-mix(in srgb, var(--critical) 20%, transparent);color:var(--critical)}
   .badge.neutral{background:var(--panel2);color:var(--dim)}
   input,select,button{font:inherit;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px}
-  button{cursor:pointer;background:var(--accent);color:#fff;border:none;font-weight:600}
+  button{cursor:pointer;background:var(--accent);color:var(--accent-fg);border:none;font-weight:600}
   button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
   button:disabled{opacity:.5;cursor:not-allowed}
   .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
-  #webusb-canvas{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;min-height:280px;display:block}
+  /* Pantalla del device a tamaño/proporción reales: el renderer de scrcpy
+     fija la resolución interna del canvas y el <img> del emulador usa su
+     resolución natural -- con width:100% + height:auto ambos siguen el aspect
+     ratio real, sin letterbox (barras negras) ni bordes decorativos. */
+  #webusb-canvas,#emulator-img{width:100%;height:auto;display:block}
+  .device-toolbar{display:flex;gap:6px;align-items:center;margin:8px 0}
+  .device-toolbar .icon-btn{padding:6px 9px;font-size:14px;line-height:1;min-width:36px}
+  .device-toolbar-sep{width:1px;height:20px;background:var(--border);margin:0 2px}
   .device-status{font-size:12px;color:var(--dim);margin:6px 0}
   .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
   .modal-backdrop.open{display:flex}
@@ -94,12 +110,31 @@
   #querylog .qassistant{color:var(--text)}
   #querylog .qerror{color:var(--critical)}
   #querylog .qimg{max-width:260px;border-radius:6px;border:1px solid var(--border);display:block;margin-top:4px}
-  /* Tarjeta de logs de un job dentro del stream del chat: crece en el sitio
-     (no una burbuja por línea -- un scan son miles) y queda en orden
-     cronológico con las respuestas del agente. */
-  #querylog .qlog-head{font-size:11px;color:var(--accent);margin-bottom:4px;font-weight:600}
-  #querylog .qlog-body{background:#05070a;color:#c9d1d9;padding:8px;border-radius:6px;max-height:220px;overflow:auto;white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  /* Tarjeta de logs de un job: por defecto crece en el sitio DENTRO del
+     stream del chat (en orden cronológico con las respuestas del agente),
+     pero también puede vivir en una pestaña sobre el chat (#code-log) --
+     por eso estas reglas no van scoped a #querylog. */
+  .qlog-head{font-size:11px;color:var(--accent);margin-bottom:4px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none}
+  .qlog-toggle{display:inline-block;width:10px}
+  .qlog-pop{margin-left:auto;color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:0 6px;font-weight:400;font-size:10px;cursor:pointer}
+  .qlog-pop:hover{color:var(--text);border-color:var(--accent)}
+  .qlog-stop{color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:0 6px;font-weight:400;font-size:10px;cursor:pointer}
+  .qlog-stop:hover{color:var(--critical);border-color:var(--critical)}
+  .qlog-status{font-weight:400;font-size:10px;color:var(--dim);border:1px solid rgba(127,127,127,.35);border-radius:8px;padding:0 6px}
+  .qlog-status[data-st="done"]{color:var(--good);border-color:var(--good)}
+  .qlog-status[data-st="error"]{color:var(--critical);border-color:var(--critical)}
+  .qlog-wrap{position:relative}
+  .qlog-body{background:#0d0f0d;color:var(--text);padding:8px;border-radius:6px;max-height:320px;overflow:auto;white-space:pre-wrap;font:11px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;margin:0}
+  /* En pestaña (sobre el chat) la tarjeta aprovecha toda la altura del panel. */
+  #code-log .qlog-body{max-height:62vh}
+  /* Colapsada (estilo output de tool de un agente): solo ~3 líneas con fade,
+     click en el header para expandir. Se pliega sola cuando el job termina. */
+  .qlog-collapsed .qlog-body{max-height:57px;overflow:hidden}
+  .qlog-collapsed .qlog-wrap::after{content:'';position:absolute;left:0;right:0;bottom:0;height:28px;background:linear-gradient(transparent,#0d0f0d);border-radius:0 0 6px 6px;pointer-events:none}
   svg.trend{width:100%;height:160px;overflow:visible}
+  footer{text-align:center;padding:14px 10px;font-size:12px;color:var(--dim)}
+  footer a{color:var(--dim);text-decoration:none;border-bottom:1px dotted var(--border)}
+  footer a:hover{color:var(--accent);border-bottom-color:var(--accent)}
   .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
   @media (max-width:600px){
     header{padding:10px 14px}
@@ -112,7 +147,7 @@
 <body>
 
 <header>
-  <h1><span>nutcracker</span> dashboard</h1>
+  <h1><span>Nutcracker</span></h1>
   <div class="stats" id="stats">
     <div><b id="s-apps">–</b> <span data-i18n="stats.apps">apps</span></div>
     <div><b id="s-runs">–</b> <span data-i18n="stats.runs">runs</span></div>
@@ -125,12 +160,90 @@
 <main>
 
   <section class="card">
-    <h2 data-i18n="sec.apps">Apps</h2>
-    <div class="table-scroll">
-      <table id="apps-table">
-        <thead><tr><th>Package</th><th data-i18n="th.verdict">Veredicto</th><th>MASVS</th><th data-i18n="th.nextReview">Próxima revisión</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
+    <h2 style="margin-top:0">nutcracker console</h2>
+    <div class="interaction-grid">
+      <div class="explorer">
+        <h2 style="margin-top:0" data-i18n="sec.explorer">Explorador</h2>
+        <div class="row" style="margin-bottom:6px;flex-wrap:nowrap">
+          <input id="explorer-filter" placeholder="filtrar archivo…" data-i18n-ph="ph.filterFile" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter')searchExplorer()">
+          <button class="secondary" onclick="searchExplorer()" title="Filtrar por nombre de archivo" data-i18n-title="tip.filterFile">🔎</button>
+          <button class="secondary" onclick="loadExplorer()" title="Recargar árbol" data-i18n-title="tip.reloadTree">⟳</button>
+        </div>
+        <div class="explorer-tree" id="explorer-tree" data-i18n="explorer.empty">(elige un job de la cola para explorar su decompilado)</div>
+      </div>
+
+      <div class="col-split" data-side="explorer"></div>
+
+      <div class="interaction-main">
+        <h2 style="margin-top:0" data-i18n="sec.agent">Agente — pentest asistido</h2>
+        <p style="font-size:12px;color:var(--dim)" id="query-hint" data-i18n="hint.query">
+          Co-piloto interactivo: pregunta sobre findings/componentes/secretos ya analizados
+          (funciona sin ningún job corriendo), o pídele en lenguaje natural que use Frida/ADB
+          con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
+          El package lo fija el job que elijas en la cola (click en su #, más abajo).
+        </p>
+
+        <div id="code-tabs" style="display:none"></div>
+
+        <div id="chat-panel">
+          <div class="row">
+            <input id="query-serial" placeholder="serial (vacío = default de config/USB)" data-i18n-ph="ph.querySerial" style="width:220px" onkeydown="if(event.key==='Enter'&&chatPackage)connectQuery(chatPackage)" title="Serial adb directo (emulator-5554, ip:5555…). Se precarga solo al conectar el device en el panel de la derecha. Si hay una sesión de relay activa y escribes su session id, se detecta solo." data-i18n-title="tip.querySerial">
+          </div>
+          <div id="querylog"></div>
+          <div class="row">
+            <input id="query-text" placeholder="elige una ejecución de la cola y pídele algo al co-piloto…" data-i18n-ph="ph.queryText" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
+            <button onclick="sendQuery()" data-i18n="btn.send">Enviar</button>
+          </div>
+        </div>
+
+        <div id="code-panel" style="display:none">
+          <div id="code-path"></div>
+          <pre id="code-view"></pre>
+          <div id="code-log" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="col-split" data-side="device"></div>
+
+      <div class="interaction-side">
+        <h2 style="margin-top:0" data-i18n="sec.device">Dispositivo</h2>
+        <div class="device-status" id="device-status">loading…</div>
+        <canvas id="webusb-canvas" width="720" height="1600"></canvas>
+        <img id="emulator-img" style="display:none" alt="pantalla del dispositivo">
+        <div class="device-toolbar">
+          <button id="device-play-btn" class="secondary icon-btn" onclick="devicePlay()" title="Iniciar transmisión de pantalla" data-i18n-title="tip.devPlay">▶</button>
+          <button id="device-stop-btn" class="secondary icon-btn" onclick="deviceStop()" title="Detener / soltar el dispositivo" data-i18n-title="tip.devStop" disabled>⏹</button>
+          <button id="device-refresh-btn" class="secondary icon-btn" onclick="deviceRefresh()" title="Refrescar captura ahora (solo emulador)" data-i18n-title="tip.devRefresh" disabled>🔄</button>
+          <span class="device-toolbar-sep"></span>
+          <button class="secondary icon-btn dev-key" onclick="sendDeviceKey('BACK')" title="Atrás (solo con adb del backend: emulador/red)" data-i18n-title="tip.devKeyBack" disabled>◀</button>
+          <button class="secondary icon-btn dev-key" onclick="sendDeviceKey('HOME')" title="Home (solo con adb del backend: emulador/red)" data-i18n-title="tip.devKeyHome" disabled>🏠</button>
+          <button class="secondary icon-btn dev-key" onclick="sendDeviceKey('APP_SWITCH')" title="Apps recientes (solo con adb del backend: emulador/red)" data-i18n-title="tip.devKeyRecents" disabled>▦</button>
+          <span class="device-toolbar-sep"></span>
+          <button id="adb-restart-btn" class="secondary icon-btn" onclick="restartAdb()" title="Reiniciar adb (recuperación por etapas)" data-i18n-title="tip.adbRestart">🔌</button>
+        </div>
+
+        <details style="margin-top:16px">
+          <summary style="cursor:pointer;color:var(--dim);font-size:13px" data-i18n="sec.advanced">Avanzado: relay (frida/adb remoto) / adb kill-server</summary>
+          <p style="font-size:12px;color:var(--dim)" data-i18n="info.relay">
+            El relay puentea `frida`/`adb` corriendo en este backend hacia el device
+            conectado acá. `adb` (shell/install/pull/screencap) reusa la conexión USB
+            (requiere el video USB activo). `frida` va por un WebSocket nativo directo
+            a la IP de LAN del device (Tango no sostiene bien el handshake WebSocket
+            que usa frida moderno, verificado en vivo) — necesita que ESTA PC tenga
+            alcance de red al device, y puede pedir el permiso "Acceso a Red Local" de
+            Chrome la primera vez. `adb kill-server` mata el daemon adb (WSL + Windows)
+            para soltar el cable antes de que WebUSB lo reclame.
+          </p>
+          <div class="row">
+            <input id="relay-session-id" placeholder="session id (ej. el serial del device)" data-i18n-ph="ph.relaySession" style="width:220px">
+            <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" data-i18n-ph="ph.relayIp" style="width:220px">
+            <button id="relay-btn" class="secondary" onclick="connectRelay()" data-i18n="btn.relayOn">🌐 Activar relay</button>
+            <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()" data-i18n="btn.relayOff">⏏ Detener relay</button>
+            <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB" data-i18n-title="tip.adbKill" data-i18n="btn.adbKill">🔪 adb kill-server</button>
+          </div>
+          <div class="device-status" id="relay-status"></div>
+        </details>
+      </div>
     </div>
   </section>
 
@@ -181,81 +294,20 @@
   </section>
 
   <section class="card">
-    <div class="interaction-grid">
-      <div class="explorer">
-        <h2 style="margin-top:0" data-i18n="sec.explorer">Explorador</h2>
-        <div class="row" style="margin-bottom:6px;flex-wrap:nowrap">
-          <input id="explorer-filter" placeholder="filtrar archivo…" data-i18n-ph="ph.filterFile" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter')searchExplorer()">
-          <button class="secondary" onclick="searchExplorer()" title="Filtrar por nombre de archivo" data-i18n-title="tip.filterFile">🔎</button>
-          <button class="secondary" onclick="loadExplorer()" title="Recargar árbol" data-i18n-title="tip.reloadTree">⟳</button>
-        </div>
-        <div class="explorer-tree" id="explorer-tree" data-i18n="explorer.empty">(elige un job de la cola ↑ para explorar su decompilado)</div>
-      </div>
-
-      <div class="interaction-main">
-        <h2 style="margin-top:0" data-i18n="sec.agent">Agente — pentest asistido</h2>
-        <p style="font-size:12px;color:var(--dim)" id="query-hint" data-i18n="hint.query">
-          Co-piloto interactivo: pregunta sobre findings/componentes/secretos ya analizados
-          (funciona sin ningún job corriendo), o pídele en lenguaje natural que use Frida/ADB
-          con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
-          El package lo fija el job que elijas en la cola de arriba (click en su #).
-        </p>
-
-        <div id="code-tabs" style="display:none"></div>
-
-        <div id="chat-panel">
-          <div class="row">
-            <input id="query-serial" placeholder="serial (vacío = default de config/USB)" data-i18n-ph="ph.querySerial" style="width:220px" onkeydown="if(event.key==='Enter'&&chatPackage)connectQuery(chatPackage)" title="Serial adb directo (emulator-5554, ip:5555…). Se precarga solo al conectar el device en el panel de la derecha. Si hay una sesión de relay activa y escribes su session id, se detecta solo." data-i18n-title="tip.querySerial">
-          </div>
-          <div id="querylog"></div>
-          <div class="row">
-            <input id="query-text" placeholder="elige una ejecución de la cola ↑ y pídele algo al co-piloto…" data-i18n-ph="ph.queryText" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
-            <button onclick="sendQuery()" data-i18n="btn.send">Enviar</button>
-          </div>
-        </div>
-
-        <div id="code-panel" style="display:none">
-          <div id="code-path"></div>
-          <pre id="code-view"></pre>
-        </div>
-      </div>
-
-      <div class="interaction-side">
-        <h2 style="margin-top:0" data-i18n="sec.device">Dispositivo</h2>
-        <div class="device-status" id="device-status">loading…</div>
-        <canvas id="webusb-canvas" width="720" height="1600"></canvas>
-        <img id="emulator-img" style="display:none" alt="pantalla del dispositivo">
-        <div class="row">
-          <button id="device-toggle-btn" class="secondary" style="display:none" onclick="toggleDevice()" data-i18n="btn.release">⏏ Soltar</button>
-          <button id="adb-restart-btn" class="secondary" onclick="restartAdb()" data-i18n="btn.adbRestart">🔌 Reiniciar adb</button>
-        </div>
-
-        <details style="margin-top:16px">
-          <summary style="cursor:pointer;color:var(--dim);font-size:13px" data-i18n="sec.advanced">Avanzado: relay (frida/adb remoto) / adb kill-server</summary>
-          <p style="font-size:12px;color:var(--muted,#888)" data-i18n="info.relay">
-            El relay puentea `frida`/`adb` corriendo en este backend hacia el device
-            conectado acá. `adb` (shell/install/pull/screencap) reusa la conexión USB
-            (requiere el video USB activo). `frida` va por un WebSocket nativo directo
-            a la IP de LAN del device (Tango no sostiene bien el handshake WebSocket
-            que usa frida moderno, verificado en vivo) — necesita que ESTA PC tenga
-            alcance de red al device, y puede pedir el permiso "Acceso a Red Local" de
-            Chrome la primera vez. `adb kill-server` mata el daemon adb (WSL + Windows)
-            para soltar el cable antes de que WebUSB lo reclame.
-          </p>
-          <div class="row">
-            <input id="relay-session-id" placeholder="session id (ej. el serial del device)" data-i18n-ph="ph.relaySession" style="width:220px">
-            <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" data-i18n-ph="ph.relayIp" style="width:220px">
-            <button id="relay-btn" class="secondary" onclick="connectRelay()" data-i18n="btn.relayOn">🌐 Activar relay</button>
-            <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()" data-i18n="btn.relayOff">⏏ Detener relay</button>
-            <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB" data-i18n-title="tip.adbKill" data-i18n="btn.adbKill">🔪 adb kill-server</button>
-          </div>
-          <div class="device-status" id="relay-status"></div>
-        </details>
-      </div>
+    <h2 data-i18n="sec.apps">Apps</h2>
+    <div class="table-scroll">
+      <table id="apps-table">
+        <thead><tr><th>Package</th><th data-i18n="th.verdict">Veredicto</th><th>MASVS</th><th data-i18n="th.nextReview">Próxima revisión</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </section>
 
 </main>
+
+<footer>
+  <a href="https://nutcracker.sh" target="_blank" rel="noopener">nutcracker project — nutcracker.sh</a>
+</footer>
 
 <div class="modal-backdrop" id="app-modal">
   <div class="modal">
@@ -319,12 +371,17 @@ const I18N = {
     'btn.enqueue': 'Enqueue',
     'btn.batch': 'Batch',
     'btn.send': 'Send',
-    'btn.release': '⏏ Release',
-    'btn.reconnect': '🔄 Reconnect',
     'btn.relayOn': '🌐 Start relay',
     'btn.relayOff': '⏏ Stop relay',
     'btn.adbKill': '🔪 adb kill-server',
-    'btn.adbRestart': '🔌 Restart adb',
+    'tip.devPlay': 'Start screen stream',
+    'tip.devStop': 'Stop / release the device',
+    'tip.devRefresh': 'Refresh frame now (emulator only)',
+    'tip.devKeyBack': 'Back (backend adb only: emulator/network)',
+    'tip.devKeyHome': 'Home (backend adb only: emulator/network)',
+    'tip.devKeyRecents': 'Recents (backend adb only: emulator/network)',
+    'tip.adbRestart': 'Restart adb (staged recovery)',
+    'err.devKey': 'keyevent failed: {e}',
     'status.adbRestarting': 'Restarting adb connection…',
     'status.adbRecovered': 'adb recovered ({steps}).',
     'status.adbDead': 'adb restarted but the device still does not answer -- the emulator is hung; cold boot it manually.',
@@ -371,7 +428,7 @@ const I18N = {
     'ph.batchSerial': 'serial / relay session id',
     'ph.filterFile': 'filter file…',
     'ph.querySerial': 'serial (empty = config/USB default)',
-    'ph.queryText': 'pick a run from the queue ↑ and ask the co-pilot something…',
+    'ph.queryText': 'ask the co-pilot something… (or type a package id to connect: com.example.app)',
     'ph.relaySession': 'session id (e.g. the device serial)',
     'ph.relayIp': 'device LAN IP (e.g. 192.168.1.42)',
     'tip.relaySerial': "The 'serial' field above becomes the session id of an already-connected relay session (Device tab → Relay) instead of a direct adb serial.",
@@ -388,11 +445,11 @@ const I18N = {
     'tip.dlJson': 'Download JSON',
     'tip.dlPdf': 'Download PDF',
     'tip.viewRunFindings': 'View findings of run #{id}',
-    'explorer.empty': '(pick a job from the queue ↑ to explore its decompiled output)',
+    'explorer.empty': '(pick a job from the queue below to explore its decompiled output)',
     'explorer.noDecompiled': '(no decompiled output on disk for {pkg} — run an analysis first)',
     'explorer.emptyDir': '(empty)',
     'explorer.noMatches': '(no matches)',
-    'hint.query': 'Interactive co-pilot: ask about already-analyzed findings/components/secrets (works without any running job), or ask it in natural language to use Frida/ADB with a connected device -- view screen, tap/type on the UI, run hooks. The package is set by the job you pick in the queue above (click its #).',
+    'hint.query': 'Interactive co-pilot: ask about already-analyzed findings/components/secrets (works without any running job), or ask it in natural language to use Frida/ADB with a connected device -- view screen, tap/type on the UI, run hooks. The package is set by the job you pick in the queue below (click its #), or by typing the package id right here in the chat.',
     'hint.historyRow': '(click a row to see its findings)',
     'hint.consolidated': '(deduplicated across all runs)',
     'info.relay': 'The relay bridges `frida`/`adb` running on this backend to the device connected here. `adb` (shell/install/pull/screencap) reuses the USB connection (requires the USB video to be active). `frida` goes over a direct native WebSocket to the device LAN IP (Tango does not handle well the WebSocket handshake used by modern frida, verified live) — THIS PC needs network reachability to the device, and Chrome may ask for the "Local Network Access" permission the first time. `adb kill-server` kills the adb daemon (WSL + Windows) to release the cable before WebUSB claims it.',
@@ -422,7 +479,7 @@ const I18N = {
     'err.adbKill': 'Error killing adb: {e}',
     'err.relayConnect': 'Error starting relay: {e}',
     'err.relayStop': 'Error stopping relay: {e}',
-    'err.noConnection': '⚠ not connected -- pick a run in the queue (click its #) to set the package and connect the co-pilot.',
+    'err.noPackageInMessage': '⚠ not connected -- write the package id in your message (e.g. "analyze com.example.app") or send just the package id to connect.',
     'alert.batch': 'Queued: {n}. Skipped ({m}):\n{lines}',
     'badge.present': '● present',
     'badge.resolved': '✔ resolved',
@@ -435,6 +492,11 @@ const I18N = {
     'msg.saved': '✔ saved',
     'chat.you': '[you]',
     'chat.logCard': '📜 logs — job #{id}',
+    'chat.jobFinished': '✔ job #{id} finished: {status} — you can keep interacting here, the context stays on this package.',
+    'chat.logTabPath': 'live log — job #{id} (streams while the job runs)',
+    'tip.logToTab': 'open in a tab above the chat',
+    'tip.stopJob': 'stop the job (SIGTERM)',
+    'confirm.stopJob': 'Stop job #{id}? The run will be terminated.',
     'word.ok': 'OK',
     'word.failed': 'failed',
     'findings.empty': '(no findings)',
@@ -453,12 +515,17 @@ const I18N = {
     'btn.enqueue': 'Encolar',
     'btn.batch': 'Batch',
     'btn.send': 'Enviar',
-    'btn.release': '⏏ Soltar',
-    'btn.reconnect': '🔄 Reconectar',
     'btn.relayOn': '🌐 Activar relay',
     'btn.relayOff': '⏏ Detener relay',
     'btn.adbKill': '🔪 adb kill-server',
-    'btn.adbRestart': '🔌 Reiniciar adb',
+    'tip.devPlay': 'Iniciar transmisión de pantalla',
+    'tip.devStop': 'Detener / soltar el dispositivo',
+    'tip.devRefresh': 'Refrescar captura ahora (solo emulador)',
+    'tip.devKeyBack': 'Atrás (solo con adb del backend: emulador/red)',
+    'tip.devKeyHome': 'Home (solo con adb del backend: emulador/red)',
+    'tip.devKeyRecents': 'Apps recientes (solo con adb del backend: emulador/red)',
+    'tip.adbRestart': 'Reiniciar adb (recuperación por etapas)',
+    'err.devKey': 'falló el keyevent: {e}',
     'status.adbRestarting': 'Reiniciando la conexión adb…',
     'status.adbRecovered': 'adb recuperado ({steps}).',
     'status.adbDead': 'adb reiniciado pero el dispositivo sigue sin responder -- el emulador está colgado; hazle un cold boot manual.',
@@ -505,7 +572,7 @@ const I18N = {
     'ph.batchSerial': 'serial / session id de relay',
     'ph.filterFile': 'filtrar archivo…',
     'ph.querySerial': 'serial (vacío = default de config/USB)',
-    'ph.queryText': 'elige una ejecución de la cola ↑ y pídele algo al co-piloto…',
+    'ph.queryText': 'pídele algo al co-piloto… (o escribe un package id para conectar: com.example.app)',
     'ph.relaySession': 'session id (ej. el serial del device)',
     'ph.relayIp': 'IP LAN del device (ej. 192.168.1.42)',
     'tip.relaySerial': "El campo 'serial' de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) en vez de un serial adb directo.",
@@ -522,11 +589,11 @@ const I18N = {
     'tip.dlJson': 'Descargar JSON',
     'tip.dlPdf': 'Descargar PDF',
     'tip.viewRunFindings': 'Ver hallazgos del run #{id}',
-    'explorer.empty': '(elige un job de la cola ↑ para explorar su decompilado)',
+    'explorer.empty': '(elige un job de la cola de abajo para explorar su decompilado)',
     'explorer.noDecompiled': '(sin decompilado en disco para {pkg} — ejecuta un análisis primero)',
     'explorer.emptyDir': '(vacío)',
     'explorer.noMatches': '(sin coincidencias)',
-    'hint.query': 'Co-piloto interactivo: pregunta sobre findings/componentes/secretos ya analizados (funciona sin ningún job corriendo), o pídele en lenguaje natural que use Frida/ADB con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks. El package lo fija el job que elijas en la cola de arriba (click en su #).',
+    'hint.query': 'Co-piloto interactivo: pregunta sobre findings/componentes/secretos ya analizados (funciona sin ningún job corriendo), o pídele en lenguaje natural que use Frida/ADB con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks. El package lo fija el job que elijas en la cola de abajo (click en su #), o escribiéndolo directamente acá en el chat.',
     'hint.historyRow': '(clic en una fila para ver sus hallazgos)',
     'hint.consolidated': '(deduplicados de todas las corridas)',
     'info.relay': 'El relay puentea `frida`/`adb` corriendo en este backend hacia el device conectado acá. `adb` (shell/install/pull/screencap) reusa la conexión USB (requiere el video USB activo). `frida` va por un WebSocket nativo directo a la IP de LAN del device (Tango no sostiene bien el handshake WebSocket que usa frida moderno, verificado en vivo) — necesita que ESTA PC tenga alcance de red al device, y puede pedir el permiso "Acceso a Red Local" de Chrome la primera vez. `adb kill-server` mata el daemon adb (WSL + Windows) para soltar el cable antes de que WebUSB lo reclame.',
@@ -556,7 +623,7 @@ const I18N = {
     'err.adbKill': 'Error matando adb: {e}',
     'err.relayConnect': 'Error activando el relay: {e}',
     'err.relayStop': 'Error deteniendo el relay: {e}',
-    'err.noConnection': '⚠ sin conexión -- elige una ejecución en la cola (click en su #) para fijar el package y conectar el co-piloto.',
+    'err.noPackageInMessage': '⚠ sin conexión -- escribe el package id en tu mensaje (ej: "analiza com.example.app") o envía solo el package id para conectar.',
     'alert.batch': 'Encolados: {n}. Omitidos ({m}):\n{lines}',
     'badge.present': '● presente',
     'badge.resolved': '✔ resuelto',
@@ -569,6 +636,11 @@ const I18N = {
     'msg.saved': '✔ guardado',
     'chat.you': '[tú]',
     'chat.logCard': '📜 logs del job #{id}',
+    'chat.jobFinished': '✔ job #{id} terminó: {status} — puedes seguir interactuando acá, el contexto queda en este package.',
+    'chat.logTabPath': 'log en vivo — job #{id} (streamea mientras corre)',
+    'tip.logToTab': 'abrir en una pestaña sobre el chat',
+    'tip.stopJob': 'detener el job (SIGTERM)',
+    'confirm.stopJob': '¿Detener el job #{id}? La corrida se terminará.',
     'word.ok': 'OK',
     'word.failed': 'falló',
     'findings.empty': '(sin hallazgos)',
@@ -763,34 +835,163 @@ async function runBatch(){
 
 // ── Logs en vivo (integrados al stream del chat) ──────────────────────────
 // Los logs del job se muestran como una tarjeta DENTRO de la conversación:
-// una sola tarjeta por attach que crece en el sitio (no una burbuja por
+// una sola tarjeta por job que crece en el sitio (no una burbuja por
 // línea -- un scan estático son miles), en orden cronológico con las
-// respuestas del agente.
-let logSocket = null;
+// respuestas del agente. Estilo "output de tool" de un agente (Kimi Code):
+// streamea expandida mientras el job corre y se pliega sola al terminar
+// (click en el header para expandir/colapsar). El botón ⇱ del header la
+// mueve a una pestaña sobre el chat (como los archivos del explorador);
+// al cerrar la pestaña la tarjeta vuelve a su lugar en el stream.
+// Cada job tiene su propia tarjeta y su propio socket -- se pueden seguir
+// varios jobs a la vez.
+const logCards = new Map();    // jobId -> {card, body, marker}
+const logSockets = new Map();  // jobId -> WebSocket
+
 function connectJobLog(jobId){
-  if (logSocket) logSocket.close();
   const log = document.getElementById('querylog');
+  const existing = logCards.get(jobId);
+  if (existing) {
+    // Ya tiene tarjeta: solo mostrarla (su pestaña si está abierta, si no el
+    // chat) y re-abrir el socket si se cerró con el job todavía corriendo.
+    const key = `log:${jobId}`;
+    if (typeof openTabs !== 'undefined' && openTabs.has(key)) activateTab(key);
+    else existing.card.scrollIntoView({behavior: 'smooth'});
+    const sock = logSockets.get(jobId);
+    if (sock && (sock.readyState === WebSocket.CLOSED || sock.readyState === WebSocket.CLOSING)
+        && existing.pill.textContent === 'running') {
+      _attachLogSocket(jobId, existing);
+    }
+    return;
+  }
   const card = document.createElement('div');
-  card.className = 'qmsg';
+  card.className = 'qmsg qlog';
   const head = document.createElement('div');
   head.className = 'qlog-head';
-  head.textContent = T('chat.logCard', {id: jobId});
+  const toggle = document.createElement('span');
+  toggle.className = 'qlog-toggle';
+  toggle.textContent = '▾';
+  const title = document.createElement('span');
+  title.textContent = T('chat.logCard', {id: jobId});
+  const pop = document.createElement('span');
+  pop.className = 'qlog-pop';
+  pop.textContent = '⇱';
+  pop.title = T('tip.logToTab');
+  // Stop: cancela el job (queued → lo borra; running → SIGTERM a su
+  // subproceso, ver POST /api/queue/{id}/cancel). Se oculta solo cuando
+  // llega el status terminal.
+  const stop = document.createElement('span');
+  stop.className = 'qlog-stop';
+  stop.textContent = '■';
+  stop.title = T('tip.stopJob');
+  const pill = document.createElement('span');
+  pill.className = 'qlog-status';
+  pill.textContent = 'running';
+  head.appendChild(toggle);
+  head.appendChild(title);
+  head.appendChild(stop);
+  head.appendChild(pop);
+  head.appendChild(pill);
+  const wrap = document.createElement('div');
+  wrap.className = 'qlog-wrap';
   const body = document.createElement('pre');
   body.className = 'qlog-body';
+  wrap.appendChild(body);
   card.appendChild(head);
-  card.appendChild(body);
+  card.appendChild(wrap);
+  const setCollapsed = (collapsed) => {
+    card.classList.toggle('qlog-collapsed', collapsed);
+    toggle.textContent = collapsed ? '▸' : '▾';
+  };
+  head.onclick = () => setCollapsed(!card.classList.contains('qlog-collapsed'));
+  pop.onclick = (ev) => { ev.stopPropagation(); openLogTab(jobId); };
+  stop.onclick = async (ev) => {
+    ev.stopPropagation();
+    if (!confirm(T('confirm.stopJob', {id: jobId}))) return;
+    try {
+      await j(`/api/queue/${jobId}/cancel`, {method: 'POST'});
+    } catch (e) {
+      alert(`${e.message || e}`);
+    }
+    // El pill y el pliegue llegan solos por el evento de status del socket.
+  };
+  // Marcador de posición en el stream: si la tarjeta se mueve a una pestaña,
+  // al cerrarla vuelve exactamente a este lugar.
+  const marker = document.createComment(`logcard-${jobId}`);
+  log.appendChild(marker);
   log.appendChild(card);
   log.scrollTop = log.scrollHeight;
+  const entry = {card, body, pill, setCollapsed, marker};
+  logCards.set(jobId, entry);
+  _attachLogSocket(jobId, entry);
+}
+
+function _attachLogSocket(jobId, entry){
+  const {card, body, pill, setCollapsed} = entry;
+  const log = document.getElementById('querylog');
+  const old = logSockets.get(jobId);
+  if (old) old.close();
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  logSocket = new WebSocket(`${proto}://${location.host}/ws/jobs/${jobId}`);
-  logSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
-  logSocket.onmessage = (ev) => {
+  const sock = new WebSocket(`${proto}://${location.host}/ws/jobs/${jobId}`);
+  logSockets.set(jobId, sock);
+  sock.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
+  sock.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    const line = msg.kind === 'status' ? `\n[status] ${JSON.stringify(msg.data)}\n` : (msg.data + '\n');
-    body.textContent += line;
-    body.scrollTop = body.scrollHeight;
-    log.scrollTop = log.scrollHeight;
+    if (msg.kind === 'status') {
+      body.textContent += `\n[status] ${JSON.stringify(msg.data)}\n`;
+      // El job terminó: plegar la tarjeta (como el output de una tool al
+      // completar), marcar el estado en el pill y avisar en la conversación
+      // con una burbuja propia. El chat sigue vivo con el contexto del
+      // package — el operador puede seguir interactuando.
+      const st = (msg.data && msg.data.status) || '?';
+      pill.textContent = st;
+      pill.dataset.st = st;
+      // ■ solo se oculta en estados TERMINALES: un job 'queued' también se
+      // puede cancelar (el endpoint lo borra de la cola).
+      const stopBtn = card.querySelector('.qlog-stop');
+      if (stopBtn && st !== 'running' && st !== 'queued') stopBtn.style.display = 'none';
+      setCollapsed(true);
+      _qAppend(st === 'done' ? 'qassistant' : 'qerror', T('chat.jobFinished', {id: jobId, status: st}));
+      refreshQueue();
+    } else {
+      body.textContent += msg.data + '\n';
+    }
+    if (!card.classList.contains('qlog-collapsed')) body.scrollTop = body.scrollHeight;
+    // Autoscroll del stream solo si la tarjeta sigue viviendo en el chat
+    // (si está en una pestaña, el panel de chat puede ni estar visible).
+    if (card.closest('#querylog')) log.scrollTop = log.scrollHeight;
   };
+}
+
+// Mover la tarjeta de logs de un job a una pestaña estilo IDE sobre el chat
+// (mismo sistema de pestañas que los archivos del explorador). Al cerrar la
+// pestaña, la tarjeta vuelve a su marcador en el stream (ver closeTab).
+function openLogTab(jobId){
+  const key = `log:${jobId}`;
+  if (!openTabs.has(key)) {
+    openTabs.set(key, {kind: 'log', jobId, name: `#${jobId} log`, path: `job #${jobId} -- log en vivo`});
+  }
+  activateTab(key);
+}
+
+// Cuando el co-piloto encola un job desde el chat (tool enqueue_scan),
+// adoptar el contexto de esa ejecución automáticamente: la tarjeta de logs
+// vivos del job se adjunta a la conversación, la cola se refresca y el
+// explorador/device quedan en el package del job. Sin esto el job corría
+// "invisible" — había que hacer clic a mano en su #id para ver algo.
+function _adoptEnqueuedJob(resultText){
+  let payload = null;
+  try { payload = JSON.parse(resultText); } catch { return; }
+  const jobId = payload && payload.job_id;
+  if (!jobId) return;
+  // Si hay un archivo abierto en pestaña, volver al Chat: la tarjeta de logs
+  // vive en el stream de la conversación.
+  if (typeof openTabs !== 'undefined' && openTabs.size && activeTab !== 'chat') activateTab('chat');
+  const pkg = payload.target || chatPackage;
+  // Reconectar el chat PISA el stream (#querylog se limpia) -- tiene que ir
+  // ANTES de crear la tarjeta o se la lleva puesta. Solo si cambia el package.
+  if (pkg && pkg !== chatPackage) connectQuery(pkg);
+  connectJobLog(jobId);
+  refreshQueue();
 }
 
 // Click en el "#id" de un job (tabla de la cola): adjunta sus logs como
@@ -814,12 +1015,13 @@ function openJobContext(jobId){
   // Si hay un archivo abierto en pestaña, vuelve a la pestaña Chat: la
   // tarjeta de logs vive en el stream de la conversación.
   if (openTabs.size && activeTab !== 'chat') activateTab('chat');
-  connectJobLog(jobId);
-  document.getElementById('querylog').scrollIntoView({behavior: 'smooth'});
   const job = lastJobs.find(x => x.id === jobId);
   const pkg = job && _pkgFromJob(job);
-  // Reconectar el chat pisa la conversación visible -- solo si cambia el package.
+  // Reconectar el chat PISA el stream (#querylog se limpia) -- tiene que ir
+  // ANTES de crear la tarjeta o se la lleva puesta. Solo si cambia el package.
   if (pkg && pkg !== chatPackage) connectQuery(pkg);
+  connectJobLog(jobId);
+  document.getElementById('querylog').scrollIntoView({behavior: 'smooth'});
 }
 
 // ── Explorador del decompilado (árbol lazy vía /api/decompiled/*) ─────────
@@ -916,8 +1118,22 @@ function activateTab(key){
   _renderActiveTab();
 }
 
+// Devuelve la tarjeta de logs de un job a su marcador en el stream del chat
+// (si el marcador ya no existe -- p.ej. se limpió el log -- cae al final).
+function _returnLogCardToChat(tab){
+  if (!tab || tab.kind !== 'log') return;
+  const entry = logCards.get(tab.jobId);
+  if (!entry) return;
+  if (entry.marker.parentNode) {
+    entry.marker.parentNode.insertBefore(entry.card, entry.marker.nextSibling);
+  } else {
+    document.getElementById('querylog').appendChild(entry.card);
+  }
+}
+
 function closeTab(key, ev){
   ev.stopPropagation();
+  _returnLogCardToChat(openTabs.get(key));
   openTabs.delete(key);
   if (activeTab === key) activeTab = openTabs.size ? [...openTabs.keys()].pop() : 'chat';
   _renderTabs();
@@ -925,6 +1141,7 @@ function closeTab(key, ev){
 }
 
 function closeAllTabs(){
+  for (const tab of openTabs.values()) _returnLogCardToChat(tab);
   openTabs.clear();
   activeTab = 'chat';
   _renderTabs();
@@ -946,7 +1163,7 @@ function _renderTabs(){
     el.className = 'ftab' + (key === activeTab ? ' active' : '');
     el.title = tab.path;
     const label = document.createElement('span');
-    label.textContent = tab.name;
+    label.textContent = (tab.kind === 'log' ? '📜 ' : '') + tab.name;
     const x = document.createElement('span');
     x.className = 'x';
     x.textContent = '✕';
@@ -966,9 +1183,23 @@ function _renderActiveTab(){
   if (onChat || !openTabs.has(activeTab)) { panel.style.display = 'none'; return; }
   panel.style.display = '';
   const tab = openTabs.get(activeTab);
+  const view = document.getElementById('code-view');
+  const logView = document.getElementById('code-log');
+  if (tab.kind === 'log') {
+    // Pestaña de logs: la tarjeta viva del job se muda al panel (sigue
+    // streameando -- es el mismo nodo DOM con su socket). Al cerrar la
+    // pestaña, closeTab la devuelve a su marcador en el stream del chat.
+    document.getElementById('code-path').textContent = T('chat.logTabPath', {id: tab.jobId});
+    view.style.display = 'none';
+    logView.style.display = '';
+    const entry = logCards.get(tab.jobId);
+    if (entry && entry.card.parentNode !== logView) logView.appendChild(entry.card);
+    return;
+  }
+  view.style.display = '';
+  logView.style.display = 'none';
   document.getElementById('code-path').textContent =
     `${tab.root === 'runtime' ? 'runtime dump' : 'jadx'}: ${tab.path}` + (tab.truncated ? T('msg.truncated') : '');
-  const view = document.getElementById('code-view');
   if (tab.content === null) {
     view.textContent = T('status.loading');
   } else {
@@ -1051,15 +1282,17 @@ function rememberedWebUsbSerial(){
   try { return sessionStorage.getItem(WEBUSB_SESSION_KEY); } catch (e) { return null; }
 }
 
-// ── Panel Dispositivo: auto-conexión según config, UN solo botón toggle ────
-// No hay botones de "conectar": al cargar, el panel se conecta solo usando el
-// modo que dicta config.yaml -- emulator (screencap polling vía adb del
-// backend) si strategies.runtime_target: emulator o el serial configurado es
-// de emulador; si no, WebUSB (device físico por cable). El único botón es el
-// toggle: "⏏ Soltar" cuando hay conexión, "🔄 Reconectar" cuando no.
+// ── Panel Dispositivo: auto-conexión según config + botonera ─────────────
+// No hay botones de "conectar" sueltos: al cargar, el panel se conecta solo
+// usando el modo que dicta config.yaml -- emulator (screencap polling vía adb
+// del backend) si strategies.runtime_target: emulator o el serial configurado
+// es de emulador; si no, WebUSB (device físico por cable). La botonera tiene
+// ▶ play / ⏹ stop (conectar/soltar el stream), 🔄 refresh y las teclas de
+// navegación ◀ 🏠 ▦ (estas tres + refresh solo en modo emulador/red, donde el
+// adb del backend alcanza al device), más 🔌 reiniciar adb.
 // Excepción inevitable: la PRIMERA conexión WebUSB necesita un gesto del
 // usuario (el navegador exige el diálogo de permiso USB) -- ese gesto es el
-// propio click en "🔄 Reconectar".
+// propio click en ▶.
 let deviceMode = null;        // 'emulator' | 'usb'
 let deviceConnected = false;
 let emuConfigSerial = null;   // serial de emulador desde config.yaml (si hay)
@@ -1072,9 +1305,14 @@ function _isEmulatorSerial(s){
 
 function setDeviceToggle(connected){
   deviceConnected = connected;
-  const btn = document.getElementById('device-toggle-btn');
-  btn.style.display = '';
-  btn.textContent = connected ? T('btn.release') : T('btn.reconnect');
+  document.getElementById('device-play-btn').disabled = connected;
+  document.getElementById('device-stop-btn').disabled = !connected;
+  // Refresh y teclas de navegación solo aplican cuando el device es
+  // alcanzable por el adb del backend (emulador/red). En modo USB el cable
+  // lo tiene el navegador (WebUSB exclusivo) y `adb -s` no llega.
+  const emuReady = connected && deviceMode === 'emulator';
+  document.getElementById('device-refresh-btn').disabled = !emuReady;
+  document.querySelectorAll('.dev-key').forEach(b => { b.disabled = !emuReady; });
 }
 
 function _showEmulatorImg(show){
@@ -1082,13 +1320,31 @@ function _showEmulatorImg(show){
   document.getElementById('webusb-canvas').style.display = show ? 'none' : '';
 }
 
-async function toggleDevice(){
-  if (deviceConnected) {
-    if (deviceMode === 'emulator') disconnectEmulator();
-    else await disconnectWebUsb();
-  } else {
-    if (deviceMode === 'emulator') await connectEmulator();
-    else await connectWebUsb();
+async function devicePlay(){
+  if (deviceMode === 'emulator') await connectEmulator();
+  else await connectWebUsb();
+}
+
+async function deviceStop(){
+  if (deviceMode === 'emulator') disconnectEmulator();
+  else await disconnectWebUsb();
+}
+
+function deviceRefresh(){
+  if (deviceMode === 'emulator' && emuSerial) refreshEmulatorFrame();
+}
+
+// Teclas de navegación (◀ 🏠 ▦) via /api/device/key -- el efecto se ve en el
+// siguiente frame del polling; forzamos uno inmediato para que se sienta
+// instantáneo en vez de esperar ~900ms.
+async function sendDeviceKey(keycode){
+  if (deviceMode !== 'emulator' || !emuSerial) return;
+  const status = document.getElementById('device-status');
+  try {
+    await j(`/api/device/key?serial=${encodeURIComponent(emuSerial)}&keycode=${encodeURIComponent(keycode)}`, {method: 'POST'});
+    refreshEmulatorFrame();
+  } catch (e) {
+    status.textContent = T('err.devKey', {e: e.message || e});
   }
 }
 
@@ -1277,6 +1533,55 @@ async function restartAdb(){
   }
 }
 
+// ── Splitters: columnas redimensionables (explorador / chat / device) ─────
+// Arrastre sobre los handles del grid; los anchos se guardan en localStorage
+// y se re-aplican al cargar. En pantallas angostas (<1100px) el grid colapsa
+// a una sola columna y los handles se ocultan (ver CSS .col-split).
+(function(){
+  const grid = document.querySelector('.interaction-grid');
+  if (!grid) return;
+  const STORE_KEY = 'nutcracker.colWidths';
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { /* corrupto */ }
+  for (const side of ['explorer', 'device']) {
+    if (saved[side]) grid.style.setProperty(`--col-${side}`, saved[side]);
+  }
+
+  let drag = null;
+  grid.querySelectorAll('.col-split').forEach(handle => {
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const side = handle.dataset.side;
+      const col = side === 'explorer' ? grid.querySelector('.explorer') : grid.querySelector('.interaction-side');
+      drag = { side, startX: e.clientX, startW: col.getBoundingClientRect().width };
+      handle.classList.add('dragging');
+      handle.setPointerCapture(e.pointerId);
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const delta = e.clientX - drag.startX;
+      // explorer crece arrastrando a la derecha; device (columna de la
+      // derecha) crece arrastrando a la izquierda.
+      const w = drag.side === 'explorer' ? drag.startW + delta : drag.startW - delta;
+      const clamped = Math.max(200, Math.min(w, window.innerWidth * 0.6));
+      grid.style.setProperty(`--col-${drag.side}`, `${Math.round(clamped)}px`);
+    });
+    const endDrag = () => {
+      if (!drag) return;
+      handle.classList.remove('dragging');
+      const widths = {};
+      for (const side of ['explorer', 'device']) {
+        const v = grid.style.getPropertyValue(`--col-${side}`);
+        if (v) widths[side] = v;
+      }
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(widths)); } catch (e) { /* lleno/bloqueado */ }
+      drag = null;
+    };
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+  });
+})();
+
 // Arranque del panel: el modo lo dicta config.yaml (runtime_target /
 // default_device_id), no un botón. Emulador → auto-conecta el polling;
 // físico → WebUSB (auto-reconnect solo si ESTA pestaña ya lo había pedido).
@@ -1385,10 +1690,17 @@ async function checkQueryAvailable(){
 }
 
 let querySocket = null;
-let chatPackage = null;   // package de la conversación actual (lo fija openJobContext)
+let chatPackage = null;   // package de la conversación actual (lo fija openJobContext o sendQuery)
 function _qAppend(cls, html){
   const log = document.getElementById('querylog');
-  log.innerHTML += `<div class="qmsg ${cls}">${html}</div>`;
+  // appendChild en vez de innerHTML += : este último re-parsea TODOS los
+  // hijos y destruye los nodos vivos (se llevaba puesto el onclick de la
+  // tarjeta de logs y dejaba su <pre> desconectado del DOM — encontrado en
+  // el E2E: tras la burbuja de "job finished" el toggle dejaba de responder).
+  const div = document.createElement('div');
+  div.className = `qmsg ${cls}`;
+  div.innerHTML = html;
+  log.appendChild(div);
   log.scrollTop = log.scrollHeight;
 }
 function connectQuery(pkg){
@@ -1398,6 +1710,12 @@ function connectQuery(pkg){
   // Los archivos abiertos en pestañas pertenecen al package anterior.
   if (pkg !== chatPackage) closeAllTabs();
   chatPackage = pkg;
+  // El wipe de #querylog destruiría los nodos y marcadores de las tarjetas
+  // de logs vivas -- limpiar también su registro y sus sockets (el usuario
+  // re-adjunta un job con click en su #; el server replaya el historial).
+  for (const sock of logSockets.values()) sock.close();
+  logSockets.clear();
+  logCards.clear();
   document.getElementById('querylog').innerHTML = '';
   const serial = document.getElementById('query-serial').value.trim();
   // Sin checkbox "usar relay": si hay una sesión de relay activa y el serial
@@ -1418,6 +1736,9 @@ function connectQuery(pkg){
       _qAppend('qtool', T('msg.runningTool', {name: msg.data.name, args: JSON.stringify(msg.data.arguments)}));
     } else if (msg.kind === 'tool_result') {
       _qAppend('qtool', `  ↳ ${msg.data.name}: ${msg.data.result.slice(0, 400)}`);
+      // El co-piloto encoló un scan/aipwn: adoptar el contexto de esa
+      // ejecución (logs vivos en el chat + cola refrescada + explorador).
+      if (msg.data.name === 'enqueue_scan') _adoptEnqueuedJob(msg.data.result);
     } else if (msg.kind === 'image') {
       _qAppend('qtool', `<img class="qimg" src="data:image/${msg.data.format};base64,${msg.data.b64}">`);
     } else if (msg.kind === 'assistant') {
@@ -1427,17 +1748,47 @@ function connectQuery(pkg){
     }
   };
 }
+// Package id: al menos dos puntos, segmentos estilo java (com.example.app,
+// pe.foo.bar). Se usa para (a) conectar el chat cuando el operador escribe el
+// package en el mensaje y (b) detectar el mensaje "solo package" como comando
+// de conexión/cambio de contexto.
+const _PKG_RE = /[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,}/i;
+
 function sendQuery(){
   const input = document.getElementById('query-text');
-  if (!input.value.trim()) return;
-  // Sin job elegido no hay socket (la conexión la fija openJobContext) --
-  // antes esto retornaba en silencio y parecía que el agente no respondía.
-  if (!querySocket || querySocket.readyState !== WebSocket.OPEN) {
-    _qAppend('qerror', T('err.noConnection'));
+  const text = input.value.trim();
+  if (!text) return;
+
+  // Mensaje que ES solo un package id → comando de (re)conexión: fija el
+  // contexto del chat + explorador sin mandar nada al agente.
+  const onlyPkg = text.match(_PKG_RE);
+  if (onlyPkg && onlyPkg[0] === text) {
+    connectQuery(text);
+    input.value = '';
     return;
   }
-  _qAppend('qassistant', `<span style="color:var(--accent)">${T('chat.you')}</span> ${input.value.trim().replace(/</g, '&lt;')}`);
-  querySocket.send(input.value.trim());
+
+  if (!querySocket || querySocket.readyState !== WebSocket.OPEN) {
+    // Sin job elegido no hay socket -- pero el package puede venir escrito en
+    // el propio mensaje ("analiza com.example.app"): se conecta solo y el
+    // mensaje se manda en cuanto el socket abre (después del frame de
+    // conexión, que connectQuery manda en su propio onopen, registrado antes).
+    const m = text.match(_PKG_RE);
+    if (!m) {
+      _qAppend('qerror', T('err.noPackageInMessage'));
+      return;
+    }
+    connectQuery(m[0]);
+    querySocket.addEventListener('open', () => {
+      _qAppend('qassistant', `<span style="color:var(--accent)">${T('chat.you')}</span> ${text.replace(/</g, '&lt;')}`);
+      querySocket.send(text);
+      input.value = '';
+    }, {once: true});
+    return;
+  }
+
+  _qAppend('qassistant', `<span style="color:var(--accent)">${T('chat.you')}</span> ${text.replace(/</g, '&lt;')}`);
+  querySocket.send(text);
   input.value = '';
 }
 
