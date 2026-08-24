@@ -3,21 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nutcracker dashboard</title>
+<title>Nutcracker</title>
 <style>
+  /* Paleta inspirada en nutcracker.sh: verde matrix (#00ff41) sobre negro,
+     bordes verdosos translúcidos, texto gris claro. */
   :root{
-    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --border:#2a2f3a;
-    --text:#e6e8ec; --dim:#9aa4b2; --accent:#4c8dff;
-    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+    --bg:#0a0a0a; --panel:#111213; --panel2:#141618; --border:rgba(0,255,65,.15);
+    --text:#d4d4d4; --dim:#7a7a7a; --accent:#00ff41; --accent-fg:#000;
+    --good:#00cc33; --warning:#f0a500; --serious:#ec835a; --critical:#ff4545;
   }
   @media (prefers-color-scheme: light){
     :root{
       --bg:#f4f5f7; --panel:#ffffff; --panel2:#f0f1f4; --border:#d9dce2;
-      --text:#1a1d24; --dim:#5b6472; --accent:#2f6fed;
+      --text:#1a1d24; --dim:#5b6472; --accent:#2f6fed; --accent-fg:#fff;
     }
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:var(--bg)}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
   header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel)}
   header h1{font-size:16px;margin:0;font-weight:700}
   header h1 span{color:var(--accent)}
@@ -46,14 +51,14 @@
   .explorer-tree .tdir{color:var(--accent)}
   .explorer-tree .tchildren{margin-left:14px}
   #code-path{font-size:11px;color:var(--dim);margin-bottom:6px;word-break:break-all}
-  #code-view{background:#05070a;color:#c9d1d9;padding:12px;border-radius:0 8px 8px 8px;max-height:50vh;overflow:auto;white-space:pre;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  #code-view{background:#0d0f0d;color:var(--text);padding:12px;border-radius:0 8px 8px 8px;max-height:50vh;overflow:auto;white-space:pre;font:12px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;margin:0}
   #code-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:0}
   #code-tabs .ftab{background:var(--panel2);border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;padding:3px 8px;font-size:11px;cursor:pointer;color:var(--dim)}
   #code-tabs .ftab.active{color:var(--text);border-color:var(--accent);background:var(--panel)}
   #code-tabs .ftab.chat-tab{font-weight:600}
   #code-tabs .ftab .x{margin-left:6px;color:var(--dim)}
   #code-tabs .ftab .x:hover{color:var(--critical)}
-  /* Coloreado de sintaxis del visor (paleta tipo One Dark sobre #05070a) */
+  /* Coloreado de sintaxis del visor (paleta tipo One Dark sobre #0d0f0d) */
   #code-view .hl-k{color:#c678dd}          /* keyword */
   #code-view .hl-s{color:#98c379}          /* string */
   #code-view .hl-c{color:#7f848e;font-style:italic}  /* comentario */
@@ -72,12 +77,12 @@
   .job-id-link:hover{text-decoration:underline}
   .badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
   .badge.good{background:color-mix(in srgb, var(--good) 18%, transparent);color:var(--good)}
-  .badge.warning{background:color-mix(in srgb, var(--warning) 20%, transparent);color:#8a5d00}
+  .badge.warning{background:color-mix(in srgb, var(--warning) 20%, transparent);color:var(--warning)}
   .badge.serious{background:color-mix(in srgb, var(--serious) 20%, transparent);color:var(--serious)}
   .badge.critical{background:color-mix(in srgb, var(--critical) 20%, transparent);color:var(--critical)}
   .badge.neutral{background:var(--panel2);color:var(--dim)}
   input,select,button{font:inherit;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px}
-  button{cursor:pointer;background:var(--accent);color:#fff;border:none;font-weight:600}
+  button{cursor:pointer;background:var(--accent);color:var(--accent-fg);border:none;font-weight:600}
   button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
   button:disabled{opacity:.5;cursor:not-allowed}
   .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
@@ -116,17 +121,20 @@
   .qlog-stop{color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:0 6px;font-weight:400;font-size:10px;cursor:pointer}
   .qlog-stop:hover{color:var(--critical);border-color:var(--critical)}
   .qlog-status{font-weight:400;font-size:10px;color:var(--dim);border:1px solid rgba(127,127,127,.35);border-radius:8px;padding:0 6px}
-  .qlog-status[data-st="done"]{color:#3fb27f;border-color:#3fb27f}
-  .qlog-status[data-st="error"]{color:#e5534b;border-color:#e5534b}
+  .qlog-status[data-st="done"]{color:var(--good);border-color:var(--good)}
+  .qlog-status[data-st="error"]{color:var(--critical);border-color:var(--critical)}
   .qlog-wrap{position:relative}
-  .qlog-body{background:#05070a;color:#c9d1d9;padding:8px;border-radius:6px;max-height:320px;overflow:auto;white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  .qlog-body{background:#0d0f0d;color:var(--text);padding:8px;border-radius:6px;max-height:320px;overflow:auto;white-space:pre-wrap;font:11px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;margin:0}
   /* En pestaña (sobre el chat) la tarjeta aprovecha toda la altura del panel. */
   #code-log .qlog-body{max-height:62vh}
   /* Colapsada (estilo output de tool de un agente): solo ~3 líneas con fade,
      click en el header para expandir. Se pliega sola cuando el job termina. */
   .qlog-collapsed .qlog-body{max-height:57px;overflow:hidden}
-  .qlog-collapsed .qlog-wrap::after{content:'';position:absolute;left:0;right:0;bottom:0;height:28px;background:linear-gradient(transparent,#05070a);border-radius:0 0 6px 6px;pointer-events:none}
+  .qlog-collapsed .qlog-wrap::after{content:'';position:absolute;left:0;right:0;bottom:0;height:28px;background:linear-gradient(transparent,#0d0f0d);border-radius:0 0 6px 6px;pointer-events:none}
   svg.trend{width:100%;height:160px;overflow:visible}
+  footer{text-align:center;padding:14px 10px;font-size:12px;color:var(--dim)}
+  footer a{color:var(--dim);text-decoration:none;border-bottom:1px dotted var(--border)}
+  footer a:hover{color:var(--accent);border-bottom-color:var(--accent)}
   .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
   @media (max-width:600px){
     header{padding:10px 14px}
@@ -139,7 +147,7 @@
 <body>
 
 <header>
-  <h1><span>nutcracker</span> dashboard</h1>
+  <h1><span>Nutcracker</span></h1>
   <div class="stats" id="stats">
     <div><b id="s-apps">–</b> <span data-i18n="stats.apps">apps</span></div>
     <div><b id="s-runs">–</b> <span data-i18n="stats.runs">runs</span></div>
@@ -216,7 +224,7 @@
 
         <details style="margin-top:16px">
           <summary style="cursor:pointer;color:var(--dim);font-size:13px" data-i18n="sec.advanced">Avanzado: relay (frida/adb remoto) / adb kill-server</summary>
-          <p style="font-size:12px;color:var(--muted,#888)" data-i18n="info.relay">
+          <p style="font-size:12px;color:var(--dim)" data-i18n="info.relay">
             El relay puentea `frida`/`adb` corriendo en este backend hacia el device
             conectado acá. `adb` (shell/install/pull/screencap) reusa la conexión USB
             (requiere el video USB activo). `frida` va por un WebSocket nativo directo
@@ -296,6 +304,10 @@
   </section>
 
 </main>
+
+<footer>
+  <a href="https://nutcracker.sh" target="_blank" rel="noopener">nutcracker project — nutcracker.sh</a>
+</footer>
 
 <div class="modal-backdrop" id="app-modal">
   <div class="modal">
