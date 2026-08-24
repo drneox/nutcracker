@@ -77,10 +77,19 @@ def find_split_apks(apk_path: Path) -> list[Path]:
     """
     collected: list[Path] = [apk_path]
 
-    # Caso 0: base.apk dentro de carpeta de bundle
+    # Caso 0: base.apk dentro de carpeta de bundle — SOLO su generación de
+    # splits (split_config.*/config.*). En dirs con descargas de distintas
+    # fechas conviven dos generaciones (base.apk + <pkg>.apk como bases
+    # duplicadas): juntarlas rompe install-multiple con "Split null was
+    # defined multiple times" (visto en vivo, job 20, 2026-08-23).
     if apk_path.name == "base.apk" and apk_path.parent.is_dir():
         for f in sorted(apk_path.parent.glob("*.apk")):
-            if f not in collected:
+            if f == apk_path:
+                continue
+            if (
+                f.name.startswith(("split_config.", "config."))
+                or f.stem.startswith(("split_", "base.config."))
+            ):
                 collected.append(f)
         if len(collected) > 1:
             return collected
@@ -94,8 +103,16 @@ def find_split_apks(apk_path: Path) -> list[Path]:
         if len(collected) > 1:
             return collected
 
-    # Caso 2: archivos hermanos con el mismo nombre base
+    # Caso 2: archivos hermanos — primero la generación apkeep >= 0.18 del
+    # propio apk (<pkg>.config.*.apk); solo si no hay, caer a splits genéricos.
     prefix = apk_path.stem
+    same_generation = [
+        f for f in sorted(apk_path.parent.glob(f"{prefix}.config.*.apk"))
+        if not f.stem.endswith(("_patched", "_unsigned", "_resign"))
+    ]
+    if same_generation:
+        return [apk_path, *same_generation]
+
     for f in sorted(apk_path.parent.glob("*.apk")):
         if f == apk_path:
             continue
@@ -324,18 +341,24 @@ def patch_split_apk(
         return None
 
     zipalign = str(Path(apksigner).parent / "zipalign")
+    to_sign = unsigned
     if Path(zipalign).exists():
         cb(t("apk_aligning"))
         za_result = subprocess.run(
             [zipalign, "-f", "4", str(unsigned), str(aligned)],
             capture_output=True, text=True, timeout=60,
         )
-        unsigned.unlink(missing_ok=True)
-        if za_result.returncode != 0:
-            cb(t("apk_zipalign_warning", err=za_result.stderr[:200]))
-            aligned.rename(unsigned)
-    else:
-        aligned = unsigned
+        if za_result.returncode == 0 and aligned.exists():
+            unsigned.unlink(missing_ok=True)
+            to_sign = aligned
+        else:
+            # zipalign es best-effort: si falla se firma el APK sin alinear.
+            # Antes: unsigned se borraba SIEMPRE y se hacía
+            # aligned.rename(unsigned) con aligned inexistente → la firma
+            # terminaba apuntando a un archivo que no existía (job 20,
+            # 2026-08-23: "Error signing APK: FileNotFoundException aligned").
+            cb(t("apk_zipalign_warning", err=(za_result.stderr or "")[:200]))
+            aligned.unlink(missing_ok=True)
 
     cb(t("apk_signing"))
     sign_result = subprocess.run(
@@ -346,11 +369,11 @@ def patch_split_apk(
             "--key-pass", "pass:android",
             "--ks-key-alias", "androiddebugkey",
             "--out", str(patched),
-            str(aligned),
+            str(to_sign),
         ],
         capture_output=True, text=True, timeout=60,
     )
-    aligned.unlink(missing_ok=True)
+    to_sign.unlink(missing_ok=True)
 
     if sign_result.returncode != 0:
         cb(t("apk_sign_error", err=sign_result.stderr[:300]))
