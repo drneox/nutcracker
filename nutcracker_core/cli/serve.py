@@ -49,6 +49,16 @@ def serve(config_path: str) -> None:
     engine.transport_keepalive = keepalive
     keepalive.start()
 
+    # Jobs que quedaron 'running' de un proceso anterior (dashboard o daemon
+    # que murió a mitad de corrida): ya no tienen subproceso ni logs, así que
+    # se marcan como error en vez de mostrarse eternamente "en ejecución".
+    recovered = engine.recover_interrupted_jobs()
+    if recovered:
+        console.print(
+            f"[yellow]![/yellow] cola: {recovered} job(s) interrumpido(s) por el "
+            "reinicio marcados como error"
+        )
+
     scheduler = NutcrackerScheduler(engine, config)
     scheduler.start()
 

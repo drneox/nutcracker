@@ -114,6 +114,15 @@ def register(cli) -> None:
         bind = host or str(cfg_get(config, "dashboard", "bind", default="127.0.0.1"))
         listen_port = port or int(cfg_get(config, "dashboard", "port", default=8765))
 
+        # Idioma de la UI: la key top-level `language:` (misma convención que
+        # el CLI, ver orchestrator._init_i18n) -- el frontend la consulta vía
+        # GET /api/i18n y elige su diccionario. Valores fuera de
+        # i18n.SUPPORTED_LANGUAGES caen a 'en'.
+        from nutcracker_core import i18n as _i18n
+        language = str(cfg_get(config, "language", default="en")).strip().lower()
+        if language not in _i18n.SUPPORTED_LANGUAGES:
+            language = "en"
+
         # Auth (login por sesión) -- ver auth.py y deploy/README.md. Se activa
         # solo si `dashboard.auth.enabled` es true; sin eso el dashboard queda
         # abierto (uso local/dev). El `internal_token` es una credencial de
@@ -141,6 +150,10 @@ def register(cli) -> None:
         # vez de tener que escribirlo a mano en cada campo de serial del
         # dashboard (cola, batch).
         default_serial = str(cfg_get(config, "strategies", "default_device_id", default="")).strip() or None
+        # strategies.runtime_target (emulator|device): el panel Dispositivo lo
+        # usa para ofrecer la vista de emulador por screencap polling -- WebUSB
+        # solo sirve con un device físico por cable (ver api.py y static/index.html).
+        runtime_target = str(cfg_get(config, "strategies", "runtime_target", default="")).strip() or None
 
         db_path = db_path_from_config(config)
         engine = QueueEngine(
@@ -149,6 +162,16 @@ def register(cli) -> None:
             static_workers=int(cfg_get(config, "queue", "static_workers", default=4)),
             dynamic_workers=int(cfg_get(config, "queue", "dynamic_workers", default=2)),
         )
+        # Los jobs que quedaron 'running' de un dashboard anterior (murió a
+        # mitad de corrida) son zombis: su subproceso y sus logs ya no existen
+        # y nadie los va a retomar. Marcarlos como error con la causa, para
+        # que no se muestren eternamente "en ejecución" en la cola.
+        recovered = engine.recover_interrupted_jobs()
+        if recovered:
+            console.print(
+                f"[yellow]![/yellow] cola: {recovered} job(s) que quedaron 'running' "
+                "de un proceso anterior marcados como error (interrumpidos por el reinicio)"
+            )
         # Streaming de logs en vivo (Fase 3): cada línea de stdout de un job
         # corrido por ESTA instancia de engine se publica al EventBus, que
         # /ws/jobs/{id} consume. Se asigna aquí (no en api.py/create_router) a
@@ -157,6 +180,11 @@ def register(cli) -> None:
         # subprocess.run clásico de Fase 1, en vez de pasar siempre por
         # _run_streaming/subprocess.Popen.
         engine.on_line = lambda job_id, line: bus.publish(str(job_id), "log", line)
+        # Persistencia de logs por job (logs/jobs/job-<id>.log): sin esto el
+        # historial vive solo en el EventBus en memoria y se pierde con el
+        # proceso -- un click en un job corrido antes de un reinicio mostraba
+        # el panel de logs vacío (ver ws.py::ws_job, que lo usa de replay).
+        engine.log_dir = "logs/jobs"
         # Wiring del chat (Fase 3, follow-up del plan): el subproceso de un job
         # "aipwn" lee esta env var para saber a dónde hacer polling del mailbox
         # de chat (ver plugins/aipwn/frida_agent.py::_check_operator_chat).
@@ -195,7 +223,8 @@ def register(cli) -> None:
 
         app = create_app(
             db_path=db_path, engine=engine, default_serial=default_serial,
-            auth=auth, llm_config=llm_config,
+            auth=auth, llm_config=llm_config, runtime_target=runtime_target,
+            job_log_dir=engine.log_dir, language=language,
         )
 
         console.print(

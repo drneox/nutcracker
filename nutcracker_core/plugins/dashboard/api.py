@@ -4,15 +4,18 @@ a través de sus APIs públicas (QueueEngine), nunca reimplementa análisis."""
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from nutcracker_core import adb_transport
 from nutcracker_core import capabilities
+from nutcracker_core.i18n import SUPPORTED_LANGUAGES
 from nutcracker_core.queue.engine import QueueEngine
 from nutcracker_core.store import db, repository
 
@@ -25,6 +28,13 @@ from nutcracker_core.store import db, repository
 from . import chat_mailbox, store_reader
 from .events import bus
 from .relay import RelayError, RpcError, RpcTimeoutError, relay_manager
+
+# Extensiones servibles por el explorador del decompilado (/api/decompiled/*/file)
+# -- solo texto; binarios del APK (png, dex, so, arsc...) no se sirven por acá.
+_DECOMPILED_TEXT_EXTS = frozenset({
+    "java", "kt", "xml", "txt", "json", "smali", "md", "properties",
+    "yml", "yaml", "gradle", "kts", "html", "css", "js", "mf", "sf", "csv",
+})
 
 
 def classify_batch_target(
@@ -219,7 +229,8 @@ async def _run_relay_rpc(session, op: str, **fields):
 
 def create_router(
     db_path: str, engine: QueueEngine, default_serial: str | None = None,
-    llm_config: dict | None = None,
+    llm_config: dict | None = None, runtime_target: str | None = None,
+    decompiled_dir: Path | None = None, language: str = "en",
 ) -> APIRouter:
     """No toca ``engine.on_line`` a propósito: ese wiring (streaming de logs en
     vivo al EventBus) lo hace ``plugins/dashboard/__init__.py::dashboard()``
@@ -250,8 +261,204 @@ def create_router(
         típicamente un serial de red ("ip:5555" tras ``adb tcpip 5555``) para
         que el operador no tenga que escribirlo a mano en cada job, y para
         evitar el conflicto de exclusividad USB con el video WebUSB (ver
-        README de nutcracker_core/plugins/dashboard/webusb/)."""
-        return {"serial": default_serial}
+        README de nutcracker_core/plugins/dashboard/webusb/).
+
+        ``runtime_target`` (``strategies.runtime_target``: emulator|device) le
+        dice al panel Dispositivo si debe ofrecer la vista de emulador por
+        screencap polling (WebUSB solo aplica a devices físicos por cable)."""
+        return {"serial": default_serial, "runtime_target": runtime_target}
+
+    @router.get("/api/i18n")
+    def i18n_config():
+        """Idioma de la UI del dashboard: la key top-level ``language:`` de
+        config.yaml (la misma que usa el CLI -- ver orchestrator._init_i18n),
+        ya validada por el comando dashboard contra i18n.SUPPORTED_LANGUAGES.
+        El frontend elige su diccionario (en|es) con esto; default 'en'."""
+        return {"language": language, "supported": sorted(SUPPORTED_LANGUAGES)}
+
+    @router.get("/api/device/list")
+    def device_list():
+        """Dispositivos que ve el adb DEL BACKEND (``adb devices``), ya
+        clasificados por tipo -- el panel Dispositivo lo usa para autodetectar
+        el emulador cuando el operador no escribió un serial a mano."""
+        adb = shutil.which("adb")
+        if not adb:
+            return {"available": False, "devices": []}
+        try:
+            proc = subprocess.run([adb, "devices"], capture_output=True, text=True, timeout=8)
+        except (subprocess.TimeoutExpired, OSError):
+            return {"available": False, "devices": []}
+        devices = []
+        for line in proc.stdout.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            serial, state = parts
+            kind = ("emulator" if serial.startswith(("emulator-", "127.0.0.1:", "localhost:"))
+                    else "network" if ":" in serial else "usb")
+            devices.append({"serial": serial, "state": state, "kind": kind})
+        return {"available": True, "devices": devices}
+
+    @router.get("/api/device/screenshot")
+    def device_screenshot(serial: str | None = None):
+        """Frame PNG actual del device vía ``adb exec-out screencap -p`` -- la
+        vista de pantalla para emuladores y devices de red, donde WebUSB no
+        aplica (no hay cable USB que reclamar desde el navegador). El frontend
+        lo pollea ~1/s mientras la vista de emulador está activa."""
+        adb = shutil.which("adb")
+        if not adb:
+            raise HTTPException(status_code=503, detail="adb no está instalado en el backend")
+        cmd = [adb] + (["-s", serial] if serial else []) + ["exec-out", "screencap", "-p"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(status_code=504, detail="screencap timeout") from exc
+        except OSError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if proc.returncode != 0 or not proc.stdout:
+            raise HTTPException(
+                status_code=502,
+                detail=proc.stderr.decode(errors="replace").strip() or "screencap falló",
+            )
+        return Response(content=proc.stdout, media_type="image/png")
+
+    @router.post("/api/device/restart-adb")
+    def device_restart_adb(serial: str | None = None):
+        """Recuperación por etapas de la conexión adb (botón "🔌 Reiniciar adb"
+        del panel Dispositivo):
+
+        1. ``adb -s <serial> reconnect`` (reset del transporte, nada invasivo)
+           + chequeo de vida (``shell echo``). Si responde, listo.
+        2. Si no: ``kill-server`` + ``start-server`` y nuevo chequeo.
+
+        NO toca el guest (no hace ``adb reboot``): si el device/emulador quedó
+        colgado del lado del sistema operativo (adbd no responde ni con el
+        server recién reiniciado), ``ok=False`` le dice al operador que toca
+        reiniciar el emulador a mano -- matar qemu desde un botón web es
+        demasiado destructivo."""
+        adb = shutil.which("adb")
+        if not adb:
+            raise HTTPException(status_code=503, detail="adb no está instalado en el backend")
+
+        def _run(args: list[str], timeout: int) -> None:
+            try:
+                subprocess.run([adb] + args, capture_output=True, timeout=timeout)
+            except (subprocess.TimeoutExpired, OSError):
+                pass  # la etapa falló -- el chequeo de vida de abajo decide
+
+        def _alive() -> bool:
+            try:
+                proc = subprocess.run(
+                    [adb, "-s", serial, "shell", "echo", "ok"],
+                    capture_output=True, timeout=8,
+                )
+                return proc.returncode == 0
+            except (subprocess.TimeoutExpired, OSError):
+                return False
+
+        steps: list[str] = []
+        if serial:
+            _run(["-s", serial, "reconnect"], 10)
+            steps.append(f"reconnect {serial}")
+            if _alive():
+                return {"ok": True, "steps": steps}
+        _run(["kill-server"], 10)
+        _run(["start-server"], 15)
+        steps.append("kill-server → start-server")
+        return {"ok": _alive() if serial else True, "steps": steps}
+
+    # ── Explorador del decompilado (workbench IDE del dashboard) ─────────────
+    # Sirve el árbol de decompiled/<package>/ (jadx) y runtime_dump_<package>/
+    # (FART) directo de disco. Carga perezosa por directorio (un árbol plano de
+    # un jadx real puede superar los 30k archivos) y guards estrictas: nada de
+    # path traversal fuera de la raíz del package, solo extensiones de texto y
+    # caps de tamaño.
+    decompiled_base = decompiled_dir if decompiled_dir is not None else Path("decompiled")
+
+    def _decompiled_root(package: str, root: str) -> Path:
+        if package in ("", ".", "..") or "/" in package or "\\" in package:
+            raise HTTPException(status_code=400, detail="package inválido")
+        name = f"runtime_dump_{package}" if root == "runtime" else package
+        return decompiled_base / name
+
+    def _resolve_within(base: Path, rel: str) -> Path:
+        try:
+            target = (base / rel).resolve()
+            target.relative_to(base.resolve())
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail="path fuera del decompilado") from exc
+        return target
+
+    @router.get("/api/decompiled/{package}/tree")
+    def decompiled_tree(package: str, root: str = "static", path: str = ""):
+        """Hijos inmediatos de ``path`` dentro del decompilado del package --
+        el explorador carga directorio por directorio al expandir nodos."""
+        base = _decompiled_root(package, root)
+        if not base.is_dir():
+            return {"exists": False, "entries": []}
+        target = _resolve_within(base, path)
+        if not target.is_dir():
+            raise HTTPException(status_code=404, detail="directorio no encontrado")
+        entries = []
+        for child in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+            if child.name.startswith("."):
+                continue
+            try:
+                size = child.stat().st_size if child.is_file() else 0
+            except OSError:
+                continue
+            entries.append({
+                "name": child.name,
+                "type": "dir" if child.is_dir() else "file",
+                "size": size,
+            })
+            if len(entries) >= 2000:
+                break
+        return {"exists": True, "entries": entries}
+
+    @router.get("/api/decompiled/{package}/file")
+    def decompiled_file(package: str, root: str = "static", path: str = ""):
+        """Contenido de un archivo del decompilado, como JSON {content, truncated}.
+        Solo extensiones de texto; >2 MB se rechaza; >512 KB se trunca."""
+        base = _decompiled_root(package, root)
+        target = _resolve_within(base, path)
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="archivo no encontrado")
+        ext = target.suffix.lower().lstrip(".")
+        if ext and ext not in _DECOMPILED_TEXT_EXTS:
+            raise HTTPException(status_code=415, detail=f"extensión .{ext} no es de texto")
+        try:
+            size = target.stat().st_size
+        except OSError as exc:
+            raise HTTPException(status_code=404, detail="archivo no legible") from exc
+        if size > 2 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="archivo demasiado grande (>2 MB)")
+        content = target.read_text(encoding="utf-8", errors="replace")
+        truncated = len(content) > 512 * 1024
+        if truncated:
+            content = content[:512 * 1024] + "\n[... truncado a 512 KB ...]"
+        return {"path": path, "content": content, "truncated": truncated}
+
+    @router.get("/api/decompiled/{package}/search")
+    def decompiled_search(package: str, root: str = "static", q: str = ""):
+        """Filtro por nombre de archivo (substring case-insensitive) sobre todo
+        el árbol del package -- la caja de filtro del explorador. Cap 200."""
+        needle = q.strip().lower()
+        if len(needle) < 2:
+            raise HTTPException(status_code=400, detail="q debe tener al menos 2 caracteres")
+        base = _decompiled_root(package, root)
+        if not base.is_dir():
+            return {"exists": False, "results": []}
+        results = []
+        for p in base.rglob("*"):
+            try:
+                if p.is_file() and needle in p.name.lower():
+                    results.append(str(p.relative_to(base)))
+            except OSError:
+                continue
+            if len(results) >= 200:
+                break
+        return {"exists": True, "results": sorted(results)}
 
     @router.post("/api/adb/kill-server")
     def adb_kill_server():

@@ -44,6 +44,7 @@ def client(tmp_path, monkeypatch):
     yield TestClient(app)
     from nutcracker_core import capabilities
     capabilities.unregister("aipwn.has_resume_state")
+    capabilities.unregister("aipwn.load_resume_state")
     capabilities.unregister("aipwn.system_prompt")
     capabilities.unregister("aipwn.query")
 
@@ -122,3 +123,43 @@ def test_query_available_endpoint_reflects_llm_config(client, tmp_path, monkeypa
     app_no_llm = create_app(db_path=str(tmp_path / "no_llm2.db"), engine=engine, llm_config=None)
     r2 = TestClient(app_no_llm).get("/api/query/available")
     assert r2.json() == {"available": False}
+
+
+def test_query_ws_loads_pending_resume_state(client):
+    """Handoff vivo: si la última corrida autónoma quedó sin conclusión (hay
+    resume_state en aipwn_memory/), el chat hereda la conversación REAL -- el
+    primer llamado al LLM debe incluir los mensajes viejos, con el system
+    prompt autónomo reemplazado por el del co-piloto + nota de handoff."""
+    from nutcracker_core.plugins.aipwn.agent_memory import save_resume_state
+
+    # El fixture hizo chdir(tmp_path) -- aipwn_memory/ es relativo al cwd.
+    save_resume_state(
+        "com.example.app",
+        messages=[
+            {"role": "system", "content": "OLD AUTONOMOUS PROMPT"},
+            {"role": "user", "content": "OLD autonomous goal message"},
+        ],
+        frida_runs_used=2,
+        iteration=7,
+    )
+
+    captured: dict = {}
+
+    def fake_chat(self, messages, tools=None):
+        captured["messages"] = list(messages)
+        return _text_response("continuando desde donde quedó")
+
+    with patch.object(LLMClient, "chat", fake_chat):
+        with client.websocket_connect("/ws/query/com.example.app") as ws:
+            ws.send_json({"serial": None, "relay": False})
+            ws.send_text("seguí afinando el bypass")
+            msg = ws.receive_json()
+
+    assert msg["kind"] == "assistant"
+    contents = [str(m.get("content")) for m in captured["messages"]]
+    # La conversación vieja está presente, con el system prompt reemplazado:
+    assert any("OLD autonomous goal message" in c for c in contents)
+    assert "OLD AUTONOMOUS PROMPT" not in contents[0]
+    assert "live handoff" in contents[0]
+    # Y el mensaje nuevo del operador va al final:
+    assert "seguí afinando el bypass" in contents[-1]

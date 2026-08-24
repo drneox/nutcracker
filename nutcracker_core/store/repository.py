@@ -245,6 +245,27 @@ def update_job_status(conn: sqlite3.Connection, job_id: int, status: str,
     conn.commit()
 
 
+def fail_running_jobs(conn: sqlite3.Connection, error: str) -> int:
+    """Marca como 'error' TODOS los jobs en estado 'running'. Se usa al
+    arrancar un proceso servidor (dashboard/daemon): un 'running' persistido
+    solo puede ser el resto de un proceso anterior que murió a mitad de
+    corrida (su subproceso y sus logs se fueron con él), así que dejarlo en
+    'running' lo mostraría para siempre como en ejecución sin estarlo.
+    Retorna cuántos jobs se marcaron."""
+    cur = conn.execute(
+        """
+        UPDATE queue_jobs SET
+            status = 'error',
+            error = ?,
+            finished_at = ?
+        WHERE status = 'running'
+        """,
+        (error, _utcnow()),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def link_job_run(conn: sqlite3.Connection, job_id: int, run_id: int, package: str) -> None:
     """Vincula un queue_job con el `run` real que produjo. El propio subproceso del
     job llama a esto desde store/hooks.py (vía NUTCRACKER_QUEUE_JOB_ID), porque el

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue as queue_mod
 import threading
 
@@ -34,6 +35,12 @@ _auth: AuthConfig | None = None
 _query_llm_config: dict | None = None
 _query_db_path: str | None = None
 
+# Directorio con los logs persistidos por job (<dir>/job-<id>.log, ver
+# queue/engine.py::log_dir), seteado por server.create_app(). Es el replay
+# de /ws/jobs/{id} cuando el EventBus en memoria ya no tiene el historial
+# (reinicio del dashboard a mitad de corrida). None = sin fallback (tests).
+_job_log_dir: str | None = None
+
 
 def set_auth(auth: "AuthConfig | None") -> None:
     global _auth
@@ -44,6 +51,11 @@ def set_query_config(llm_config: dict | None, db_path: str | None) -> None:
     global _query_llm_config, _query_db_path
     _query_llm_config = llm_config
     _query_db_path = db_path
+
+
+def set_job_log_dir(log_dir: str | None) -> None:
+    global _job_log_dir
+    _job_log_dir = log_dir
 
 
 async def _reject_if_unauthenticated(websocket: WebSocket) -> bool:
@@ -85,8 +97,29 @@ async def ws_job(websocket: WebSocket, job_id: str) -> None:
     await websocket.accept()
     q = bus.subscribe(job_id)
     try:
-        for event in bus.history(job_id):
-            await websocket.send_json({"kind": event.kind, "data": event.data})
+        history = bus.history(job_id)
+        if history:
+            for event in history:
+                await websocket.send_json({"kind": event.kind, "data": event.data})
+        else:
+            # Sin historial en memoria (el dashboard se reinició desde que el
+            # job corrió): replay desde el log persistido en disco, si existe
+            # (ver queue/engine.py::log_dir). job_id viene de la URL -- el
+            # isdigit() lo mantiene como nombre de archivo seguro.
+            if _job_log_dir and job_id.isdigit():
+                log_path = os.path.join(_job_log_dir, f"job-{job_id}.log")
+                if os.path.exists(log_path):
+                    with open(log_path, encoding="utf-8", errors="replace") as f:
+                        # En chunks de 500 líneas para no mandar un frame WS
+                        # por línea en logs largos (un scan estático son miles).
+                        chunk: list[str] = []
+                        for line in f:
+                            chunk.append(line.rstrip("\n"))
+                            if len(chunk) >= 500:
+                                await websocket.send_json({"kind": "log", "data": "\n".join(chunk)})
+                                chunk = []
+                        if chunk:
+                            await websocket.send_json({"kind": "log", "data": "\n".join(chunk)})
 
         while True:
             try:
@@ -245,6 +278,24 @@ async def ws_query(websocket: WebSocket, package: str) -> None:
     decompiled_dir, runtime_dump_dir, analysis_result = await run_in_threadpool(
         query_cap["resolve_package_context"], package,
     )
+
+    # ── Handoff vivo: si la última corrida autónoma quedó sin conclusión hay
+    # un resume_state pendiente (agent_memory.save_resume_state) -- el chat
+    # hereda la conversación REAL de esa corrida en vez de solo la semilla
+    # con el resumen, para poder afinar el bypass donde quedó. No se limpia
+    # el estado: el botón "+N iteraciones" sigue pudiendo reanudarla en modo
+    # autónomo.
+    # Gate de versión: la capacidad aipwn.load_resume_state solo existe en el
+    # plugin que ya acepta el kwarg resume_messages -- si falta (plugin
+    # viejo), el chat arranca como antes, con la semilla-resumen.
+    agent_kwargs: dict = {}
+    load_resume = capabilities.get("aipwn.load_resume_state")
+    if load_resume is not None:
+        resume_state = await run_in_threadpool(load_resume, package)
+        agent_kwargs["resume_messages"] = (
+            (resume_state or {}).get("messages") or None
+        )
+
     agent = query_cap["QueryAgent"](
         package=package,
         decompiled_dir=decompiled_dir,
@@ -255,6 +306,7 @@ async def ws_query(websocket: WebSocket, package: str) -> None:
         serial=serial if not use_relay else None,
         frida_host=frida_host,
         device=device,
+        **agent_kwargs,
     )
 
     try:

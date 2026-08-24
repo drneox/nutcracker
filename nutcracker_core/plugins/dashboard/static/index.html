@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -23,18 +23,45 @@
   header h1 span{color:var(--accent)}
   .stats{display:flex;flex-wrap:wrap;gap:16px;margin-left:auto;font-size:12px;color:var(--dim)}
   .stats b{color:var(--text);font-size:14px}
-  main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px}
+  main{max-width:1500px;margin:0 auto;padding:16px;display:grid;gap:16px}
   .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
   .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);margin:0 0 12px}
-  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:12px}
-  .tab{padding:8px 14px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
-  .tab.active{color:var(--text);border-color:var(--accent)}
-  .tabpanel{display:none}
-  .tabpanel.active{display:block}
   .table-scroll{overflow-x:auto}
   table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
   th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
   th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  /* Sección de interacción tipo IDE (referencia: djini.ai): explorador del
+     decompilado a la izquierda, columna central con chat + visor de código +
+     logs TODO visible a la vez (sin tabs), y la pantalla del dispositivo fija
+     a la derecha. Se apila en pantallas angostas. */
+  .interaction-grid{display:grid;grid-template-columns:240px minmax(0,1fr) 360px;gap:18px;align-items:start}
+  .interaction-side{position:sticky;top:16px}
+  #emulator-img{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;display:block}
+  .explorer-tree{max-height:70vh;overflow:auto;background:var(--panel2);border-radius:8px;padding:8px;font-size:12px;color:var(--dim)}
+  .explorer-tree .tnode{cursor:pointer;padding:2px 4px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+  .explorer-tree .tnode:hover{background:var(--panel)}
+  .explorer-tree .tdir{color:var(--accent)}
+  .explorer-tree .tchildren{margin-left:14px}
+  #code-path{font-size:11px;color:var(--dim);margin-bottom:6px;word-break:break-all}
+  #code-view{background:#05070a;color:#c9d1d9;padding:12px;border-radius:0 8px 8px 8px;max-height:50vh;overflow:auto;white-space:pre;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+  #code-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:0}
+  #code-tabs .ftab{background:var(--panel2);border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;padding:3px 8px;font-size:11px;cursor:pointer;color:var(--dim)}
+  #code-tabs .ftab.active{color:var(--text);border-color:var(--accent);background:var(--panel)}
+  #code-tabs .ftab.chat-tab{font-weight:600}
+  #code-tabs .ftab .x{margin-left:6px;color:var(--dim)}
+  #code-tabs .ftab .x:hover{color:var(--critical)}
+  /* Coloreado de sintaxis del visor (paleta tipo One Dark sobre #05070a) */
+  #code-view .hl-k{color:#c678dd}          /* keyword */
+  #code-view .hl-s{color:#98c379}          /* string */
+  #code-view .hl-c{color:#7f848e;font-style:italic}  /* comentario */
+  #code-view .hl-n{color:#d19a66}          /* número */
+  #code-view .hl-a{color:#e5c07b}          /* anotación / directiva */
+  #code-view .hl-t{color:#e06c75}          /* tag xml */
+  #code-view .hl-at{color:#d19a66}         /* atributo xml / key json */
+  @media (max-width:1100px){
+    .interaction-grid{grid-template-columns:1fr}
+    .interaction-side{position:static}
+  }
   tr.clickable{cursor:pointer}
   tr.clickable:hover{background:var(--panel2)}
   .job-id-link{color:var(--accent);text-decoration:none;font-weight:600}
@@ -50,7 +77,6 @@
   button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
   button:disabled{opacity:.5;cursor:not-allowed}
   .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
-  #log{background:#05070a;color:#c9d1d9;padding:12px;border-radius:8px;height:320px;overflow:auto;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
   #webusb-canvas{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;min-height:280px;display:block}
   .device-status{font-size:12px;color:var(--dim);margin:6px 0}
   .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
@@ -62,16 +88,17 @@
   .kpi b{display:block;font-size:18px}
   .kpi span{color:var(--dim);font-size:11px;text-transform:uppercase}
   .close-x{float:right;cursor:pointer;color:var(--dim);font-size:20px;line-height:1}
-  #chatlog{height:180px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
-  #chatlog .msg{margin-bottom:6px}
-  #chatlog .op{color:var(--accent)}
   #querylog{height:360px;overflow:auto;background:var(--panel2);border-radius:8px;padding:10px;font-size:12px;margin-bottom:8px}
   #querylog .qmsg{margin-bottom:8px;white-space:pre-wrap}
   #querylog .qtool{color:var(--dim);font-style:italic}
   #querylog .qassistant{color:var(--text)}
   #querylog .qerror{color:var(--critical)}
   #querylog .qimg{max-width:260px;border-radius:6px;border:1px solid var(--border);display:block;margin-top:4px}
-  .tab.disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+  /* Tarjeta de logs de un job dentro del stream del chat: crece en el sitio
+     (no una burbuja por línea -- un scan son miles) y queda en orden
+     cronológico con las respuestas del agente. */
+  #querylog .qlog-head{font-size:11px;color:var(--accent);margin-bottom:4px;font-weight:600}
+  #querylog .qlog-body{background:#05070a;color:#c9d1d9;padding:8px;border-radius:6px;max-height:220px;overflow:auto;white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
   svg.trend{width:100%;height:160px;overflow:visible}
   .tooltip-fixed{position:fixed;background:var(--panel2);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none;z-index:100}
   @media (max-width:600px){
@@ -87,149 +114,143 @@
 <header>
   <h1><span>nutcracker</span> dashboard</h1>
   <div class="stats" id="stats">
-    <div><b id="s-apps">–</b> apps</div>
-    <div><b id="s-runs">–</b> runs</div>
-    <div><b id="s-findings">–</b> findings</div>
-    <div><b id="s-jobs">–</b> active jobs</div>
+    <div><b id="s-apps">–</b> <span data-i18n="stats.apps">apps</span></div>
+    <div><b id="s-runs">–</b> <span data-i18n="stats.runs">runs</span></div>
+    <div><b id="s-findings">–</b> <span data-i18n="stats.findings">findings</span></div>
+    <div><b id="s-jobs">–</b> <span data-i18n="stats.activeJobs">active jobs</span></div>
   </div>
-  <button class="secondary" id="logout-btn" style="margin-left:12px" onclick="logout()">Salir</button>
+  <button class="secondary" id="logout-btn" style="margin-left:12px" onclick="logout()" data-i18n="btn.logout">Salir</button>
 </header>
 
 <main>
 
   <section class="card">
-    <h2>Apps</h2>
+    <h2 data-i18n="sec.apps">Apps</h2>
     <div class="table-scroll">
       <table id="apps-table">
-        <thead><tr><th>Package</th><th>Veredicto</th><th>MASVS</th><th>Próxima revisión</th><th></th></tr></thead>
+        <thead><tr><th>Package</th><th data-i18n="th.verdict">Veredicto</th><th>MASVS</th><th data-i18n="th.nextReview">Próxima revisión</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
   </section>
 
   <section class="card">
-    <h2>Cola de análisis</h2>
+    <h2 data-i18n="sec.queue">Cola de análisis</h2>
     <div class="row" style="border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:10px">
-      <span style="font-size:12px;color:var(--dim)">Subir .apk (queda en <code>downloads/</code>, útil sin terminal en el servidor):</span>
+      <span style="font-size:12px;color:var(--dim)"><span data-i18n="queue.uploadHintA">Subir .apk (queda en</span> <code>downloads/</code><span data-i18n="queue.uploadHintB">, útil sin terminal en el servidor):</span></span>
       <input type="file" id="apk-upload-file" accept=".apk">
-      <button class="secondary" onclick="uploadApk()" id="apk-upload-btn">Subir</button>
+      <button class="secondary" onclick="uploadApk()" id="apk-upload-btn" data-i18n="btn.upload">Subir</button>
       <span id="apk-upload-status" style="font-size:12px;color:var(--dim)"></span>
     </div>
     <div class="row">
-      <input id="q-target" placeholder="ruta .apk / URL / package id" style="flex:1;min-width:200px">
+      <input id="q-target" placeholder="ruta .apk / URL / package id" data-i18n-ph="ph.target" style="flex:1;min-width:200px">
       <select id="q-kind"><option value="static">static</option><option value="dynamic">dynamic</option><option value="aipwn">aipwn</option></select>
-      <input id="q-serial" placeholder="serial (opcional) / session id si usás relay" style="width:220px">
-      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo 'serial' de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) en vez de un serial adb directo.">
-        <input type="checkbox" id="q-relay" style="width:auto"> vía relay
+      <input id="q-serial" placeholder="serial (opcional) / session id si usas relay" data-i18n-ph="ph.serial" style="width:220px">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo 'serial' de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) en vez de un serial adb directo." data-i18n-title="tip.relaySerial">
+        <input type="checkbox" id="q-relay" style="width:auto"> <span data-i18n="lbl.viaRelay">vía relay</span>
       </label>
       <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
-        <input type="checkbox" id="q-run-now" style="width:auto"> correr ahora
+        <input type="checkbox" id="q-run-now" style="width:auto" checked> <span data-i18n="lbl.runNow">correr ahora</span>
       </label>
-      <button onclick="submitQueue()">Encolar</button>
+      <button onclick="submitQueue()" data-i18n="btn.enqueue">Encolar</button>
     </div>
 
     <div class="row" style="border-top:1px solid var(--border);padding-top:10px">
-      <span style="font-size:12px;color:var(--dim)" title="Cada línea se resuelve sola según su formato: 'algo.apk' busca ese archivo en downloads/, un package id (com.example.app) intenta primero el dispositivo conectado y si no está instalado ahí (o no hay dispositivo) cae solo a la store -- una URL sigue igual que antes. El dropdown de fuente fuerza TODOS los package id de la lista a esa fuente, sin el fallback automático.">Batch desde archivo (.txt, un target por línea: .apk / package id / URL) ⓘ</span>
+      <span style="font-size:12px;color:var(--dim)" title="Cada línea se resuelve sola según su formato: 'algo.apk' busca ese archivo en downloads/, un package id (com.example.app) intenta primero el dispositivo conectado y si no está instalado ahí (o no hay dispositivo) cae solo a la store -- una URL sigue igual que antes. El dropdown de fuente fuerza TODOS los package id de la lista a esa fuente, sin el fallback automático." data-i18n="lbl.batchFile" data-i18n-title="tip.batchSource">Batch desde archivo (.txt, un target por línea: .apk / package id / URL) ⓘ</span>
       <input type="file" id="batch-file" accept=".txt" style="flex:1;min-width:160px">
       <select id="batch-source">
-        <option value="">fuente: auto por línea (default)</option>
-        <option value="device">fuente: forzar device (sin fallback)</option>
+        <option value="" data-i18n="opt.batchAuto">fuente: auto por línea (default)</option>
+        <option value="device" data-i18n="opt.batchDevice">fuente: forzar device (sin fallback)</option>
       </select>
-      <input id="batch-serial" placeholder="serial / session id de relay" style="width:180px">
-      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) -- aplica también al aipwn encadenado.">
-        <input type="checkbox" id="batch-relay" style="width:auto"> vía relay
+      <input id="batch-serial" placeholder="serial / session id de relay" data-i18n-ph="ph.batchSerial" style="width:180px">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) -- aplica también al aipwn encadenado." data-i18n-title="tip.batchRelay">
+        <input type="checkbox" id="batch-relay" style="width:auto"> <span data-i18n="lbl.viaRelay">vía relay</span>
       </label>
       <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
-        <input type="checkbox" id="batch-then-aipwn" checked style="width:auto"> encadenar aipwn
+        <input type="checkbox" id="batch-then-aipwn" checked style="width:auto"> <span data-i18n="lbl.chainAipwn">encadenar aipwn</span>
       </label>
-      <button class="secondary" onclick="runBatch()">Batch</button>
+      <button class="secondary" onclick="runBatch()" data-i18n="btn.batch">Batch</button>
     </div>
 
     <div class="table-scroll">
       <table id="queue-table">
-        <thead><tr><th>#</th><th>Kind</th><th>Target</th><th>Estado</th><th>Package</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>Kind</th><th>Target</th><th data-i18n="th.status">Estado</th><th>Package</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
   </section>
 
   <section class="card">
-    <div class="tabs">
-      <div class="tab active" data-tab="logs">Logs en vivo</div>
-      <div class="tab" data-tab="device">Dispositivo</div>
-      <div class="tab" data-tab="agent">Agente / Chat</div>
-      <div class="tab" data-tab="query" id="tab-query-label">Pentest asistido</div>
-    </div>
+    <div class="interaction-grid">
+      <div class="explorer">
+        <h2 style="margin-top:0" data-i18n="sec.explorer">Explorador</h2>
+        <div class="row" style="margin-bottom:6px;flex-wrap:nowrap">
+          <input id="explorer-filter" placeholder="filtrar archivo…" data-i18n-ph="ph.filterFile" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter')searchExplorer()">
+          <button class="secondary" onclick="searchExplorer()" title="Filtrar por nombre de archivo" data-i18n-title="tip.filterFile">🔎</button>
+          <button class="secondary" onclick="loadExplorer()" title="Recargar árbol" data-i18n-title="tip.reloadTree">⟳</button>
+        </div>
+        <div class="explorer-tree" id="explorer-tree" data-i18n="explorer.empty">(elige un job de la cola ↑ para explorar su decompilado)</div>
+      </div>
 
-    <div class="tabpanel active" id="tab-logs">
-      <div class="row">
-        <input id="log-job-id" placeholder="job id" style="width:100px">
-        <button class="secondary" onclick="connectJobLog()">Ver logs</button>
-      </div>
-      <pre id="log">(elegí un job id de la cola de arriba)</pre>
-    </div>
+      <div class="interaction-main">
+        <h2 style="margin-top:0" data-i18n="sec.agent">Agente — pentest asistido</h2>
+        <p style="font-size:12px;color:var(--dim)" id="query-hint" data-i18n="hint.query">
+          Co-piloto interactivo: pregunta sobre findings/componentes/secretos ya analizados
+          (funciona sin ningún job corriendo), o pídele en lenguaje natural que use Frida/ADB
+          con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
+          El package lo fija el job que elijas en la cola de arriba (click en su #).
+        </p>
 
-    <div class="tabpanel" id="tab-device">
-      <div class="row">
-        <button id="webusb-btn" class="secondary" style="display:none" onclick="connectWebUsb()">🔌 USB directo (fluido)</button>
-        <button id="webusb-stop-btn" class="secondary" style="display:none" onclick="disconnectWebUsb()">⏏ Soltar USB</button>
-        <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB">🔪 adb kill-server</button>
-      </div>
-      <div class="device-status" id="device-status">cargando…</div>
-      <canvas id="webusb-canvas" width="720" height="1600"></canvas>
+        <div id="code-tabs" style="display:none"></div>
 
-      <h3 style="margin-top:16px">Relay (frida/adb desde un backend remoto)</h3>
-      <p style="font-size:12px;color:var(--muted,#888)">
-        Puentea `frida`/`adb` corriendo en este backend hacia el device conectado
-        acá. `adb` (shell/install/pull/screencap) reusa la misma conexión USB de
-        arriba (conectá "USB directo" primero). `frida` va por un WebSocket nativo
-        directo a la IP de LAN del device (Tango no sostiene bien el handshake
-        WebSocket que usa frida moderno, verificado en vivo — ver plan.md) —
-        necesita que ESTA PC tenga alcance de red al device, y puede pedir el
-        permiso "Acceso a Red Local" de Chrome la primera vez.
-      </p>
-      <div class="row">
-        <input id="relay-session-id" placeholder="session id (ej. el serial del device)" style="width:220px">
-        <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" style="width:220px">
-        <button id="relay-btn" class="secondary" onclick="connectRelay()">🌐 Activar relay</button>
-        <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()">⏏ Detener relay</button>
-      </div>
-      <div class="device-status" id="relay-status"></div>
-    </div>
+        <div id="chat-panel">
+          <div class="row">
+            <input id="query-serial" placeholder="serial (vacío = default de config/USB)" data-i18n-ph="ph.querySerial" style="width:220px" onkeydown="if(event.key==='Enter'&&chatPackage)connectQuery(chatPackage)" title="Serial adb directo (emulator-5554, ip:5555…). Se precarga solo al conectar el device en el panel de la derecha. Si hay una sesión de relay activa y escribes su session id, se detecta solo." data-i18n-title="tip.querySerial">
+          </div>
+          <div id="querylog"></div>
+          <div class="row">
+            <input id="query-text" placeholder="elige una ejecución de la cola ↑ y pídele algo al co-piloto…" data-i18n-ph="ph.queryText" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
+            <button onclick="sendQuery()" data-i18n="btn.send">Enviar</button>
+          </div>
+        </div>
 
-    <div class="tabpanel" id="tab-agent">
-      <h2 style="margin-top:0">System prompt del agente aipwn</h2>
-      <pre id="agent-prompt" style="max-height:200px;overflow:auto;background:var(--panel2);padding:10px;border-radius:8px;font-size:11px">cargando…</pre>
-      <h2>Chat</h2>
-      <div class="row">
-        <input id="chat-package" placeholder="package id" style="width:220px">
-        <button class="secondary" onclick="connectChat()">Conectar</button>
+        <div id="code-panel" style="display:none">
+          <div id="code-path"></div>
+          <pre id="code-view"></pre>
+        </div>
       </div>
-      <div id="chatlog"></div>
-      <div class="row">
-        <input id="chat-text" placeholder="mensaje para el agente…" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
-        <button onclick="sendChat()">Enviar</button>
-      </div>
-    </div>
 
-    <div class="tabpanel" id="tab-query">
-      <p style="font-size:12px;color:var(--dim)">
-        Co-piloto interactivo: preguntá sobre findings/componentes/secretos ya analizados
-        (funciona sin ningún job corriendo), o pedile en lenguaje natural que use Frida/ADB
-        con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks.
-      </p>
-      <div class="row">
-        <input id="query-package" placeholder="package id" style="width:220px">
-        <input id="query-serial" placeholder="serial (vacío = USB por defecto)" style="width:220px">
-        <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px" title="El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay)">
-          <input type="checkbox" id="query-relay" style="width:auto"> usar relay
-        </label>
-        <button class="secondary" onclick="connectQuery()">Conectar</button>
-      </div>
-      <div id="querylog"></div>
-      <div class="row">
-        <input id="query-text" placeholder="pedile algo al co-piloto…" style="flex:1" onkeydown="if(event.key==='Enter')sendQuery()">
-        <button onclick="sendQuery()">Enviar</button>
+      <div class="interaction-side">
+        <h2 style="margin-top:0" data-i18n="sec.device">Dispositivo</h2>
+        <div class="device-status" id="device-status">loading…</div>
+        <canvas id="webusb-canvas" width="720" height="1600"></canvas>
+        <img id="emulator-img" style="display:none" alt="pantalla del dispositivo">
+        <div class="row">
+          <button id="device-toggle-btn" class="secondary" style="display:none" onclick="toggleDevice()" data-i18n="btn.release">⏏ Soltar</button>
+          <button id="adb-restart-btn" class="secondary" onclick="restartAdb()" data-i18n="btn.adbRestart">🔌 Reiniciar adb</button>
+        </div>
+
+        <details style="margin-top:16px">
+          <summary style="cursor:pointer;color:var(--dim);font-size:13px" data-i18n="sec.advanced">Avanzado: relay (frida/adb remoto) / adb kill-server</summary>
+          <p style="font-size:12px;color:var(--muted,#888)" data-i18n="info.relay">
+            El relay puentea `frida`/`adb` corriendo en este backend hacia el device
+            conectado acá. `adb` (shell/install/pull/screencap) reusa la conexión USB
+            (requiere el video USB activo). `frida` va por un WebSocket nativo directo
+            a la IP de LAN del device (Tango no sostiene bien el handshake WebSocket
+            que usa frida moderno, verificado en vivo) — necesita que ESTA PC tenga
+            alcance de red al device, y puede pedir el permiso "Acceso a Red Local" de
+            Chrome la primera vez. `adb kill-server` mata el daemon adb (WSL + Windows)
+            para soltar el cable antes de que WebUSB lo reclame.
+          </p>
+          <div class="row">
+            <input id="relay-session-id" placeholder="session id (ej. el serial del device)" data-i18n-ph="ph.relaySession" style="width:220px">
+            <input id="relay-device-ip" placeholder="IP LAN del device (ej. 192.168.1.42)" data-i18n-ph="ph.relayIp" style="width:220px">
+            <button id="relay-btn" class="secondary" onclick="connectRelay()" data-i18n="btn.relayOn">🌐 Activar relay</button>
+            <button id="relay-stop-btn" class="secondary" style="display:none" onclick="disconnectRelay()" data-i18n="btn.relayOff">⏏ Detener relay</button>
+            <button id="adb-kill-btn" class="secondary" onclick="adbKillServer()" title="Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB" data-i18n-title="tip.adbKill" data-i18n="btn.adbKill">🔪 adb kill-server</button>
+          </div>
+          <div class="device-status" id="relay-status"></div>
+        </details>
       </div>
     </div>
   </section>
@@ -241,39 +262,39 @@
     <span class="close-x" onclick="closeAppModal()">&times;</span>
     <h3 id="modal-pkg">-</h3>
     <div class="kpis">
-      <div class="kpi"><b id="modal-verdict">-</b><span>Veredicto</span></div>
+      <div class="kpi"><b id="modal-verdict">-</b><span data-i18n="kpi.verdict">Veredicto</span></div>
       <div class="kpi"><b id="modal-score">-</b><span>Score / Grade</span></div>
-      <div class="kpi"><b id="modal-due">-</b><span>Próxima revisión</span></div>
+      <div class="kpi"><b id="modal-due">-</b><span data-i18n="kpi.nextReview">Próxima revisión</span></div>
     </div>
     <div class="row">
-      <button class="secondary" onclick="reQueue()">Re-analizar</button>
+      <button class="secondary" onclick="reQueue()" data-i18n="btn.reanalyze">Re-analizar</button>
     </div>
-    <h4>Tendencia MASVS</h4>
+    <h4 data-i18n="sec.trend">Tendencia MASVS</h4>
     <svg class="trend" id="trend-svg" viewBox="0 0 600 160" preserveAspectRatio="none"></svg>
-    <h4>Programar revisión</h4>
+    <h4 data-i18n="sec.schedule">Programar revisión</h4>
     <div class="row">
-      <input type="number" id="sched-days" min="1" value="30" style="width:100px"> días
-      <button class="secondary" onclick="saveSchedule()">Guardar</button>
-      <span id="sched-saved" style="color:var(--good);display:none">✔ guardado</span>
+      <input type="number" id="sched-days" min="1" value="30" style="width:100px"> <span data-i18n="lbl.days">días</span>
+      <button class="secondary" onclick="saveSchedule()" data-i18n="btn.save">Guardar</button>
+      <span id="sched-saved" style="color:var(--good);display:none" data-i18n="msg.saved">✔ guardado</span>
     </div>
-    <h4 id="modal-findings-title">Hallazgos del último run</h4>
+    <h4 id="modal-findings-title" data-i18n="findings.lastRun">Hallazgos del último run</h4>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>Regla</th><th>Severidad</th><th>MASVS</th><th>MASWE</th><th>CWE</th><th>Ubicación</th></tr></thead>
+        <thead><tr><th data-i18n="th.rule">Regla</th><th data-i18n="th.severity">Severidad</th><th>MASVS</th><th>MASWE</th><th>CWE</th><th data-i18n="th.location">Ubicación</th></tr></thead>
         <tbody id="modal-findings"></tbody>
       </table>
     </div>
-    <h4>Historial de análisis <span style="font-weight:400;color:var(--dim);font-size:11px">(clic en una fila para ver sus hallazgos)</span></h4>
+    <h4><span data-i18n="sec.history">Historial de análisis</span> <span style="font-weight:400;color:var(--dim);font-size:11px" data-i18n="hint.historyRow">(clic en una fila para ver sus hallazgos)</span></h4>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>Fecha</th><th>Veredicto</th><th>Score</th><th>Hallazgos</th><th>Reporte</th></tr></thead>
+        <thead><tr><th data-i18n="th.date">Fecha</th><th data-i18n="th.verdict">Veredicto</th><th>Score</th><th data-i18n="th.findings">Hallazgos</th><th data-i18n="th.report">Reporte</th></tr></thead>
         <tbody id="modal-history"></tbody>
       </table>
     </div>
-    <h4>Hallazgos consolidados <span style="font-weight:400;color:var(--dim);font-size:11px">(deduplicados de todas las corridas)</span></h4>
+    <h4><span data-i18n="sec.consolidated">Hallazgos consolidados</span> <span style="font-weight:400;color:var(--dim);font-size:11px" data-i18n="hint.consolidated">(deduplicados de todas las corridas)</span></h4>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>Estado</th><th>Regla</th><th>Severidad</th><th>Ubicación</th><th>Visto en</th><th>Primera vez</th><th>Última vez</th></tr></thead>
+        <thead><tr><th data-i18n="th.status">Estado</th><th data-i18n="th.rule">Regla</th><th data-i18n="th.severity">Severidad</th><th data-i18n="th.location">Ubicación</th><th data-i18n="th.seenIn">Visto en</th><th data-i18n="th.firstSeen">Primera vez</th><th data-i18n="th.lastSeen">Última vez</th></tr></thead>
         <tbody id="modal-consolidated"></tbody>
       </table>
     </div>
@@ -283,6 +304,298 @@
 <div class="tooltip-fixed" id="trend-tooltip"></div>
 
 <script>
+// ── i18n ──────────────────────────────────────────────────────────────────
+// Strings visibles de la UI (los comentarios de código quedan en español, no
+// son user-facing). 'en' es la fuente de verdad: TODA clave existe en ambos
+// dicts. El idioma llega por GET /api/i18n (language: en config.yaml).
+const I18N = {
+  en: {
+    'stats.apps': 'apps',
+    'stats.runs': 'runs',
+    'stats.findings': 'findings',
+    'stats.activeJobs': 'active jobs',
+    'btn.logout': 'Log out',
+    'btn.upload': 'Upload',
+    'btn.enqueue': 'Enqueue',
+    'btn.batch': 'Batch',
+    'btn.send': 'Send',
+    'btn.release': '⏏ Release',
+    'btn.reconnect': '🔄 Reconnect',
+    'btn.relayOn': '🌐 Start relay',
+    'btn.relayOff': '⏏ Stop relay',
+    'btn.adbKill': '🔪 adb kill-server',
+    'btn.adbRestart': '🔌 Restart adb',
+    'status.adbRestarting': 'Restarting adb connection…',
+    'status.adbRecovered': 'adb recovered ({steps}).',
+    'status.adbDead': 'adb restarted but the device still does not answer -- the emulator is hung; cold boot it manually.',
+    'btn.reanalyze': 'Re-analyze',
+    'btn.save': 'Save',
+    'btn.resume5': '▶ +5 iterations',
+    'sec.apps': 'Apps',
+    'sec.queue': 'Analysis queue',
+    'sec.explorer': 'Explorer',
+    'sec.agent': 'Agent — assisted pentest',
+    'sec.device': 'Device',
+    'sec.advanced': 'Advanced: relay (remote frida/adb) / adb kill-server',
+    'sec.trend': 'MASVS trend',
+    'sec.schedule': 'Schedule review',
+    'sec.history': 'Analysis history',
+    'sec.consolidated': 'Consolidated findings',
+    'th.verdict': 'Verdict',
+    'th.nextReview': 'Next review',
+    'th.status': 'Status',
+    'th.rule': 'Rule',
+    'th.severity': 'Severity',
+    'th.location': 'Location',
+    'th.date': 'Date',
+    'th.findings': 'Findings',
+    'th.report': 'Report',
+    'th.seenIn': 'Seen in',
+    'th.firstSeen': 'First seen',
+    'th.lastSeen': 'Last seen',
+    'kpi.verdict': 'Verdict',
+    'kpi.nextReview': 'Next review',
+    'queue.uploadHintA': 'Upload .apk (stored in',
+    'queue.uploadHintB': ', handy without terminal access on the server):',
+    'queue.empty': '(queue empty)',
+    'apps.empty': '(no apps yet)',
+    'lbl.viaRelay': 'via relay',
+    'lbl.runNow': 'run now',
+    'lbl.chainAipwn': 'chain aipwn',
+    'lbl.batchFile': 'Batch from file (.txt, one target per line: .apk / package id / URL) ⓘ',
+    'lbl.days': 'days',
+    'opt.batchAuto': 'source: auto per line (default)',
+    'opt.batchDevice': 'source: force device (no fallback)',
+    'ph.target': '.apk path / URL / package id',
+    'ph.serial': 'serial (optional) / session id if you use relay',
+    'ph.batchSerial': 'serial / relay session id',
+    'ph.filterFile': 'filter file…',
+    'ph.querySerial': 'serial (empty = config/USB default)',
+    'ph.queryText': 'pick a run from the queue ↑ and ask the co-pilot something…',
+    'ph.relaySession': 'session id (e.g. the device serial)',
+    'ph.relayIp': 'device LAN IP (e.g. 192.168.1.42)',
+    'tip.relaySerial': "The 'serial' field above becomes the session id of an already-connected relay session (Device tab → Relay) instead of a direct adb serial.",
+    'tip.batchSource': "Each line resolves itself based on its format: 'something.apk' looks for that file in downloads/, a package id (com.example.app) tries the connected device first and if it is not installed there (or there is no device) falls back to the store on its own -- a URL keeps working as before. The source dropdown forces ALL package ids in the list to that source, without the automatic fallback.",
+    'tip.batchRelay': 'The serial field above becomes the session id of an already-connected relay session (Device tab → Relay) -- also applies to the chained aipwn.',
+    'tip.filterFile': 'Filter by file name',
+    'tip.reloadTree': 'Reload tree',
+    'tip.querySerial': 'Direct adb serial (emulator-5554, ip:5555…). Pre-filled automatically when you connect the device in the right panel. If there is an active relay session and you type its session id, it is auto-detected.',
+    'tip.adbKill': 'Kills the adb daemon (WSL + Windows) to release the cable before connecting WebUSB',
+    'tip.jobLink': 'View logs of job #{id} + open its package in the chat and the explorer',
+    'tip.deleteJob': 'Delete pending job',
+    'tip.resume': 'Continue this aipwn session with 5 more iterations, remembering what it did so far',
+    'tip.closeTab': 'close',
+    'tip.dlJson': 'Download JSON',
+    'tip.dlPdf': 'Download PDF',
+    'tip.viewRunFindings': 'View findings of run #{id}',
+    'explorer.empty': '(pick a job from the queue ↑ to explore its decompiled output)',
+    'explorer.noDecompiled': '(no decompiled output on disk for {pkg} — run an analysis first)',
+    'explorer.emptyDir': '(empty)',
+    'explorer.noMatches': '(no matches)',
+    'hint.query': 'Interactive co-pilot: ask about already-analyzed findings/components/secrets (works without any running job), or ask it in natural language to use Frida/ADB with a connected device -- view screen, tap/type on the UI, run hooks. The package is set by the job you pick in the queue above (click its #).',
+    'hint.historyRow': '(click a row to see its findings)',
+    'hint.consolidated': '(deduplicated across all runs)',
+    'info.relay': 'The relay bridges `frida`/`adb` running on this backend to the device connected here. `adb` (shell/install/pull/screencap) reuses the USB connection (requires the USB video to be active). `frida` goes over a direct native WebSocket to the device LAN IP (Tango does not handle well the WebSocket handshake used by modern frida, verified live) — THIS PC needs network reachability to the device, and Chrome may ask for the "Local Network Access" permission the first time. `adb kill-server` kills the adb daemon (WSL + Windows) to release the cable before WebUSB claims it.',
+    'status.loading': 'loading…',
+    'status.uploading': 'Uploading...',
+    'status.uploadOk': 'OK: {f} ({s} MB) -> "target" field filled',
+    'status.error': 'Error: {e}',
+    'status.usbNone': 'No USB connection -- "🔄 Reconnect" to claim the cable (the first time the browser asks for permission).',
+    'status.usbUnavailable': 'WebUSB not available (needs Chrome/Edge and the compiled bundle — see nutcracker_core/plugins/dashboard/webusb/README.md).',
+    'status.usbBundleMissing': 'WebUSB bundle not available (see webusb/ README).',
+    'status.noDevice': 'No device/emulator visible to the backend adb.',
+    'status.viewing': 'Viewing screen of {serial} (screencap ~1 fps).',
+    'status.emuUnstable': 'Screen stream unstable ({serial}) -- emulator busy, retrying…',
+    'status.stopped': 'View stopped -- "🔄 Reconnect" to resume.',
+    'status.killingAdb': 'Killing adb (WSL + Windows)…',
+    'status.winNa': 'Windows: n/a (not WSL)',
+    'status.relayNeedsVideo': 'Connect the USB video first (button above) -- the relay reuses that connection.',
+    'status.relayNeedsSession': 'Enter a session id (e.g. the device serial).',
+    'status.copilotUnavailable': 'Co-pilot not available -- the aipwn plugin or the llm: block is missing in config.yaml.',
+    'err.resume': 'Could not resume job #{id}: {e}',
+    'err.delete': 'Could not delete job #{id}: {e}',
+    'err.openFile': 'could not open: {e}',
+    'err.usbConnect': 'USB direct error: {e}',
+    'err.usbDisconnect': 'Error releasing USB: {e}',
+    'err.screencap': 'screencap failed for {serial}: {text}',
+    'err.emuConnect': 'Error connecting to emulator: {e}',
+    'err.adbKill': 'Error killing adb: {e}',
+    'err.relayConnect': 'Error starting relay: {e}',
+    'err.relayStop': 'Error stopping relay: {e}',
+    'err.noConnection': '⚠ not connected -- pick a run in the queue (click its #) to set the package and connect the co-pilot.',
+    'alert.batch': 'Queued: {n}. Skipped ({m}):\n{lines}',
+    'badge.present': '● present',
+    'badge.resolved': '✔ resolved',
+    'msg.connected': '<b>connected</b> to {pkg}',
+    'msg.viaRelay': ' (via relay)',
+    'msg.withSerial': ' (serial {serial})',
+    'msg.noDevice': ' (no device -- static mode)',
+    'msg.runningTool': '▸ running <b>{name}</b>({args})',
+    'msg.truncated': '  [truncated to 512 KB]',
+    'msg.saved': '✔ saved',
+    'chat.you': '[you]',
+    'chat.logCard': '📜 logs — job #{id}',
+    'word.ok': 'OK',
+    'word.failed': 'failed',
+    'findings.empty': '(no findings)',
+    'findings.run': 'Findings from run #{id}',
+    'findings.lastRun': 'Findings from the latest run',
+    'history.empty': '(no history)',
+    'consolidated.empty': '(no findings in any run)',
+  },
+  es: {
+    'stats.apps': 'apps',
+    'stats.runs': 'runs',
+    'stats.findings': 'hallazgos',
+    'stats.activeJobs': 'jobs activos',
+    'btn.logout': 'Salir',
+    'btn.upload': 'Subir',
+    'btn.enqueue': 'Encolar',
+    'btn.batch': 'Batch',
+    'btn.send': 'Enviar',
+    'btn.release': '⏏ Soltar',
+    'btn.reconnect': '🔄 Reconectar',
+    'btn.relayOn': '🌐 Activar relay',
+    'btn.relayOff': '⏏ Detener relay',
+    'btn.adbKill': '🔪 adb kill-server',
+    'btn.adbRestart': '🔌 Reiniciar adb',
+    'status.adbRestarting': 'Reiniciando la conexión adb…',
+    'status.adbRecovered': 'adb recuperado ({steps}).',
+    'status.adbDead': 'adb reiniciado pero el dispositivo sigue sin responder -- el emulador está colgado; hazle un cold boot manual.',
+    'btn.reanalyze': 'Re-analizar',
+    'btn.save': 'Guardar',
+    'btn.resume5': '▶ +5 iteraciones',
+    'sec.apps': 'Apps',
+    'sec.queue': 'Cola de análisis',
+    'sec.explorer': 'Explorador',
+    'sec.agent': 'Agente — pentest asistido',
+    'sec.device': 'Dispositivo',
+    'sec.advanced': 'Avanzado: relay (frida/adb remoto) / adb kill-server',
+    'sec.trend': 'Tendencia MASVS',
+    'sec.schedule': 'Programar revisión',
+    'sec.history': 'Historial de análisis',
+    'sec.consolidated': 'Hallazgos consolidados',
+    'th.verdict': 'Veredicto',
+    'th.nextReview': 'Próxima revisión',
+    'th.status': 'Estado',
+    'th.rule': 'Regla',
+    'th.severity': 'Severidad',
+    'th.location': 'Ubicación',
+    'th.date': 'Fecha',
+    'th.findings': 'Hallazgos',
+    'th.report': 'Reporte',
+    'th.seenIn': 'Visto en',
+    'th.firstSeen': 'Primera vez',
+    'th.lastSeen': 'Última vez',
+    'kpi.verdict': 'Veredicto',
+    'kpi.nextReview': 'Próxima revisión',
+    'queue.uploadHintA': 'Subir .apk (queda en',
+    'queue.uploadHintB': ', útil sin terminal en el servidor):',
+    'queue.empty': '(cola vacía)',
+    'apps.empty': '(sin apps todavía)',
+    'lbl.viaRelay': 'vía relay',
+    'lbl.runNow': 'correr ahora',
+    'lbl.chainAipwn': 'encadenar aipwn',
+    'lbl.batchFile': 'Batch desde archivo (.txt, un target por línea: .apk / package id / URL) ⓘ',
+    'lbl.days': 'días',
+    'opt.batchAuto': 'fuente: auto por línea (default)',
+    'opt.batchDevice': 'fuente: forzar device (sin fallback)',
+    'ph.target': 'ruta .apk / URL / package id',
+    'ph.serial': 'serial (opcional) / session id si usas relay',
+    'ph.batchSerial': 'serial / session id de relay',
+    'ph.filterFile': 'filtrar archivo…',
+    'ph.querySerial': 'serial (vacío = default de config/USB)',
+    'ph.queryText': 'elige una ejecución de la cola ↑ y pídele algo al co-piloto…',
+    'ph.relaySession': 'session id (ej. el serial del device)',
+    'ph.relayIp': 'IP LAN del device (ej. 192.168.1.42)',
+    'tip.relaySerial': "El campo 'serial' de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) en vez de un serial adb directo.",
+    'tip.batchSource': "Cada línea se resuelve sola según su formato: 'algo.apk' busca ese archivo en downloads/, un package id (com.example.app) intenta primero el dispositivo conectado y si no está instalado ahí (o no hay dispositivo) cae solo a la store -- una URL sigue igual que antes. El dropdown de fuente fuerza TODOS los package id de la lista a esa fuente, sin el fallback automático.",
+    'tip.batchRelay': 'El campo de serial de arriba pasa a ser el session id de una sesión de relay ya conectada (pestaña Dispositivo → Relay) -- aplica también al aipwn encadenado.',
+    'tip.filterFile': 'Filtrar por nombre de archivo',
+    'tip.reloadTree': 'Recargar árbol',
+    'tip.querySerial': 'Serial adb directo (emulator-5554, ip:5555…). Se precarga solo al conectar el device en el panel de la derecha. Si hay una sesión de relay activa y escribes su session id, se detecta solo.',
+    'tip.adbKill': 'Mata el daemon adb (WSL + Windows) para soltar el cable antes de conectar WebUSB',
+    'tip.jobLink': 'Ver logs del job #{id} + abrir su package en el chat y el explorador',
+    'tip.deleteJob': 'Borrar job pendiente',
+    'tip.resume': 'Continuar esta sesión de aipwn con 5 iteraciones más, recordando lo que hizo hasta ahora',
+    'tip.closeTab': 'cerrar',
+    'tip.dlJson': 'Descargar JSON',
+    'tip.dlPdf': 'Descargar PDF',
+    'tip.viewRunFindings': 'Ver hallazgos del run #{id}',
+    'explorer.empty': '(elige un job de la cola ↑ para explorar su decompilado)',
+    'explorer.noDecompiled': '(sin decompilado en disco para {pkg} — ejecuta un análisis primero)',
+    'explorer.emptyDir': '(vacío)',
+    'explorer.noMatches': '(sin coincidencias)',
+    'hint.query': 'Co-piloto interactivo: pregunta sobre findings/componentes/secretos ya analizados (funciona sin ningún job corriendo), o pídele en lenguaje natural que use Frida/ADB con un device conectado -- ver pantalla, tocar/escribir en la UI, correr hooks. El package lo fija el job que elijas en la cola de arriba (click en su #).',
+    'hint.historyRow': '(clic en una fila para ver sus hallazgos)',
+    'hint.consolidated': '(deduplicados de todas las corridas)',
+    'info.relay': 'El relay puentea `frida`/`adb` corriendo en este backend hacia el device conectado acá. `adb` (shell/install/pull/screencap) reusa la conexión USB (requiere el video USB activo). `frida` va por un WebSocket nativo directo a la IP de LAN del device (Tango no sostiene bien el handshake WebSocket que usa frida moderno, verificado en vivo) — necesita que ESTA PC tenga alcance de red al device, y puede pedir el permiso "Acceso a Red Local" de Chrome la primera vez. `adb kill-server` mata el daemon adb (WSL + Windows) para soltar el cable antes de que WebUSB lo reclame.',
+    'status.loading': 'cargando…',
+    'status.uploading': 'Subiendo...',
+    'status.uploadOk': 'OK: {f} ({s} MB) -> campo "target" completado',
+    'status.error': 'Error: {e}',
+    'status.usbNone': 'Sin conexión USB -- "🔄 Reconectar" para reclamar el cable (la primera vez el navegador pide permiso).',
+    'status.usbUnavailable': 'WebUSB no disponible (necesita Chrome/Edge y el bundle compilado — ver nutcracker_core/plugins/dashboard/webusb/README.md).',
+    'status.usbBundleMissing': 'Bundle WebUSB no disponible (ver README de webusb/).',
+    'status.noDevice': 'No hay ningún device/emulador visible para el adb del backend.',
+    'status.viewing': 'Viendo pantalla de {serial} (screencap ~1 fps).',
+    'status.emuUnstable': 'Stream de pantalla inestable ({serial}) -- emulador ocupado, reintentando…',
+    'status.stopped': 'Vista detenida -- "🔄 Reconectar" para retomar.',
+    'status.killingAdb': 'Matando adb (WSL + Windows)…',
+    'status.winNa': 'Windows: n/a (no es WSL)',
+    'status.relayNeedsVideo': 'Conecta el video USB primero (botón de arriba) -- el relay reusa esa conexión.',
+    'status.relayNeedsSession': 'Ingresa un session id (ej. el serial del device).',
+    'status.copilotUnavailable': 'Co-piloto no disponible -- falta el plugin aipwn o el bloque llm: en config.yaml.',
+    'err.resume': 'No se pudo reanudar el job #{id}: {e}',
+    'err.delete': 'No se pudo borrar el job #{id}: {e}',
+    'err.openFile': 'no se pudo abrir: {e}',
+    'err.usbConnect': 'Error con USB directo: {e}',
+    'err.usbDisconnect': 'Error soltando el USB: {e}',
+    'err.screencap': 'screencap falló para {serial}: {text}',
+    'err.emuConnect': 'Error conectando al emulador: {e}',
+    'err.adbKill': 'Error matando adb: {e}',
+    'err.relayConnect': 'Error activando el relay: {e}',
+    'err.relayStop': 'Error deteniendo el relay: {e}',
+    'err.noConnection': '⚠ sin conexión -- elige una ejecución en la cola (click en su #) para fijar el package y conectar el co-piloto.',
+    'alert.batch': 'Encolados: {n}. Omitidos ({m}):\n{lines}',
+    'badge.present': '● presente',
+    'badge.resolved': '✔ resuelto',
+    'msg.connected': '<b>conectado</b> a {pkg}',
+    'msg.viaRelay': ' (vía relay)',
+    'msg.withSerial': ' (serial {serial})',
+    'msg.noDevice': ' (sin device -- modo estático)',
+    'msg.runningTool': '▸ ejecutando <b>{name}</b>({args})',
+    'msg.truncated': '  [truncado a 512 KB]',
+    'msg.saved': '✔ guardado',
+    'chat.you': '[tú]',
+    'chat.logCard': '📜 logs del job #{id}',
+    'word.ok': 'OK',
+    'word.failed': 'falló',
+    'findings.empty': '(sin hallazgos)',
+    'findings.run': 'Hallazgos del run #{id}',
+    'findings.lastRun': 'Hallazgos del último run',
+    'history.empty': '(sin historial)',
+    'consolidated.empty': '(sin hallazgos en ninguna corrida)',
+  },
+};
+let LANG = 'en';
+
+// T(): busca la clave en el idioma activo, con fallback a 'en' y luego al key
+// pelado; los placeholders {nombre} se reemplazan con vars.
+function T(key, vars){
+  let s = (I18N[LANG] && I18N[LANG][key]) ?? I18N.en[key] ?? key;
+  if (vars) for (const [k, v] of Object.entries(vars)) s = s.split('{' + k + '}').join(String(v));
+  return s;
+}
+
+// Recorre el DOM estático: data-i18n (textContent), data-i18n-ph
+// (placeholder) y data-i18n-title (title).
+function applyI18n(){
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = T(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = T(el.dataset.i18nPh); });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = T(el.dataset.i18nTitle); });
+}
+
 const SEV_CLASS = {critical:'critical', high:'serious', medium:'warning', low:'good', info:'neutral'};
 const SEV_ICON  = {critical:'✖', high:'▲', medium:'●', low:'●', info:'·'};
 
@@ -300,8 +613,8 @@ function verdictBadge(v){
 }
 function findingStatusBadge(status){
   return status === 'present'
-    ? `<span class="badge warning">● presente</span>`
-    : `<span class="badge good">✔ resuelto</span>`;
+    ? `<span class="badge warning">${T('badge.present')}</span>`
+    : `<span class="badge good">${T('badge.resolved')}</span>`;
 }
 function redirectToLogin(){
   const next = encodeURIComponent(location.pathname + location.search);
@@ -342,28 +655,29 @@ async function refreshApps(){
       <td>${a.masvs_score ?? '–'} ${a.grade ? '('+a.grade+')' : ''}</td>
       <td>${a.next_due_at ? a.next_due_at.slice(0,10) : '–'}</td>
       <td>–</td>
-    </tr>`).join('') || '<tr><td colspan="5" style="color:var(--dim)">(sin apps todavía)</td></tr>';
+    </tr>`).join('') || `<tr><td colspan="5" style="color:var(--dim)">${T('apps.empty')}</td></tr>`;
 }
 
 async function refreshQueue(){
   const jobs = await j('/api/queue');
+  lastJobs = jobs;
   const tbody = document.querySelector('#queue-table tbody');
   tbody.innerHTML = jobs.map(job => `
     <tr>
-      <td><a href="#" class="job-id-link" onclick="goToJobLog(${job.id}); return false"
-             title="Ver logs del job #${job.id}">#${job.id}</a></td>
+      <td><a href="#" class="job-id-link" onclick="openJobContext(${job.id}); return false"
+             title="${T('tip.jobLink', {id: job.id})}">#${job.id}</a></td>
       <td>${job.kind}</td><td>${job.target}</td>
       <td>${job.status}</td><td>${job.package || '–'}</td>
       <td>
         ${job.status === 'queued'
-          ? `<button class="secondary" onclick="deleteQueueJob(${job.id})" title="Borrar job pendiente">🗑</button>`
+          ? `<button class="secondary" onclick="deleteQueueJob(${job.id})" title="${T('tip.deleteJob')}">🗑</button>`
           : ''}
         ${job.resumable
           ? `<button class="secondary" onclick="resumeAipwnJob(${job.id})"
-               title="Continuar esta sesión de aipwn con 5 iteraciones más, recordando lo que hizo hasta ahora">▶ +5 iteraciones</button>`
+               title="${T('tip.resume')}">${T('btn.resume5')}</button>`
           : ''}
       </td>
-    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(cola vacía)</td></tr>';
+    </tr>`).join('') || `<tr><td colspan="6" style="color:var(--dim)">${T('queue.empty')}</td></tr>`;
 }
 
 // Botón "▶ +5 iteraciones": el job aipwn terminó sin conclusión (límite de
@@ -376,7 +690,7 @@ async function resumeAipwnJob(jobId){
     await j(`/api/queue/${jobId}/resume-aipwn`, {method: 'POST'});
     await refreshQueue();
   } catch (e) {
-    alert(`No se pudo reanudar el job #${jobId}: ${e.message || e}`);
+    alert(T('err.resume', {id: jobId, e: e.message || e}));
   }
 }
 
@@ -385,7 +699,7 @@ async function deleteQueueJob(jobId){
     await j(`/api/queue/${jobId}`, { method: 'DELETE' });
     await refreshQueue();
   } catch (e) {
-    alert(`No se pudo borrar el job #${jobId}: ${e.message || e}`);
+    alert(T('err.delete', {id: jobId, e: e.message || e}));
   }
 }
 
@@ -397,16 +711,16 @@ async function uploadApk(){
   const form = new FormData();
   form.append('file', fileInput.files[0]);
   btn.disabled = true;
-  status.textContent = 'Subiendo...';
+  status.textContent = T('status.uploading');
   try {
     // Sin Content-Type manual: el browser arma el boundary de
     // multipart/form-data solo al ver que el body es un FormData.
     const result = await j('/api/apks/upload', {method: 'POST', body: form});
     document.getElementById('q-target').value = result.path;
-    status.textContent = `OK: ${result.filename} (${(result.size / 1e6).toFixed(1)} MB) -> campo "target" completado`;
+    status.textContent = T('status.uploadOk', {f: result.filename, s: (result.size / 1e6).toFixed(1)});
     fileInput.value = '';
   } catch (e) {
-    status.textContent = `Error: ${e.message || e}`;
+    status.textContent = T('status.error', {e: e.message || e});
   } finally {
     btn.disabled = false;
   }
@@ -442,65 +756,291 @@ async function runBatch(){
   const result = await j('/api/queue/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
   if (result.skipped && result.skipped.length){
     const lines = result.skipped.map(s => `  - ${s.target}: ${s.reason}`).join('\n');
-    alert(`Encolados: ${result.queued}. Saltados (${result.skipped.length}):\n${lines}`);
+    alert(T('alert.batch', {n: result.queued, m: result.skipped.length, lines}));
   }
   refreshQueue();
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────────
-function activateTab(name){
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
-  document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active');
-  document.getElementById('tab-' + name).classList.add('active');
-  if (name === 'agent') loadAgentPrompt();
-}
-
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => activateTab(tab.dataset.tab));
-});
-
-// ── Logs en vivo ─────────────────────────────────────────────────────────
+// ── Logs en vivo (integrados al stream del chat) ──────────────────────────
+// Los logs del job se muestran como una tarjeta DENTRO de la conversación:
+// una sola tarjeta por attach que crece en el sitio (no una burbuja por
+// línea -- un scan estático son miles), en orden cronológico con las
+// respuestas del agente.
 let logSocket = null;
-function connectJobLog(){
-  const id = document.getElementById('log-job-id').value.trim();
-  if (!id) return;
+function connectJobLog(jobId){
   if (logSocket) logSocket.close();
-  const log = document.getElementById('log');
-  log.textContent = '';
+  const log = document.getElementById('querylog');
+  const card = document.createElement('div');
+  card.className = 'qmsg';
+  const head = document.createElement('div');
+  head.className = 'qlog-head';
+  head.textContent = T('chat.logCard', {id: jobId});
+  const body = document.createElement('pre');
+  body.className = 'qlog-body';
+  card.appendChild(head);
+  card.appendChild(body);
+  log.appendChild(card);
+  log.scrollTop = log.scrollHeight;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  logSocket = new WebSocket(`${proto}://${location.host}/ws/jobs/${id}`);
+  logSocket = new WebSocket(`${proto}://${location.host}/ws/jobs/${jobId}`);
   logSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
   logSocket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     const line = msg.kind === 'status' ? `\n[status] ${JSON.stringify(msg.data)}\n` : (msg.data + '\n');
-    log.textContent += line;
+    body.textContent += line;
+    body.scrollTop = body.scrollHeight;
     log.scrollTop = log.scrollHeight;
   };
 }
 
-// Click en el "#id" de un job (tabla de la cola) -- lleva directo a "Logs en
-// vivo" con ese job ya cargado, sin tener que copiar el id a mano al campo de
-// texto de al lado.
-function goToJobLog(jobId){
-  document.getElementById('log-job-id').value = jobId;
-  activateTab('logs');
-  connectJobLog();
+// Click en el "#id" de un job (tabla de la cola): adjunta sus logs como
+// tarjeta en el chat Y fija el package como contexto de todo el workbench
+// (chat del co-piloto + explorador del decompilado) -- el package se toma
+// del job, no de un campo a mano.
+let lastJobs = [];
+
+function _pkgFromJob(job){
+  if (job.package) return job.package;
+  const t = job.target || '';
+  const m = t.match(/[?&]id=([a-zA-Z0-9._]+)/);           // URL de store
+  if (m) return m[1];
+  const base = t.split(/[\\/]/).pop();
+  if (base.endsWith('.apk')) return base.slice(0, -4);    // .apk local
+  if (/^[a-zA-Z][\w.]*\.[\w.]+$/.test(t)) return t;       // package id pelado
+  return null;
+}
+
+function openJobContext(jobId){
+  // Si hay un archivo abierto en pestaña, vuelve a la pestaña Chat: la
+  // tarjeta de logs vive en el stream de la conversación.
+  if (openTabs.size && activeTab !== 'chat') activateTab('chat');
+  connectJobLog(jobId);
+  document.getElementById('querylog').scrollIntoView({behavior: 'smooth'});
+  const job = lastJobs.find(x => x.id === jobId);
+  const pkg = job && _pkgFromJob(job);
+  // Reconectar el chat pisa la conversación visible -- solo si cambia el package.
+  if (pkg && pkg !== chatPackage) connectQuery(pkg);
+}
+
+// ── Explorador del decompilado (árbol lazy vía /api/decompiled/*) ─────────
+// Raíces: "static" = decompiled/<package> (jadx), "runtime" =
+// decompiled/runtime_dump_<package> (FART, solo si existe). El package lo
+// fija el job elegido en la cola (openJobContext → connectQuery).
+let explorerPackage = null;
+
+async function loadExplorer(pkg){
+  explorerPackage = (pkg || explorerPackage) || null;
+  const tree = document.getElementById('explorer-tree');
+  if (!explorerPackage) {
+    tree.textContent = T('explorer.empty');
+    return;
+  }
+  tree.innerHTML = '';
+  let any = false;
+  for (const [root, label] of [['static', '📦 jadx'], ['runtime', '🧬 runtime dump']]) {
+    const data = await j(`/api/decompiled/${encodeURIComponent(explorerPackage)}/tree?root=${root}`);
+    if (!data.exists) continue;
+    any = true;
+    _renderDir(tree, root, '', `${label} — ${explorerPackage}`);
+  }
+  if (!any) tree.textContent = T('explorer.noDecompiled', {pkg: explorerPackage});
+}
+
+function _renderDir(container, root, path, label){
+  const node = document.createElement('div');
+  node.className = 'tnode tdir';
+  node.textContent = '▸ ' + label;
+  const children = document.createElement('div');
+  children.className = 'tchildren';
+  children.style.display = 'none';
+  let loaded = false;
+  node.onclick = async () => {
+    const open = children.style.display !== 'none';
+    children.style.display = open ? 'none' : '';
+    node.textContent = (open ? '▸ ' : '▾ ') + label;
+    if (open || loaded) return;
+    loaded = true;
+    const data = await j(`/api/decompiled/${encodeURIComponent(explorerPackage)}/tree?root=${root}&path=${encodeURIComponent(path)}`);
+    for (const entry of data.entries) {
+      const childPath = path ? `${path}/${entry.name}` : entry.name;
+      if (entry.type === 'dir') {
+        _renderDir(children, root, childPath, entry.name);
+      } else {
+        _renderFile(children, root, childPath, entry.name);
+      }
+    }
+    if (!data.entries.length) children.innerHTML = `<div class="tnode" style="color:var(--dim)">${T('explorer.emptyDir')}</div>`;
+  };
+  container.appendChild(node);
+  container.appendChild(children);
+}
+
+function _renderFile(container, root, path, name){
+  const node = document.createElement('div');
+  node.className = 'tnode';
+  node.textContent = '· ' + name;
+  node.title = path;
+  node.onclick = () => openDecompiledFile(root, path);
+  container.appendChild(node);
+}
+
+// Click en un archivo del explorador: lo abre (o activa si ya estaba) en una
+// pestaña estilo IDE. La pestaña "Chat" es fija (sin ✕) y siempre está primera
+// -- permite volver a la conversación sin cerrar los archivos abiertos.
+// El contenido se cachea en memoria: el decompilado en disco no cambia
+// durante la sesión.
+const openTabs = new Map();  // `${root}:${path}` -> {root, path, name, content, truncated}
+let activeTab = 'chat';      // 'chat' | key de openTabs
+
+async function openDecompiledFile(root, path){
+  const key = `${root}:${path}`;
+  if (openTabs.has(key)) { activateTab(key); return; }
+  openTabs.set(key, {root, path, name: path.split('/').pop(), content: null, truncated: false});
+  activateTab(key);
+  try {
+    const data = await j(`/api/decompiled/${encodeURIComponent(explorerPackage)}/file?root=${root}&path=${encodeURIComponent(path)}`);
+    const tab = openTabs.get(key);
+    if (!tab) return;  // la cerraron mientras cargaba
+    tab.content = data.content;
+    tab.truncated = !!data.truncated;
+  } catch (e) {
+    const tab = openTabs.get(key);
+    if (tab) tab.content = T('err.openFile', {e: e.message || e});
+  }
+  if (activeTab === key) _renderActiveTab();
+}
+
+function activateTab(key){
+  activeTab = key;
+  _renderTabs();
+  _renderActiveTab();
+}
+
+function closeTab(key, ev){
+  ev.stopPropagation();
+  openTabs.delete(key);
+  if (activeTab === key) activeTab = openTabs.size ? [...openTabs.keys()].pop() : 'chat';
+  _renderTabs();
+  _renderActiveTab();
+}
+
+function closeAllTabs(){
+  openTabs.clear();
+  activeTab = 'chat';
+  _renderTabs();
+  _renderActiveTab();
+}
+
+function _renderTabs(){
+  const bar = document.getElementById('code-tabs');
+  bar.innerHTML = '';
+  if (!openTabs.size) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  const chatEl = document.createElement('span');
+  chatEl.className = 'ftab chat-tab' + (activeTab === 'chat' ? ' active' : '');
+  chatEl.textContent = '💬 Chat';
+  chatEl.onclick = () => activateTab('chat');
+  bar.appendChild(chatEl);
+  for (const [key, tab] of openTabs) {
+    const el = document.createElement('span');
+    el.className = 'ftab' + (key === activeTab ? ' active' : '');
+    el.title = tab.path;
+    const label = document.createElement('span');
+    label.textContent = tab.name;
+    const x = document.createElement('span');
+    x.className = 'x';
+    x.textContent = '✕';
+    x.title = T('tip.closeTab');
+    x.onclick = (ev) => closeTab(key, ev);
+    el.appendChild(label);
+    el.appendChild(x);
+    el.onclick = () => activateTab(key);
+    bar.appendChild(el);
+  }
+}
+
+function _renderActiveTab(){
+  const onChat = !openTabs.size || activeTab === 'chat';
+  document.getElementById('chat-panel').style.display = onChat ? '' : 'none';
+  const panel = document.getElementById('code-panel');
+  if (onChat || !openTabs.has(activeTab)) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  const tab = openTabs.get(activeTab);
+  document.getElementById('code-path').textContent =
+    `${tab.root === 'runtime' ? 'runtime dump' : 'jadx'}: ${tab.path}` + (tab.truncated ? T('msg.truncated') : '');
+  const view = document.getElementById('code-view');
+  if (tab.content === null) {
+    view.textContent = T('status.loading');
+  } else {
+    view.innerHTML = highlightCode(tab.content, tab.path);
+  }
+}
+
+// ── Coloreado de sintaxis (local, sin CDN) ────────────────────────────────
+// Tokenizer de una pasada: cada match cae en un grupo (comentario, string,
+// keyword, número, anotación) y el texto plano intermedio se escapa tal cual.
+// Cubre java/kt/smali, xml y json -- lo que produce jadx/FART; el resto se
+// muestra plano.
+function _esc(s){
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function _tokenize(src, re, classes){
+  let out = '', last = 0;
+  for (const m of src.matchAll(re)) {
+    out += _esc(src.slice(last, m.index));
+    const cls = classes[m.slice(1).findIndex(g => g !== undefined)];
+    out += `<span class="${cls}">${_esc(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + _esc(src.slice(last));
+}
+
+const _RE_CODELIKE = /(\/\/[^\n]*|\/\*[\s\S]*?\*\*)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|(@[\w.]+|\.(?:class|super|method|end|field|annotation|implements|locals|registers|param|line|prologue|instance|directive)\b)|\b(package|import|public|private|protected|class|interface|enum|extends|implements|static|final|void|int|long|boolean|char|byte|short|float|double|new|return|if|else|for|while|do|switch|case|default|break|continue|try|catch|finally|throw|throws|this|super|null|true|false|instanceof|synchronized|volatile|transient|native|abstract|var|const|val|fun|when|object|companion|override|init|lateinit|sealed|data|inline|suspend|move|invoke|goto|iget|iput|sget|sput|aget|aput|new-instance|check-cast|instance-of|throw|monitor|nop)\b|(\b\d[\d_]*(?:\.\d+)?(?:[fLdD]|L)?\b|0x[0-9a-fA-F]+)/g;
+const _CLASSES_CODELIKE = ['hl-c', 'hl-s', 'hl-a', 'hl-k', 'hl-n'];
+
+const _RE_XML = /(<!--[\s\S]*?-->)|(<\/?[\w:.-]+|\/?>)|([\w:.-]+)(?=\s*=\s*")|("[^"\n]*")/g;
+const _CLASSES_XML = ['hl-c', 'hl-t', 'hl-at', 'hl-s'];
+
+const _RE_JSON = /("(?:[^"\\\n]|\\.)*"(?=\s*:))|("(?:[^"\\\n]|\\.)*")|(\b(?:true|false|null)\b)|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g;
+const _CLASSES_JSON = ['hl-at', 'hl-s', 'hl-k', 'hl-n'];
+
+function highlightCode(src, path){
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  const codelike = ['java', 'kt', 'smali'].includes(ext);
+  const xmllike = ['xml', 'html', 'iml'].includes(ext);
+  if (!codelike && !xmllike && ext !== 'json') return _esc(src);
+  try {
+    if (xmllike) return _tokenize(src, _RE_XML, _CLASSES_XML);
+    if (ext === 'json') return _tokenize(src, _RE_JSON, _CLASSES_JSON);
+    return _tokenize(src, _RE_CODELIKE, _CLASSES_CODELIKE);
+  } catch (e) {
+    return _esc(src);  // un archivo raro no debe romper el visor
+  }
+}
+
+async function searchExplorer(){
+  const q = document.getElementById('explorer-filter').value.trim();
+  if (!explorerPackage || q.length < 2) { if (q.length < 2) loadExplorer(); return; }
+  const tree = document.getElementById('explorer-tree');
+  tree.innerHTML = '';
+  let any = false;
+  for (const root of ['static', 'runtime']) {
+    const data = await j(`/api/decompiled/${encodeURIComponent(explorerPackage)}/search?root=${root}&q=${encodeURIComponent(q)}`);
+    for (const rel of data.results || []) {
+      any = true;
+      _renderFile(tree, root, rel, `${root === 'runtime' ? '🧬 ' : ''}${rel}`);
+    }
+  }
+  if (!any) tree.textContent = T('explorer.noMatches');
 }
 
 // ── Dispositivo ──────────────────────────────────────────────────────────
-// Único modo de video: WebUSB + WebCodecs ("USB directo (fluido)"), 100%
-// opt-in vía su propio botón -- no hay fallback de screenshots/scrcpy, a
-// pedido explícito del usuario. Import perezoso: si el bundle no existe
-// porque nadie corrió `pnpm run build` en webusb/, o el navegador no soporta
-// WebUSB, el botón simplemente no aparece.
-// Reconexión tras F5: se guarda en sessionStorage (NO localStorage) el serial
-// del device que el usuario conectó a mano. sessionStorage tiene justo la vida
-// útil que queremos -- sobrevive a un reload, muere al cerrar la pestaña -- así
-// que la reconexión automática ocurre SOLO en la pestaña donde el usuario ya
-// había pedido video explícitamente. Abrir el dashboard de cero nunca toca el
-// USB solo: el cable es exclusivo (mientras el navegador lo tiene, adb no puede
-// usarlo), así que reclamarlo sin que lo pidan rompería los jobs de la cola.
+// Dos modos de pantalla, elegidos por config.yaml (no por botones):
+//   - emulator/red: screencap polling vía adb del backend (~1 fps)
+//   - físico: WebUSB + WebCodecs (video fluido; el navegador reclama el cable)
+// El detalle de cada modo está en su sección más abajo. sessionStorage guarda
+// el serial USB conectado a mano para la reconexión tras F5 (ver _initUsbMode).
 const WEBUSB_SESSION_KEY = 'nutcracker.webusb.serial';
 
 function rememberWebUsbSerial(serial){
@@ -510,50 +1050,97 @@ function rememberWebUsbSerial(serial){
 function rememberedWebUsbSerial(){
   try { return sessionStorage.getItem(WEBUSB_SESSION_KEY); } catch (e) { return null; }
 }
-function setWebUsbConnectedUi(connected){
-  document.getElementById('webusb-btn').style.display = connected ? 'none' : '';
-  document.getElementById('webusb-stop-btn').style.display = connected ? '' : 'none';
+
+// ── Panel Dispositivo: auto-conexión según config, UN solo botón toggle ────
+// No hay botones de "conectar": al cargar, el panel se conecta solo usando el
+// modo que dicta config.yaml -- emulator (screencap polling vía adb del
+// backend) si strategies.runtime_target: emulator o el serial configurado es
+// de emulador; si no, WebUSB (device físico por cable). El único botón es el
+// toggle: "⏏ Soltar" cuando hay conexión, "🔄 Reconectar" cuando no.
+// Excepción inevitable: la PRIMERA conexión WebUSB necesita un gesto del
+// usuario (el navegador exige el diálogo de permiso USB) -- ese gesto es el
+// propio click en "🔄 Reconectar".
+let deviceMode = null;        // 'emulator' | 'usb'
+let deviceConnected = false;
+let emuConfigSerial = null;   // serial de emulador desde config.yaml (si hay)
+let emuTimer = null;
+let emuSerial = null;
+
+function _isEmulatorSerial(s){
+  return !!s && (s.startsWith('emulator-') || s.startsWith('127.0.0.1:') || s.startsWith('localhost:'));
 }
 
+function setDeviceToggle(connected){
+  deviceConnected = connected;
+  const btn = document.getElementById('device-toggle-btn');
+  btn.style.display = '';
+  btn.textContent = connected ? T('btn.release') : T('btn.reconnect');
+}
+
+function _showEmulatorImg(show){
+  document.getElementById('emulator-img').style.display = show ? 'block' : 'none';
+  document.getElementById('webusb-canvas').style.display = show ? 'none' : '';
+}
+
+async function toggleDevice(){
+  if (deviceConnected) {
+    if (deviceMode === 'emulator') disconnectEmulator();
+    else await disconnectWebUsb();
+  } else {
+    if (deviceMode === 'emulator') await connectEmulator();
+    else await connectWebUsb();
+  }
+}
+
+// ── Modo USB (device físico): WebUSB + WebCodecs, video fluido ─────────────
 // Import perezoso: si el bundle no existe porque nadie corrió `pnpm run build`
-// en webusb/, o el navegador no soporta WebUSB, el botón simplemente no aparece.
-(async () => {
+// en webusb/, o el navegador no soporta WebUSB, el panel informa y listo.
+// Reconexión tras F5: se guarda en sessionStorage (NO localStorage) el serial
+// del device que el usuario conectó a mano. sessionStorage tiene justo la vida
+// útil que queremos -- sobrevive a un reload, muere al cerrar la pestaña -- así
+// que la reconexión automática ocurre SOLO en la pestaña donde el usuario ya
+// había pedido video explícitamente. Abrir el dashboard de cero nunca toca el
+// USB solo: el cable es exclusivo (mientras el navegador lo tiene, adb no puede
+// usarlo), así que reclamarlo sin que lo pidan rompería los jobs de la cola.
+async function _initUsbMode(){
   const status = document.getElementById('device-status');
   try {
     const mod = await import('/static/webusb-video.bundle.js');
     if (mod.isSupported && mod.isSupported()) {
       window.__nutcrackerWebUsb = mod;
-      setWebUsbConnectedUi(false);
-      status.textContent = 'Clic en "🔌 USB directo (fluido)" para conectar por USB.';
-
       const previous = rememberedWebUsbSerial();
       if (previous) {
         const canvas = document.getElementById('webusb-canvas');
         const serial = await mod.reconnect(canvas, (s) => { status.textContent = s; }, previous);
         rememberWebUsbSerial(serial);
-        setWebUsbConnectedUi(!!serial);
+        setDeviceToggle(!!serial);
+        if (serial) return;
+      } else {
+        setDeviceToggle(false);
       }
+      status.textContent = T('status.usbNone');
       return;
     }
   } catch (e) { /* bundle no compilado o navegador sin soporte -- no-op */ }
-  status.textContent = 'WebUSB no disponible (necesita Chrome/Edge y el bundle compilado — ver nutcracker_core/plugins/dashboard/webusb/README.md).';
-})();
+  status.textContent = T('status.usbUnavailable');
+}
 
 async function connectWebUsb(){
   const mod = window.__nutcrackerWebUsb;
-  if (!mod) return;
-  const canvas = document.getElementById('webusb-canvas');
   const status = document.getElementById('device-status');
+  if (!mod) { status.textContent = T('status.usbBundleMissing'); return; }
+  const canvas = document.getElementById('webusb-canvas');
+  _showEmulatorImg(false);
   try {
     // mod.connect() ya captura sus propios errores internamente y los reporta
     // vía onStatus (ver webusb/src/main.ts) -- este try/catch es defensa en
     // profundidad por si algo se escapa (p.ej. el propio import/bundle).
     const serial = await mod.connect(canvas, (s) => { status.textContent = s; });
     rememberWebUsbSerial(serial);
-    setWebUsbConnectedUi(!!serial);
+    setDeviceToggle(!!serial);
   } catch (e) {
     console.error('connectWebUsb falló:', e);
-    status.textContent = `Error con USB directo: ${e.message || e}`;
+    status.textContent = T('err.usbConnect', {e: e.message || e});
   }
 }
 
@@ -564,14 +1151,147 @@ async function disconnectWebUsb(){
   // Se olvida el serial ANTES de cerrar: si el cierre falla a mitad, no queremos
   // que el próximo F5 vuelva a reclamar el cable por su cuenta.
   rememberWebUsbSerial(null);
-  setWebUsbConnectedUi(false);
+  setDeviceToggle(false);
   try {
     await mod.disconnect((s) => { status.textContent = s; });
   } catch (e) {
     console.error('disconnectWebUsb falló:', e);
-    status.textContent = `Error soltando el USB: ${e.message || e}`;
+    status.textContent = T('err.usbDisconnect', {e: e.message || e});
   }
 }
+
+// ── Modo emulador / device de red (screencap polling) ──────────────────────
+// WebUSB no aplica acá (no hay cable que reclamar): la pantalla se trae frame
+// a frame del adb del backend (GET /api/device/screenshot). No necesita
+// Chrome ni el bundle webusb compilado.
+let emuInflight = false;
+let emuFailCount = 0;
+
+async function refreshEmulatorFrame(){
+  // Sin apilar: cada request colgado retiene un hilo del server hasta 10s,
+  // y a 900ms de intervalo se acumulaban ~11 durante cualquier saturación.
+  if (!emuSerial || emuInflight) return;
+  emuInflight = true;
+  try {
+    const r = await fetch(`/api/device/screenshot?serial=${encodeURIComponent(emuSerial)}&t=${Date.now()}`);
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob();
+    const img = document.getElementById('emulator-img');
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    const url = URL.createObjectURL(blob);
+    img.src = url;
+    img.dataset.url = url;
+    if (emuFailCount >= 8) {
+      document.getElementById('device-status').textContent = T('status.viewing', {serial: emuSerial});
+    }
+    emuFailCount = 0;
+  } catch (e) {
+    // Transitorio típico: emulador saturado (un `adb install` en curso deja
+    // el screencap >10s y el backend devuelve 504). Se conserva el último
+    // frame bueno y se reintenta en silencio; solo se avisa si la racha
+    // se alarga (~7s de fallos seguidos).
+    emuFailCount++;
+    if (emuFailCount === 8) {
+      document.getElementById('device-status').textContent = T('status.emuUnstable', {serial: emuSerial});
+    }
+  } finally {
+    emuInflight = false;
+  }
+}
+
+async function connectEmulator(){
+  const status = document.getElementById('device-status');
+  try {
+    let serial = emuConfigSerial;
+    if (!serial) {
+      // Autodetección: primer emulador vivo que vea el adb del backend (o el
+      // primer device disponible, si no hay emulador).
+      const list = await j('/api/device/list');
+      const alive = (list.devices || []).filter(d => d.state === 'device');
+      const emu = alive.find(d => d.kind === 'emulator') || alive[0];
+      if (!emu) { status.textContent = T('status.noDevice'); return; }
+      serial = emu.serial;
+    }
+    // Validar con un frame antes de prender el polling. Hasta 3 intentos:
+    // el fallo típico es transitorio (emulador ocupado instalando/booteando)
+    // y rendirse al primer 504 obligaba a reconectar a mano sin motivo.
+    let probe = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      probe = await fetch(`/api/device/screenshot?serial=${encodeURIComponent(serial)}`);
+      if (probe.ok) break;
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
+    }
+    if (!probe.ok) {
+      status.textContent = T('err.screencap', {serial, text: (await probe.text()).slice(0, 200)});
+      return;
+    }
+    emuFailCount = 0;
+    emuSerial = serial;
+    // El chat del co-piloto actúa sobre el mismo device que se está viendo
+    // -- precargar el serial detectado/configurado para no pedirlo dos veces
+    // (solo si el campo está vacío: no pisar lo que el operador escribió).
+    const qInput = document.getElementById('query-serial');
+    if (qInput && !qInput.value) qInput.value = serial;
+    _showEmulatorImg(true);
+    setDeviceToggle(true);
+    status.textContent = T('status.viewing', {serial});
+    refreshEmulatorFrame();
+    emuTimer = setInterval(refreshEmulatorFrame, 900);
+  } catch (e) {
+    console.error('connectEmulator falló:', e);
+    status.textContent = T('err.emuConnect', {e: e.message || e});
+  }
+}
+
+function disconnectEmulator(){
+  if (emuTimer) { clearInterval(emuTimer); emuTimer = null; }
+  emuSerial = null;
+  _showEmulatorImg(false);
+  setDeviceToggle(false);
+  document.getElementById('device-status').textContent = T('status.stopped');
+}
+
+// Botón "🔌 Reiniciar adb": recuperación por etapas en el backend
+// (reconnect → kill/start-server + chequeo de vida). Pensado para cuando el
+// emulador deja de responder (screencap/shell colgados). NO reinicia el
+// guest: si ok=false el mensaje lo dice y toca cold boot manual.
+async function restartAdb(){
+  const status = document.getElementById('device-status');
+  const btn = document.getElementById('adb-restart-btn');
+  btn.disabled = true;
+  status.textContent = T('status.adbRestarting');
+  try {
+    const q = emuSerial ? `?serial=${encodeURIComponent(emuSerial)}` : '';
+    const r = await j(`/api/device/restart-adb${q}`, {method: 'POST'});
+    status.textContent = r.ok
+      ? T('status.adbRecovered', {steps: r.steps.join(' → ')})
+      : T('status.adbDead');
+    if (r.ok && deviceMode === 'emulator' && emuSerial) {
+      emuFailCount = 0;
+      refreshEmulatorFrame();
+    }
+  } catch (e) {
+    status.textContent = T('status.adbDead');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Arranque del panel: el modo lo dicta config.yaml (runtime_target /
+// default_device_id), no un botón. Emulador → auto-conecta el polling;
+// físico → WebUSB (auto-reconnect solo si ESTA pestaña ya lo había pedido).
+(async () => {
+  let cfg = {};
+  try { cfg = await j('/api/config/default-serial'); } catch (e) { /* sin config */ }
+  if (cfg.runtime_target === 'emulator' || _isEmulatorSerial(cfg.serial)) {
+    deviceMode = 'emulator';
+    emuConfigSerial = _isEmulatorSerial(cfg.serial) ? cfg.serial : null;
+    await connectEmulator();
+    return;
+  }
+  deviceMode = 'usb';
+  await _initUsbMode();
+})();
 
 // Mata el daemon adb por las dos vías (WSL + Windows, ver
 // adb_transport.kill_server()) -- pensado para correr ANTES de "🔌 USB directo
@@ -579,17 +1299,17 @@ async function disconnectWebUsb(){
 // no puede tomarlo (ver plan.md).
 async function adbKillServer(){
   const status = document.getElementById('device-status');
-  status.textContent = 'Matando adb (WSL + Windows)…';
+  status.textContent = T('status.killingAdb');
   try {
     const r = await j('/api/adb/kill-server', {method: 'POST'});
     const parts = [];
-    if (r.wsl) parts.push(`WSL: ${r.wsl.ok ? 'OK' : 'falló'}`);
-    if (r.windows) parts.push(`Windows: ${r.windows.ok ? 'OK' : 'falló'}`);
-    else parts.push('Windows: n/a (no es WSL)');
+    if (r.wsl) parts.push(`WSL: ${r.wsl.ok ? T('word.ok') : T('word.failed')}`);
+    if (r.windows) parts.push(`Windows: ${r.windows.ok ? T('word.ok') : T('word.failed')}`);
+    else parts.push(T('status.winNa'));
     status.textContent = `adb kill-server — ${parts.join(' · ')}`;
   } catch (e) {
     console.error('adbKillServer falló:', e);
-    status.textContent = `Error matando adb: ${e.message || e}`;
+    status.textContent = T('err.adbKill', {e: e.message || e});
   }
 }
 
@@ -599,6 +1319,7 @@ async function adbKillServer(){
 // (mod.getAdb() -- ver webusb/src/main.ts/relay.ts). No abre una segunda
 // conexión USB: eso pisaría a la del video (WebUSB es exclusivo por interfaz).
 let relayClient = null;
+let relaySessionId = null;  // session id activo -- connectQuery lo auto-detecta
 
 function setRelayConnectedUi(connected){
   document.getElementById('relay-btn').style.display = connected ? 'none' : '';
@@ -608,14 +1329,14 @@ function setRelayConnectedUi(connected){
 async function connectRelay(){
   const mod = window.__nutcrackerWebUsb;
   const status = document.getElementById('relay-status');
-  if (!mod) { status.textContent = 'Bundle WebUSB no disponible.'; return; }
+  if (!mod) { status.textContent = T('status.usbBundleMissing'); return; }
   const adb = mod.getAdb && mod.getAdb();
   if (!adb) {
-    status.textContent = 'Conectá "🔌 USB directo (fluido)" primero -- el relay reusa esa conexión.';
+    status.textContent = T('status.relayNeedsVideo');
     return;
   }
   const sessionId = document.getElementById('relay-session-id').value.trim();
-  if (!sessionId) { status.textContent = 'Poné un session id (ej. el serial del device).'; return; }
+  if (!sessionId) { status.textContent = T('status.relayNeedsSession'); return; }
   const deviceIp = document.getElementById('relay-device-ip').value.trim();
   // fridaWsUrl null si no hay IP -- el túnel de frida simplemente no vuelve a
   // abrir (ver openFridaWsChannel), pero adb (shell/install/pull/screencap)
@@ -624,56 +1345,29 @@ async function connectRelay(){
   try {
     relayClient = new mod.RelayClient(adb, sessionId, (s) => { status.textContent = s; }, fridaWsUrl);
     await relayClient.start();
+    relaySessionId = sessionId;
     setRelayConnectedUi(true);
   } catch (e) {
     console.error('connectRelay falló:', e);
-    status.textContent = `Error activando el relay: ${e.message || e}`;
+    status.textContent = T('err.relayConnect', {e: e.message || e});
     relayClient = null;
+    relaySessionId = null;
   }
 }
 
 async function disconnectRelay(){
   const status = document.getElementById('relay-status');
   setRelayConnectedUi(false);
+  relaySessionId = null;
   if (!relayClient) return;
   try {
     await relayClient.stop();
   } catch (e) {
     console.error('disconnectRelay falló:', e);
-    status.textContent = `Error deteniendo el relay: ${e.message || e}`;
+    status.textContent = T('err.relayStop', {e: e.message || e});
   } finally {
     relayClient = null;
   }
-}
-
-// ── Agente / Chat ────────────────────────────────────────────────────────
-async function loadAgentPrompt(){
-  const data = await j('/api/agent/prompt');
-  document.getElementById('agent-prompt').textContent =
-    data.available ? data.prompt : '(plugin aipwn no instalado/disponible en este entorno)';
-}
-
-let chatSocket = null;
-function connectChat(){
-  const pkg = document.getElementById('chat-package').value.trim();
-  if (!pkg) return;
-  if (chatSocket) chatSocket.close();
-  document.getElementById('chatlog').innerHTML = '';
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  chatSocket = new WebSocket(`${proto}://${location.host}/ws/chat/${encodeURIComponent(pkg)}`);
-  chatSocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
-  chatSocket.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    const log = document.getElementById('chatlog');
-    log.innerHTML += `<div class="msg"><span class="op">[${msg.data.from}]</span> ${msg.data.text}</div>`;
-    log.scrollTop = log.scrollHeight;
-  };
-}
-function sendChat(){
-  const input = document.getElementById('chat-text');
-  if (!chatSocket || !input.value.trim()) return;
-  chatSocket.send(input.value.trim());
-  input.value = '';
 }
 
 // ── Pentest asistido (co-piloto de consulta) ────────────────────────────
@@ -681,37 +1375,47 @@ async function checkQueryAvailable(){
   try {
     const data = await j('/api/query/available');
     if (!data.available) {
-      const tab = document.getElementById('tab-query-label');
-      tab.classList.add('disabled');
-      tab.title = 'no disponible -- falta el plugin aipwn o el bloque llm: en config.yaml';
+      document.getElementById('query-text').disabled = true;
+      // Sin data-i18n: evita que applyI18n() pise este aviso si el fetch de
+      // /api/i18n resuelve después que el de /api/query/available.
+      document.getElementById('query-hint').removeAttribute('data-i18n');
+      document.getElementById('query-hint').textContent = T('status.copilotUnavailable');
     }
   } catch(e){}
 }
 
 let querySocket = null;
+let chatPackage = null;   // package de la conversación actual (lo fija openJobContext)
 function _qAppend(cls, html){
   const log = document.getElementById('querylog');
   log.innerHTML += `<div class="qmsg ${cls}">${html}</div>`;
   log.scrollTop = log.scrollHeight;
 }
-function connectQuery(){
-  const pkg = document.getElementById('query-package').value.trim();
+function connectQuery(pkg){
+  pkg = (pkg || '').trim();
   if (!pkg) return;
   if (querySocket) querySocket.close();
+  // Los archivos abiertos en pestañas pertenecen al package anterior.
+  if (pkg !== chatPackage) closeAllTabs();
+  chatPackage = pkg;
   document.getElementById('querylog').innerHTML = '';
   const serial = document.getElementById('query-serial').value.trim();
-  const relay = document.getElementById('query-relay').checked;
+  // Sin checkbox "usar relay": si hay una sesión de relay activa y el serial
+  // escrito es su session id, se detecta solo.
+  const relay = !!(relaySessionId && serial && serial === relaySessionId);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   querySocket = new WebSocket(`${proto}://${location.host}/ws/query/${encodeURIComponent(pkg)}`);
   querySocket.onclose = (ev) => { if (ev.code === 1008) redirectToLogin(); };
   querySocket.onopen = () => {
     querySocket.send(JSON.stringify({serial: serial || null, relay}));
-    _qAppend('qassistant', `<b>conectado</b> a ${pkg}${relay ? ' (vía relay)' : serial ? ` (serial ${serial})` : ' (sin device -- modo estático)'}`);
+    _qAppend('qassistant', T('msg.connected', {pkg}) + (relay ? T('msg.viaRelay') : serial ? T('msg.withSerial', {serial}) : T('msg.noDevice')));
   };
+  // El explorador de la izquierda sigue al package del chat.
+  loadExplorer(pkg);
   querySocket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.kind === 'tool') {
-      _qAppend('qtool', `▸ ejecutando <b>${msg.data.name}</b>(${JSON.stringify(msg.data.arguments)})`);
+      _qAppend('qtool', T('msg.runningTool', {name: msg.data.name, args: JSON.stringify(msg.data.arguments)}));
     } else if (msg.kind === 'tool_result') {
       _qAppend('qtool', `  ↳ ${msg.data.name}: ${msg.data.result.slice(0, 400)}`);
     } else if (msg.kind === 'image') {
@@ -725,8 +1429,14 @@ function connectQuery(){
 }
 function sendQuery(){
   const input = document.getElementById('query-text');
-  if (!querySocket || !input.value.trim()) return;
-  _qAppend('qassistant', `<span style="color:var(--accent)">[vos]</span> ${input.value.trim().replace(/</g, '&lt;')}`);
+  if (!input.value.trim()) return;
+  // Sin job elegido no hay socket (la conexión la fija openJobContext) --
+  // antes esto retornaba en silencio y parecía que el agente no respondía.
+  if (!querySocket || querySocket.readyState !== WebSocket.OPEN) {
+    _qAppend('qerror', T('err.noConnection'));
+    return;
+  }
+  _qAppend('qassistant', `<span style="color:var(--accent)">${T('chat.you')}</span> ${input.value.trim().replace(/</g, '&lt;')}`);
   querySocket.send(input.value.trim());
   input.value = '';
 }
@@ -739,7 +1449,7 @@ function renderFindingsTable(findings){
       <td>${f.rule_id}</td><td>${sevBadge(f.severity)}</td>
       <td>${f.masvs || '–'}</td><td>${f.maswe || '–'}</td><td>${f.cwe || '–'}</td>
       <td>${f.file ? f.file + ':' + (f.line||0) : '–'}</td>
-    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--dim)">(sin hallazgos)</td></tr>';
+    </tr>`).join('') || `<tr><td colspan="6" style="color:var(--dim)">${T('findings.empty')}</td></tr>`;
 }
 
 // Clic en una fila del historial -- carga los hallazgos de ESE run puntual en
@@ -748,7 +1458,7 @@ function renderFindingsTable(findings){
 async function loadRunFindings(runId, dateLabel){
   const run = await j(`/api/runs/${runId}`);
   document.getElementById('modal-findings-title').textContent =
-    `Hallazgos del run #${runId}` + (dateLabel ? ` (${dateLabel})` : '');
+    T('findings.run', {id: runId}) + (dateLabel ? ` (${dateLabel})` : '');
   renderFindingsTable(run.findings);
 }
 
@@ -760,7 +1470,7 @@ async function openApp(pkg){
   document.getElementById('modal-verdict').innerHTML = verdictBadge(app.last_verdict);
   document.getElementById('modal-score').textContent = (app.masvs_score ?? '–') + (app.grade ? ' ('+app.grade+')' : '');
   document.getElementById('modal-due').textContent = app.next_due_at ? app.next_due_at.slice(0,10) : '–';
-  document.getElementById('modal-findings-title').textContent = 'Hallazgos del último run';
+  document.getElementById('modal-findings-title').textContent = T('findings.lastRun');
 
   if (app.last_run_id) {
     const run = await j(`/api/runs/${app.last_run_id}`);
@@ -797,20 +1507,20 @@ function renderHistory(runs, lastRunId){
     const dateLabel = (r.finished_at || r.started_at || '–').slice(0,16).replace('T',' ');
     const buttons = [];
     if (r.artifacts && r.artifacts.json) {
-      buttons.push(`<a href="/api/runs/${r.id}/download/json" class="job-id-link" title="Descargar JSON">JSON</a>`);
+      buttons.push(`<a href="/api/runs/${r.id}/download/json" class="job-id-link" title="${T('tip.dlJson')}">JSON</a>`);
     }
     if (r.artifacts && r.artifacts.pdf && r.id === lastRunId) {
-      buttons.push(`<a href="/api/runs/${r.id}/download/pdf" class="job-id-link" title="Descargar PDF">PDF</a>`);
+      buttons.push(`<a href="/api/runs/${r.id}/download/pdf" class="job-id-link" title="${T('tip.dlPdf')}">PDF</a>`);
     }
     return `
-      <tr class="clickable" onclick="loadRunFindings(${r.id}, '${dateLabel}')" title="Ver hallazgos del run #${r.id}">
+      <tr class="clickable" onclick="loadRunFindings(${r.id}, '${dateLabel}')" title="${T('tip.viewRunFindings', {id: r.id})}">
         <td>${dateLabel}</td>
         <td>${verdictBadge(r.verdict)}</td>
         <td>${r.masvs_score ?? '–'}${r.grade ? ' ('+r.grade+')' : ''}</td>
         <td>${r.findings_count}</td>
         <td>${buttons.join(' · ') || '<span style="color:var(--dim)">–</span>'}</td>
       </tr>`;
-  }).join('') || '<tr><td colspan="5" style="color:var(--dim)">(sin historial)</td></tr>';
+  }).join('') || `<tr><td colspan="5" style="color:var(--dim)">${T('history.empty')}</td></tr>`;
 }
 
 function renderConsolidatedFindings(findings){
@@ -824,7 +1534,7 @@ function renderConsolidatedFindings(findings){
       <td>${f.seen_in_runs}</td>
       <td>${(f.first_seen_at || '–').slice(0,10)}</td>
       <td>${(f.last_seen_at || '–').slice(0,10)}</td>
-    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--dim)">(sin hallazgos en ninguna corrida)</td></tr>';
+    </tr>`).join('') || `<tr><td colspan="7" style="color:var(--dim)">${T('consolidated.empty')}</td></tr>`;
 }
 
 function renderTrend(points){
@@ -832,7 +1542,7 @@ function renderTrend(points){
   const W = 600, H = 160, PAD = 24;
   svg.innerHTML = '';
   if (!points.length) {
-    svg.innerHTML = `<text x="${W/2}" y="${H/2}" fill="var(--dim)" font-size="12" text-anchor="middle">(sin historial)</text>`;
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" fill="var(--dim)" font-size="12" text-anchor="middle">${T('history.empty')}</text>`;
     return;
   }
   const gradeColor = {A:'var(--good)', B:'var(--good)', C:'var(--warning)', D:'var(--serious)', F:'var(--critical)'};
@@ -901,16 +1611,32 @@ async function reQueue(){
 // de config.yaml -- típicamente un serial de red ("ip:5555" tras `adb tcpip
 // 5555`) para no tener que escribirlo a mano y para que no compita por el
 // cable USB con el video WebUSB. Solo si el campo está vacío -- no pisa lo
-// que el operador ya haya escrito.
+// que el operador ya haya escrito. Si es un serial de emulador, también se
+// precarga en el chat del co-piloto.
 (async () => {
   try {
     const { serial } = await j('/api/config/default-serial');
     if (!serial) return;
+    if (_isEmulatorSerial(serial)) {
+      const qInput = document.getElementById('query-serial');
+      if (qInput && !qInput.value) qInput.value = serial;
+    }
     for (const id of ['q-serial', 'batch-serial']) {
       const el = document.getElementById(id);
       if (el && !el.value) el.value = serial;
     }
   } catch (e) { /* config no disponible -- no-op, los campos quedan vacíos */ }
+})();
+
+// Idioma de la UI: lo fija el backend (config.yaml: language) vía /api/i18n.
+// Si el fetch falla (endpoint viejo, sin auth, red) queda el default 'en'.
+(async () => {
+  try {
+    const data = await j('/api/i18n');
+    LANG = data.language === 'es' ? 'es' : 'en';
+    document.documentElement.lang = LANG;
+  } catch (e) { /* sin /api/i18n -- queda 'en' */ }
+  applyI18n();
 })();
 
 refreshAll();

@@ -689,7 +689,7 @@ def test_job_with_package_id_reuses_local_apk(monkeypatch, tmp_path, engine):
     (no una ruta .apk) debe resolver downloads/<package>/<package>.apk y
     construir `analyze <path>` (local) en vez de `scan <package>` (que
     fuerza descarga y falla si no hay credenciales)."""
-    pkg = "com.example.app"
+    pkg = "com.example.queued"
     dl_dir = tmp_path / "downloads" / pkg
     dl_dir.mkdir(parents=True)
     apk = dl_dir / f"{pkg}.apk"
@@ -968,3 +968,95 @@ def test_non_relay_job_still_has_none_relay_fields_after_restart(tmp_path):
     reloaded = e2._pending[0]
     assert reloaded.relay_session_id is None
     assert reloaded.frida_host is None
+
+
+def test_recover_interrupted_jobs_marks_orphaned_running_as_error(tmp_path):
+    """Escenario real reportado en vivo (2026-08-23): el dashboard muere (o se
+    reinicia) con jobs en 'running'; esos jobs son zombis -- su subproceso y
+    sus logs se fueron con el proceso muerto -- pero la cola los mostraba
+    eternamente como "en ejecución". Al arrancar, el engine nuevo los marca
+    como 'error' con la causa, y NO toca los 'queued' (esos sí se retoman
+    vía _load_queued_from_db)."""
+    db_path = str(tmp_path / "queue_test.db")
+
+    engine_before_restart = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    zombie = engine_before_restart.submit("com.example.zombie", kind="static")
+    still_queued = engine_before_restart.submit("com.example.queued", kind="static")
+    conn = db.connect(db_path)
+    try:
+        repository.update_job_status(conn, zombie.db_id, "running")
+    finally:
+        conn.close()
+
+    # "Reinicio": engine nuevo sobre la misma DB.
+    engine_after_restart = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    assert engine_after_restart.recover_interrupted_jobs() == 1
+
+    conn = db.connect(db_path)
+    try:
+        zombie_row = repository.get_job(conn, zombie.db_id)
+        queued_row = repository.get_job(conn, still_queued.db_id)
+    finally:
+        conn.close()
+
+    assert zombie_row["status"] == "error"
+    assert "interrumpido" in zombie_row["error"]
+    assert zombie_row["finished_at"] is not None
+    assert queued_row["status"] == "queued", (
+        "los jobs 'queued' no son zombis: se retoman, no se marcan como error"
+    )
+
+
+def test_recover_interrupted_jobs_noop_when_nothing_running(tmp_path):
+    db_path = str(tmp_path / "queue_test.db")
+    engine = QueueEngine(config_path="config.yaml", db_path=db_path, static_workers=1)
+    engine.submit("com.example.app", kind="static")
+    assert engine.recover_interrupted_jobs() == 0
+
+
+def test_log_dir_persists_streamed_lines_to_disk(monkeypatch, tmp_path, engine):
+    """engine.log_dir (dashboard): cada línea streameada debe quedar también
+    en <log_dir>/job-<id>.log -- es la única copia que sobrevive a un reinicio
+    del proceso y la que /ws/jobs/{id} usa de replay cuando el EventBus en
+    memoria ya no tiene el historial."""
+
+    class _FakePopen:
+        def __init__(self, cmd, env=None, stdout=None, stderr=None, text=None, bufsize=None):
+            self.stdout = iter(["línea uno\n", "línea dos\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.Popen", _FakePopen)
+
+    engine.on_line = lambda job_id, line: None
+    engine.log_dir = str(tmp_path / "job_logs")
+
+    job = engine.submit(str(_touch_apk(tmp_path, "persist.apk")), kind="static")
+    outcomes = engine.drain()
+
+    assert outcomes[0].ok is True
+    log_path = tmp_path / "job_logs" / f"job-{job.db_id}.log"
+    assert log_path.read_text(encoding="utf-8") == "línea uno\nlínea dos\n"
+
+
+def test_without_log_dir_does_not_write_files(monkeypatch, tmp_path, engine):
+    """Default (log_dir=None): el comportamiento no cambia -- no se crea
+    ningún archivo (CLI, tests de Fase 1)."""
+
+    class _FakePopen:
+        def __init__(self, cmd, env=None, stdout=None, stderr=None, text=None, bufsize=None):
+            self.stdout = iter(["línea\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr("nutcracker_core.queue.engine.subprocess.Popen", _FakePopen)
+    engine.on_line = lambda job_id, line: None
+
+    engine.submit(str(_touch_apk(tmp_path, "nopersist.apk")), kind="static")
+    engine.drain()
+
+    assert list(tmp_path.glob("job-*")) == []

@@ -62,6 +62,72 @@ def test_chat_ws_echoes_message_to_subscribers(client):
         assert msg["data"]["text"] == "hola agente"
 
 
+# ── Replay desde el log persistido en disco (2026-08-23) ────────────────────
+# Escenario real: el dashboard se reinicia a mitad de corrida -- el EventBus
+# en memoria pierde el historial del job, pero engine.log_dir dejó cada línea
+# en <dir>/job-<id>.log. Al hacer click en el job, /ws/jobs/{id} debe servir
+# ese archivo como replay en vez de quedarse en silencio.
+
+
+def test_job_ws_replays_persisted_log_file_when_bus_history_is_empty(tmp_path):
+    log_dir = tmp_path / "job_logs"
+    log_dir.mkdir()
+    (log_dir / "job-42.log").write_text("línea vieja 1\nlínea vieja 2\n", encoding="utf-8")
+
+    engine = QueueEngine(config_path="config.yaml", db_path=str(tmp_path / "ws_test.db"))
+    app = create_app(db_path=str(tmp_path / "ws_test.db"), engine=engine,
+                     job_log_dir=str(log_dir))
+    with TestClient(app) as c:
+        with c.websocket_connect("/ws/jobs/42") as ws:
+            msg = ws.receive_json()
+            assert msg["kind"] == "log"
+            assert msg["data"] == "línea vieja 1\nlínea vieja 2"
+
+
+def test_job_ws_prefers_bus_history_over_log_file(tmp_path):
+    """Si el job corrió en ESTE proceso, el historial del EventBus es la
+    fuente completa -- el archivo no se manda encima (evita duplicados)."""
+    log_dir = tmp_path / "job_logs"
+    log_dir.mkdir()
+    (log_dir / "job-42.log").write_text("línea del archivo\n", encoding="utf-8")
+    global_bus.publish("42", "log", "línea del bus")
+
+    engine = QueueEngine(config_path="config.yaml", db_path=str(tmp_path / "ws_test.db"))
+    app = create_app(db_path=str(tmp_path / "ws_test.db"), engine=engine,
+                     job_log_dir=str(log_dir))
+    with TestClient(app) as c:
+        with c.websocket_connect("/ws/jobs/42") as ws:
+            msg = ws.receive_json()
+            assert msg["data"] == "línea del bus"
+
+
+def test_job_ws_without_persisted_log_stays_silent(client):
+    """Job sin historial en el bus y sin archivo: la conexión queda a la
+    espera de eventos en vivo, sin inventar nada."""
+    with client.websocket_connect("/ws/jobs/999") as ws:
+        global_bus.publish("999", "log", "evento en vivo")
+        msg = ws.receive_json()
+        assert msg["data"] == "evento en vivo"
+
+
+def test_job_ws_ignores_non_numeric_job_id_for_file_replay(tmp_path):
+    """job_id viene de la URL: si no es numérico no se usa como nombre de
+    archivo (defensa anti-traversal del replay desde disco)."""
+    log_dir = tmp_path / "job_logs"
+    log_dir.mkdir()
+    (log_dir / "job-..1.log").write_text("no debería servirse\n", encoding="utf-8")
+
+    engine = QueueEngine(config_path="config.yaml", db_path=str(tmp_path / "ws_test.db"))
+    app = create_app(db_path=str(tmp_path / "ws_test.db"), engine=engine,
+                     job_log_dir=str(log_dir))
+    with TestClient(app) as c:
+        with c.websocket_connect("/ws/jobs/..1") as ws:
+            global_bus.publish("..1", "log", "solo eventos en vivo")
+            msg = ws.receive_json()
+            assert msg["data"] == "solo eventos en vivo"
+
+
+
 # ── FIX (2026-08-03): RuntimeError al mandar tras un cierre en mal momento ──
 #
 # Reproducido en vivo: "RuntimeError: Unexpected ASGI message 'websocket.send',

@@ -5,6 +5,7 @@ levantar un servidor de verdad ni tocar la red."""
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import time
 
@@ -72,7 +73,7 @@ def test_summary_empty_db(client):
 def test_default_serial_null_when_not_configured(client):
     r = client.get("/api/config/default-serial")
     assert r.status_code == 200
-    assert r.json() == {"serial": None}
+    assert r.json() == {"serial": None, "runtime_target": None}
 
 
 def test_default_serial_reflects_configured_value(db_path, engine):
@@ -80,7 +81,175 @@ def test_default_serial_reflects_configured_value(db_path, engine):
     client_with_serial = TestClient(app)
     r = client_with_serial.get("/api/config/default-serial")
     assert r.status_code == 200
-    assert r.json() == {"serial": "172.20.10.6:5555"}
+    assert r.json() == {"serial": "172.20.10.6:5555", "runtime_target": None}
+
+
+def test_default_serial_reflects_runtime_target(db_path, engine):
+    """runtime_target (strategies.runtime_target: emulator|device) viaja en el
+    mismo endpoint -- el panel Dispositivo lo usa para ofrecer la vista de
+    emulador por screencap polling en vez de WebUSB."""
+    app = create_app(db_path=db_path, engine=engine,
+                     default_serial="emulator-5554", runtime_target="emulator")
+    r = TestClient(app).get("/api/config/default-serial")
+    assert r.status_code == 200
+    assert r.json() == {"serial": "emulator-5554", "runtime_target": "emulator"}
+
+
+# ── /api/device/* -- vista de emulador/device de red (screencap polling) ────
+
+def test_device_list_without_adb(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = client.get("/api/device/list")
+    assert r.status_code == 200
+    assert r.json() == {"available": False, "devices": []}
+
+
+def test_device_list_classifies_devices(client, monkeypatch):
+    fake = subprocess.CompletedProcess(
+        args=[], returncode=0,
+        stdout="List of devices attached\n"
+               "emulator-5554\tdevice\n"
+               "172.20.10.6:5555\tdevice\n"
+               "0A123ABC\tdevice\n",
+        stderr="",
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake)
+    r = client.get("/api/device/list")
+    assert r.status_code == 200
+    assert r.json() == {
+        "available": True,
+        "devices": [
+            {"serial": "emulator-5554", "state": "device", "kind": "emulator"},
+            {"serial": "172.20.10.6:5555", "state": "device", "kind": "network"},
+            {"serial": "0A123ABC", "state": "device", "kind": "usb"},
+        ],
+    }
+
+
+def test_device_screenshot_returns_png_with_serial(client, monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"\x89PNG-fake", stderr=b"")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = client.get("/api/device/screenshot?serial=emulator-5554")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content == b"\x89PNG-fake"
+    assert captured["cmd"] == ["/usr/bin/adb", "-s", "emulator-5554", "exec-out", "screencap", "-p"]
+
+
+def test_device_screenshot_failure_is_502(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        args=[], returncode=1, stdout=b"", stderr=b"error: no devices/emulators found"))
+    r = client.get("/api/device/screenshot?serial=emulator-9999")
+    assert r.status_code == 502
+    assert "no devices" in r.json()["detail"]
+
+
+def test_device_screenshot_without_adb_is_503(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = client.get("/api/device/screenshot")
+    assert r.status_code == 503
+
+
+# ── /api/decompiled/* -- explorador del decompilado (workbench IDE) ─────────
+
+@pytest.fixture
+def decompiled_client(db_path, engine, tmp_path):
+    """App con un decompiled/ fake: <pkg>/ (jadx) y runtime_dump_<pkg>/."""
+    base = tmp_path / "decompiled"
+    (base / "com.example.app" / "sources" / "com" / "example").mkdir(parents=True)
+    (base / "com.example.app" / "resources").mkdir(parents=True)
+    (base / "com.example.app" / "sources" / "com" / "example" / "MainActivity.java").write_text(
+        "package com.example;\nclass MainActivity {}\n", encoding="utf-8")
+    (base / "com.example.app" / "sources" / "com" / "example" / "payload.png").write_bytes(b"\x89PNG")
+    (base / "com.example.app" / "resources" / "AndroidManifest.xml").write_text(
+        "<manifest/>\n", encoding="utf-8")
+    (base / "runtime_dump_com.example.app").mkdir(parents=True)
+    (base / "runtime_dump_com.example.app" / "Dumped.java").write_text(
+        "class Dumped {}\n", encoding="utf-8")
+    app = create_app(db_path=db_path, engine=engine, decompiled_dir=base)
+    return TestClient(app)
+
+
+def test_decompiled_tree_lists_dirs_first(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/tree")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["exists"] is True
+    assert [e["name"] for e in data["entries"]] == ["resources", "sources"]
+
+    r2 = decompiled_client.get(
+        "/api/decompiled/com.example.app/tree?path=sources/com/example")
+    names = [(e["name"], e["type"]) for e in r2.json()["entries"]]
+    assert names == [("MainActivity.java", "file"), ("payload.png", "file")]
+    assert r2.json()["entries"][0]["size"] > 0
+
+
+def test_decompiled_tree_runtime_root(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/tree?root=runtime")
+    assert [e["name"] for e in r.json()["entries"]] == ["Dumped.java"]
+
+
+def test_decompiled_tree_unknown_package(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.unknown.app/tree")
+    assert r.status_code == 200
+    assert r.json() == {"exists": False, "entries": []}
+
+
+def test_decompiled_tree_rejects_traversal(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/tree",
+                              params={"path": "../.."})
+    assert r.status_code == 400
+
+
+def test_decompiled_file_returns_content(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/file",
+                              params={"path": "sources/com/example/MainActivity.java"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "class MainActivity" in data["content"]
+    assert data["truncated"] is False
+
+
+def test_decompiled_file_rejects_binary_extension(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/file",
+                              params={"path": "sources/com/example/payload.png"})
+    assert r.status_code == 415
+
+
+def test_decompiled_file_rejects_traversal(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/file",
+                              params={"path": "../../config.yaml"})
+    assert r.status_code == 400
+
+
+def test_decompiled_file_too_big_is_413(decompiled_client, tmp_path):
+    big = tmp_path / "decompiled" / "com.example.app" / "big.java"
+    big.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+    r = decompiled_client.get("/api/decompiled/com.example.app/file",
+                              params={"path": "big.java"})
+    assert r.status_code == 413
+
+
+def test_decompiled_search_by_filename(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/search",
+                              params={"q": "mainact"})
+    assert r.status_code == 200
+    assert r.json()["results"] == ["sources/com/example/MainActivity.java"]
+
+
+def test_decompiled_search_requires_two_chars(decompiled_client):
+    r = decompiled_client.get("/api/decompiled/com.example.app/search",
+                              params={"q": "m"})
+    assert r.status_code == 400
+
 
 
 def test_adb_kill_server_calls_adb_transport_and_returns_its_result(client, monkeypatch):
@@ -1158,3 +1327,87 @@ def test_upload_apk_requires_auth_when_enabled(tmp_path, monkeypatch, db_path, e
         files={"file": ("app.apk", _FAKE_APK_BYTES, "application/octet-stream")},
     )
     assert r.status_code == 401
+
+
+def test_i18n_endpoint_defaults_to_english(client):
+    r = client.get("/api/i18n")
+    assert r.status_code == 200
+    assert r.json() == {"language": "en", "supported": ["en", "es"]}
+
+
+def test_i18n_endpoint_returns_configured_language(db_path, engine):
+    """El comando dashboard valida `language:` de config.yaml contra
+    i18n.SUPPORTED_LANGUAGES y se lo pasa a create_app -- el frontend elige
+    su diccionario con esto (ver static/index.html)."""
+    app = create_app(db_path=db_path, engine=engine, language="es")
+    c = TestClient(app)
+    r = c.get("/api/i18n")
+    assert r.status_code == 200
+    assert r.json()["language"] == "es"
+
+
+# ── /api/device/restart-adb -- recuperación por etapas (botón del panel) ────
+
+def test_device_restart_adb_without_adb_is_503(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = client.post("/api/device/restart-adb")
+    assert r.status_code == 503
+
+
+def test_device_restart_adb_recovers_with_reconnect_only(client, monkeypatch):
+    """Si `reconnect` + echo de vida reviven el device, NO debe llegar a
+    kill-server (que tumba los wrappers de frida-server y demás clientes)."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        args=a[0], returncode=0, stdout=b"ok", stderr=b""))
+    r = client.post("/api/device/restart-adb?serial=emulator-5554")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["steps"] == ["reconnect emulator-5554"]
+
+
+def test_device_restart_adb_falls_back_to_kill_server(client, monkeypatch):
+    """Primer echo de vida falla (reconnect no bastó) → kill/start-server →
+    el segundo echo responde: ok=True con las dos etapas registradas."""
+    state = {"echo_calls": 0}
+
+    def fake_run(cmd, **kwargs):
+        args = cmd[1:]
+        if "shell" in args:
+            state["echo_calls"] += 1
+            rc = 1 if state["echo_calls"] == 1 else 0
+            return subprocess.CompletedProcess(args=cmd, returncode=rc, stdout=b"", stderr=b"")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = client.post("/api/device/restart-adb?serial=emulator-5554")
+    body = r.json()
+    assert body["ok"] is True
+    assert body["steps"] == ["reconnect emulator-5554", "kill-server → start-server"]
+
+
+def test_device_restart_adb_reports_dead_guest(client, monkeypatch):
+    """Nada reviva el device (guest colgado): ok=False -- el frontend le dice
+    al operador que toca cold boot manual; el endpoint NO hace adb reboot."""
+
+    def fake_run(cmd, **kwargs):
+        rc = 1 if "shell" in cmd[1:] else 0
+        return subprocess.CompletedProcess(args=cmd, returncode=rc, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = client.post("/api/device/restart-adb?serial=emulator-5554")
+    assert r.json()["ok"] is False
+
+
+def test_device_restart_adb_without_serial_skips_alive_check(client, monkeypatch):
+    """Sin serial no hay a quién hacerle echo: kill/start y ok=True."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/adb")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        args=a[0], returncode=0, stdout=b"", stderr=b""))
+    r = client.post("/api/device/restart-adb")
+    body = r.json()
+    assert body["ok"] is True
+    assert body["steps"] == ["kill-server → start-server"]

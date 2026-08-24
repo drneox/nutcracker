@@ -1,0 +1,9 @@
+# aipwn plugin dependencies
+# Install with: pip install -r nutcracker_core/plugins/aipwn/requirements.txt
+any-llm-sdk[openai,anthropic,ollama]>=1.13.0
+Pillow>=10.0.0
+# Fusiona el exploit report con el PDF base del análisis (--report) -- ver
+# exploit_report_pdf.py::merge_exploit_report_pdf. Faltaba acá (encontrado
+# en vivo, job 2824): estaba instalado en ningún lado, así que --report
+# nunca podía generar el PDF combinado, solo el JSON.
+pypdf>=4.0.0
