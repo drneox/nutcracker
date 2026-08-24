@@ -196,6 +196,13 @@ class QueueEngine:
         # siempre y el panel "Logs en vivo" queda vacío al hacer click.
         # None (default) = no persistir (CLI, tests de Fase 1).
         self.log_dir: str | None = None
+        # Subprocesos de jobs en ejecución (solo modo streaming, dashboard):
+        # cancel() les manda SIGTERM. _cancelled recuerda qué jobs se
+        # cancelaron para que _run_job registre ese motivo en la fila en vez
+        # del resumen de error parseado de la salida cortada.
+        self._procs: dict[int, subprocess.Popen] = {}
+        self._procs_guard = threading.Lock()
+        self._cancelled: set[int] = set()
 
     # ── Encolado ─────────────────────────────────────────────────────────────
 
@@ -247,6 +254,41 @@ class QueueEngine:
 
     def submit_many(self, targets: list[str], kind: str = "static") -> list[Job]:
         return [self.submit(t, kind=kind) for t in targets]
+
+    def cancel(self, job_id: int) -> str:
+        """Cancela un job. Si está 'queued', lo borra de la cola (misma regla
+        que ``repository.delete_job``). Si está 'running' y su subproceso vive
+        en ESTE proceso (modo streaming del dashboard), le manda SIGTERM --
+        ``_run_job`` lo registrará como error con el motivo "cancelled by
+        operator". Devuelve ``"deleted"`` o ``"terminated"``; levanta
+        ``ValueError`` si el job no existe, ya terminó, o corre en otro
+        proceso (p.ej. un ``nutcracker serve`` distinto -- su subproceso no
+        es alcanzable desde acá)."""
+        conn = db.connect(self.db_path)
+        try:
+            row = repository.get_job(conn, job_id)
+            if row is None:
+                raise ValueError(f"job #{job_id} no existe")
+            status = row["status"]
+            if status == "queued":
+                repository.delete_job(conn, job_id)
+                self._pending = [j for j in self._pending if j.db_id != job_id]
+                return "deleted"
+        finally:
+            conn.close()
+        if status != "running":
+            raise ValueError(f"job #{job_id} ya terminó (status={status})")
+        with self._procs_guard:
+            proc = self._procs.get(job_id)
+            if proc is not None and proc.poll() is None:
+                self._cancelled.add(job_id)
+                proc.terminate()
+                return "terminated"
+        raise ValueError(
+            f"job #{job_id} figura 'running' pero su subproceso no vive en "
+            "este proceso (¿corre en otro `nutcracker serve`/dashboard?) -- "
+            "no se puede cancelar desde acá"
+        )
 
     def _load_queued_from_db(self) -> None:
         """Recupera de SQLite los jobs en estado 'queued' que no estén ya en
@@ -434,7 +476,15 @@ class QueueEngine:
         else:
             proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
         ok = proc.returncode == 0
-        error = "" if ok else _extract_error_summary(_strip_ansi(proc.stderr or proc.stdout or ""))
+        with self._procs_guard:
+            cancelled = job.db_id in self._cancelled
+            self._cancelled.discard(job.db_id)
+        if cancelled:
+            # La salida cortada por el SIGTERM no dice nada útil -- registrar
+            # el motivo real en la fila del job.
+            error = "cancelled by operator"
+        else:
+            error = "" if ok else _extract_error_summary(_strip_ansi(proc.stderr or proc.stdout or ""))
 
         conn = db.connect(self.db_path)
         try:
@@ -464,6 +514,8 @@ class QueueEngine:
             cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
+        with self._procs_guard:
+            self._procs[job_id] = proc  # cancel() lo usa para SIGTERM
         log_file = None
         if self.log_dir:
             os.makedirs(self.log_dir, exist_ok=True)
@@ -485,6 +537,8 @@ class QueueEngine:
         finally:
             if log_file is not None:
                 log_file.close()
+            with self._procs_guard:
+                self._procs.pop(job_id, None)
         return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(lines), stderr="")
 
     def _run_dynamic(self, job: Job) -> JobOutcome:

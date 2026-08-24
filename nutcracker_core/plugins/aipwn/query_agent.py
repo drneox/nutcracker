@@ -126,6 +126,11 @@ and what you observed.
 - If a dynamic tool fails because there is no device connected, tell the \
 operator plainly (don't retry blindly) and suggest connecting one (serial or \
 relay) instead of silently switching to static-only analysis.
+- If a device-mutating tool (Frida attach, UI input, traffic interception) is \
+rejected because an autonomous aipwn job is running on this package, do NOT \
+retry it or try sibling tools with the same effect: the job owns the device \
+until it finishes. Tell the operator, and offer static tools or read-only \
+ones (take_screenshot, get_logcat) meanwhile.
 - Ground your answers in real data from the tools -- don't speculate about \
 findings/secrets/components without calling the corresponding tool first.
 - When asked to run a Frida script, confirm briefly what it will hook before \

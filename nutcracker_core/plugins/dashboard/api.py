@@ -833,6 +833,18 @@ def create_router(
             )
         return {"deleted": True}
 
+    @router.post("/api/queue/{job_id}/cancel")
+    def queue_cancel(job_id: int):
+        """Cancela un job: si está 'queued' lo borra de la cola; si está
+        'running' le manda SIGTERM a su subproceso (solo alcanzable si corre
+        en este proceso -- ver QueueEngine.cancel). Botón ■ de la tarjeta de
+        logs en el chat."""
+        try:
+            result = engine.cancel(job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"job_id": job_id, "result": result}
+
     @router.post("/api/queue/{job_id}/resume-aipwn")
     def queue_resume_aipwn(job_id: int, extra_iterations: int = 5):
         """Encola una nueva corrida de aipwn que CONTINÚA la sesión sin

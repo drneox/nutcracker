@@ -131,6 +131,22 @@ async def ws_job(websocket: WebSocket, job_id: str) -> None:
                                 chunk = []
                         if chunk:
                             await websocket.send_json({"kind": "log", "data": "\n".join(chunk)})
+            # El replay desde disco no incluye el evento de status final -- ese
+            # solo existe en el EventBus en memoria del proceso que corrió el
+            # job. Sin esto, tras un reinicio del dashboard un job terminado
+            # queda con pill "running" (y botón ■ activo) para siempre.
+            # db.connect(None) cae en DEFAULT_DB_PATH -- _query_db_path puede
+            # ser None si la config no fija un path explícito.
+            if job_id.isdigit():
+                from nutcracker_core.store import db as _db, repository as _repo
+                conn = _db.connect(_query_db_path)
+                try:
+                    row = _repo.get_job(conn, int(job_id))
+                finally:
+                    conn.close()
+                if row is not None and row["status"] != "running":
+                    await websocket.send_json(
+                        {"kind": "status", "data": {"status": row["status"]}})
 
         while True:
             try:

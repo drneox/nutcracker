@@ -163,6 +163,16 @@ _RUNTIME_DEVICE_TOOL_NAMES: frozenset[str] = frozenset({
     "setup_mitm_proxy", "teardown_mitm_proxy",
 })
 
+# Subconjunto de _RUNTIME_DEVICE_TOOL_NAMES que INTERFIERE con una corrida
+# autónoma de aipwn sobre el mismo dispositivo: las que attachean Frida al
+# proceso o inyectan input a la UI (aipwn hace spawn-gating y mata/relaunch
+# de la app -- un attach o un tap concurrente rompe su corrida, y viceversa).
+# take_screenshot y get_logcat quedan FUERA a propósito: son solo lectura,
+# no molestan a la corrida en curso.
+_DEVICE_INTERFERING_TOOL_NAMES: frozenset[str] = _RUNTIME_DEVICE_TOOL_NAMES - {
+    "take_screenshot", "get_logcat",
+}
+
 
 # Tools dinámicas que SÍ saben usar el device conectado por relay (nunca
 # shellean a un `adb` local): las de UI/pantalla propias (siempre via
@@ -227,6 +237,48 @@ def _check_device_ready(ctx: ToolContext, device: "DeviceIO | None", name: str) 
             "ninguna herramienta dinámica (Frida/ADB) puede funcionar hasta que se "
             "instale, sin importar el dispositivo conectado. No tiene sentido "
             "reintentar otras herramientas dinámicas por este mismo motivo."
+        )
+    return None
+
+
+def _check_running_aipwn_job(ctx: ToolContext, db_path: str | None, name: str) -> str | None:
+    """Gate de interferencia chat vs. cola: si hay un job ``aipwn`` corriendo
+    sobre el mismo package (y mismo dispositivo, cuando ambos serials se
+    conocen), rechaza las tools que MUTAN el device -- el job autónomo es
+    dueño del proceso mientras corre (spawn-gating, kill/relaunch de la app)
+    y un attach de Frida o un tap concurrente rompe su corrida. El chat sigue
+    pudiendo usar tools estáticas y de solo lectura (screenshot/logcat).
+
+    Fail-open a propósito: si la cola no se puede leer, no bloquea -- el
+    peor caso es el comportamiento de siempre, no un chat inutilizable."""
+    if name not in _DEVICE_INTERFERING_TOOL_NAMES or not db_path:
+        return None
+    try:
+        from nutcracker_core.store import db, repository
+        conn = db.connect(db_path)
+        try:
+            rows = repository.list_jobs(conn, status="running", limit=20)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 -- la cola es best-effort, nunca rompe la tool
+        return None
+    for row in rows:
+        if row["kind"] != "aipwn":
+            continue
+        if (row["package"] or row["target"] or "") != ctx.package:
+            continue
+        job_serial = row["serial"]
+        if job_serial and ctx.serial and job_serial != ctx.serial:
+            continue  # otro dispositivo -- no hay interferencia real
+        return (
+            f"hay un job aipwn corriendo sobre {ctx.package} (job #{row['id']}) -- "
+            "las acciones que modifican el dispositivo están bloqueadas hasta que "
+            "termine para no interferir con la corrida autónoma (el job mata y "
+            "relanza la app, cualquier attach o tap concurrente la rompe). Mientras "
+            "tanto puedes usar las tools estáticas (findings, decompilado, secrets) "
+            "o de solo lectura (take_screenshot, get_logcat); si el operador quiere "
+            "retomar el control del device antes, que detenga el job o espere a que "
+            "finalice."
         )
     return None
 
@@ -1007,6 +1059,12 @@ def dispatch_query_tool(
     ``{"error": ...}`` para que el LLM la vea y pueda reintentar/ajustar."""
     try:
         if name in _RUNTIME_DEVICE_TOOL_NAMES:
+            # Primero el gate de interferencia (mensaje más accionable: "hay
+            # un job corriendo, esperá o detenelo"), después el preflight de
+            # pipeline de dispositivo (genérico: "no hay device/adb").
+            conflict_error = _check_running_aipwn_job(ctx, db_path, name)
+            if conflict_error:
+                return json.dumps({"error": conflict_error})
             device_error = _check_device_ready(ctx, device, name)
             if device_error:
                 return json.dumps({"error": device_error})
