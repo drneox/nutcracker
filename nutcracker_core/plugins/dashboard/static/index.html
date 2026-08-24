@@ -34,8 +34,12 @@
      decompilado a la izquierda, columna central con chat + visor de código +
      logs TODO visible a la vez (sin tabs), y la pantalla del dispositivo fija
      a la derecha. Se apila en pantallas angostas. */
-  .interaction-grid{display:grid;grid-template-columns:240px minmax(0,1fr) 360px;gap:18px;align-items:start}
+  .interaction-grid{display:grid;grid-template-columns:var(--col-explorer,240px) 8px minmax(0,1fr) 8px var(--col-device,360px);gap:0 6px;align-items:start}
   .interaction-side{position:sticky;top:16px}
+  /* Handles de arrastre entre columnas: el ancho lo fijan las vars
+     --col-explorer / --col-device (ver el JS de splitters más abajo). */
+  .col-split{cursor:col-resize;border-radius:4px;align-self:stretch;touch-action:none}
+  .col-split:hover,.col-split.dragging{background:var(--border)}
   #emulator-img{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;display:block}
   .explorer-tree{max-height:70vh;overflow:auto;background:var(--panel2);border-radius:8px;padding:8px;font-size:12px;color:var(--dim)}
   .explorer-tree .tnode{cursor:pointer;padding:2px 4px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
@@ -61,6 +65,7 @@
   @media (max-width:1100px){
     .interaction-grid{grid-template-columns:1fr}
     .interaction-side{position:static}
+    .col-split{display:none}
   }
   tr.clickable{cursor:pointer}
   tr.clickable:hover{background:var(--panel2)}
@@ -199,6 +204,8 @@
         <div class="explorer-tree" id="explorer-tree" data-i18n="explorer.empty">(elige un job de la cola ↑ para explorar su decompilado)</div>
       </div>
 
+      <div class="col-split" data-side="explorer"></div>
+
       <div class="interaction-main">
         <h2 style="margin-top:0" data-i18n="sec.agent">Agente — pentest asistido</h2>
         <p style="font-size:12px;color:var(--dim)" id="query-hint" data-i18n="hint.query">
@@ -226,6 +233,8 @@
           <pre id="code-view"></pre>
         </div>
       </div>
+
+      <div class="col-split" data-side="device"></div>
 
       <div class="interaction-side">
         <h2 style="margin-top:0" data-i18n="sec.device">Dispositivo</h2>
@@ -1325,6 +1334,55 @@ async function restartAdb(){
     btn.disabled = false;
   }
 }
+
+// ── Splitters: columnas redimensionables (explorador / chat / device) ─────
+// Arrastre sobre los handles del grid; los anchos se guardan en localStorage
+// y se re-aplican al cargar. En pantallas angostas (<1100px) el grid colapsa
+// a una sola columna y los handles se ocultan (ver CSS .col-split).
+(function(){
+  const grid = document.querySelector('.interaction-grid');
+  if (!grid) return;
+  const STORE_KEY = 'nutcracker.colWidths';
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { /* corrupto */ }
+  for (const side of ['explorer', 'device']) {
+    if (saved[side]) grid.style.setProperty(`--col-${side}`, saved[side]);
+  }
+
+  let drag = null;
+  grid.querySelectorAll('.col-split').forEach(handle => {
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const side = handle.dataset.side;
+      const col = side === 'explorer' ? grid.querySelector('.explorer') : grid.querySelector('.interaction-side');
+      drag = { side, startX: e.clientX, startW: col.getBoundingClientRect().width };
+      handle.classList.add('dragging');
+      handle.setPointerCapture(e.pointerId);
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const delta = e.clientX - drag.startX;
+      // explorer crece arrastrando a la derecha; device (columna de la
+      // derecha) crece arrastrando a la izquierda.
+      const w = drag.side === 'explorer' ? drag.startW + delta : drag.startW - delta;
+      const clamped = Math.max(200, Math.min(w, window.innerWidth * 0.6));
+      grid.style.setProperty(`--col-${drag.side}`, `${Math.round(clamped)}px`);
+    });
+    const endDrag = () => {
+      if (!drag) return;
+      handle.classList.remove('dragging');
+      const widths = {};
+      for (const side of ['explorer', 'device']) {
+        const v = grid.style.getPropertyValue(`--col-${side}`);
+        if (v) widths[side] = v;
+      }
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(widths)); } catch (e) { /* lleno/bloqueado */ }
+      drag = null;
+    };
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+  });
+})();
 
 // Arranque del panel: el modo lo dicta config.yaml (runtime_target /
 // default_device_id), no un botón. Emulador → auto-conecta el polling;
