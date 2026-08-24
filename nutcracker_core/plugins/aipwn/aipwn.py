@@ -28,7 +28,13 @@ from rich.rule import Rule
 from nutcracker_core.i18n import t
 
 from .frida_agent import FridaAgent, AgentResult
-from .frida_capture import FridaRunResult, check_app_installed, launch_frida_capture
+from .frida_capture import (
+    FridaRunResult,
+    check_app_installed,
+    check_device_healthy,
+    launch_frida_capture,
+    reboot_device_and_wait,
+)
 
 if TYPE_CHECKING:
     from nutcracker_core.analyzer import AnalysisResult
@@ -273,6 +279,24 @@ def _run_aipwn_inner(
                     last_frida_result=None,
                 )
             console.print(f"[green][aipwn] {t('aipwn_auto_install_ok', package=package)}[/green]")
+
+    # ── Paso 0b: health check del emulador (system_server vivo) ──────────────
+    # Un system_server muerto hace fallar TODO spawn con DeadSystemException
+    # (job 18, 2026-08-24: el agente quemó 11 iteraciones contra un emulador
+    # muerto y la app nunca levantó). Mejor rebootear acá al inicio — solo
+    # emuladores locales; un físico jamás se rebootea automáticamente.
+    if _adb and serial and serial.startswith("emulator-") and not check_device_healthy(_adb_base):
+        console.print(f"[yellow][aipwn] {t('aipwn_device_unhealthy')}[/yellow]")
+        if reboot_device_and_wait(_adb_base):
+            console.print(f"[green][aipwn] {t('aipwn_device_recovered')}[/green]")
+        else:
+            msg = t('aipwn_device_recovery_failed')
+            console.print(f"[red][aipwn] {msg}[/red]")
+            return AgentResult(
+                success=False, script_path=None, explanation=msg,
+                failure_reason=msg, frida_runs=0, iterations=0,
+                last_frida_result=None,
+            )
 
     # ── Paso 1: intentar script previo ───────────────────────────────────────
     # Se salta también al reanudar: no tiene sentido re-probar un script viejo

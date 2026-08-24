@@ -18,6 +18,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "aipwn_agent_starting": "Starting agent for {package}...",
         "aipwn_agent_calling_llm": "Calling LLM (iteration {iteration})...",
         "aipwn_agent_no_result_warn": "Agent reached iteration limit without a result.",
+        "aipwn_agent_no_tool_calls_nudge": "LLM answered without calling any tool ({n}/{max}) — nudging it to act.",
+        "aipwn_agent_no_tool_calls_warn": "LLM stopped calling tools.",
+        "aipwn_agent_no_tool_calls": "LLM answered without tool calls {n} times in a row (likely truncated by max_tokens — raise aipwn.max_tokens in config.yaml).",
         "aipwn_context_pruned": "Context pruned to ~{kb}k tokens.",
         "aipwn_frida_run_counter": "Frida run {current}/{total}",
         "aipwn_frida_limit_msg": "Frida run limit reached.",
@@ -48,6 +51,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "aipwn_auto_install_ok": "App {package} installed successfully.",
         "aipwn_auto_install_failed": "Failed to install {package}.",
         "aipwn_auto_install_download_failed": "Could not download APK for {package}.",
+        # aipwn.py / frida_capture.py — auto-recovery de emulador (DeadSystem)
+        "aipwn_device_unhealthy": "Emulator system_server is down (DeadSystem) — rebooting it...",
+        "aipwn_device_recovered": "Emulator rebooted and healthy — continuing.",
+        "aipwn_device_recovery_failed": "Emulator did not recover after reboot. Reboot it manually and retry.",
         # aipwn.py — prev script
         "aipwn_prev_script_found": "Found previous script: {script}",
         "aipwn_testing_prev_script": "Testing previous script...",
@@ -110,6 +117,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "aipwn_agent_starting": "Iniciando agente para {package}...",
         "aipwn_agent_calling_llm": "Llamando al LLM (iteración {iteration})...",
         "aipwn_agent_no_result_warn": "El agente alcanzó el límite de iteraciones sin resultado.",
+        "aipwn_agent_no_tool_calls_nudge": "El LLM respondió sin llamar ninguna herramienta ({n}/{max}) — se le pide que actúe.",
+        "aipwn_agent_no_tool_calls_warn": "El LLM dejó de llamar herramientas.",
+        "aipwn_agent_no_tool_calls": "El LLM respondió sin tool calls {n} veces seguidas (probablemente truncado por max_tokens — sube aipwn.max_tokens en config.yaml).",
         "aipwn_context_pruned": "Contexto reducido a ~{kb}k tokens.",
         "aipwn_frida_run_counter": "Ejecución Frida {current}/{total}",
         "aipwn_frida_limit_msg": "Límite de ejecuciones Frida alcanzado.",
@@ -140,6 +150,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "aipwn_auto_install_ok": "App {package} instalada correctamente.",
         "aipwn_auto_install_failed": "Error al instalar {package}.",
         "aipwn_auto_install_download_failed": "No se pudo descargar el APK de {package}.",
+        # aipwn.py / frida_capture.py — auto-recovery de emulador (DeadSystem)
+        "aipwn_device_unhealthy": "El system_server del emulador está caído (DeadSystem) — reiniciándolo...",
+        "aipwn_device_recovered": "Emulador reiniciado y sano — continuando.",
+        "aipwn_device_recovery_failed": "El emulador no se recuperó tras el reinicio. Reiniécialo a mano y reintenta.",
         # aipwn.py — prev script
         "aipwn_prev_script_found": "Script previo encontrado: {script}",
         "aipwn_testing_prev_script": "Probando script previo...",

@@ -210,6 +210,71 @@ def check_app_installed(adb_args: list[str], package: str) -> bool:
         return False
 
 
+# ── Auto-recovery de emulador (DeadSystemException) ─────────────────────────
+# Visto en vivo (job 18, 2026-08-24): el system_server del emulador se murió y
+# a partir de ahí TODO spawn de frida fallaba con DeadSystemException -- el
+# agente quemó 11 iteraciones de LLM contra un dispositivo muerto y la app
+# nunca llegó a levantarse en pantalla. La recuperación real es rebootear el
+# emulador (adb kill-server NO alcanza: el problema es el sistema Android de
+# adentro, no el daemon adb del host).
+
+_DEAD_SYSTEM_MARKERS = (
+    "DeadSystemException",
+    "DeadSystemRuntimeException",
+    "DeadObjectException",
+)
+
+
+def _looks_like_dead_system(output: str) -> bool:
+    """True si el output de frida muestra un system_server muerto."""
+    return any(m in output for m in _DEAD_SYSTEM_MARKERS)
+
+
+def check_device_healthy(adb_args: list[str]) -> bool:
+    """True si el system_server está vivo y el boot completó.
+
+    Cualquier excepción/timeout se trata como "no sano" — el caller decide si
+    rebootea o aborta."""
+    try:
+        pid = subprocess.run(
+            adb_args + ["shell", "pidof", "system_server"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if not pid:
+            return False
+        boot = subprocess.run(
+            adb_args + ["shell", "getprop", "sys.boot_completed"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        return boot == "1"
+    except Exception:
+        return False
+
+
+def reboot_device_and_wait(adb_args: list[str], timeout: float = 180.0) -> bool:
+    """Reinicia el dispositivo y espera a que el boot complete (system_server
+    vivo de nuevo). True si recuperó, False si agotó el timeout.
+
+    El caller decide a qué dispositivo se aplica esto -- el auto-recovery de
+    aipwn solo lo usa con emuladores locales (serial "emulator-*"), nunca con
+    un físico sin que el usuario lo pida explícito."""
+    try:
+        subprocess.run(adb_args + ["reboot"], capture_output=True, timeout=10)
+    except Exception:
+        return False
+    time.sleep(5)  # darle tiempo al apagado antes de esperar el boot
+    try:
+        subprocess.run(adb_args + ["wait-for-device"], capture_output=True, timeout=timeout)
+    except Exception:
+        pass
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if check_device_healthy(adb_args):
+            return True
+        time.sleep(3)
+    return False
+
+
 # ── Setup frida-server ────────────────────────────────────────────────────────
 
 _DEFAULT_FRIDA_SERVER_PATH = "/data/local/tmp/frida-server"
@@ -332,6 +397,7 @@ def launch_frida_capture(
     iteration: int = 1,
     shell_fn: "Callable[[str], str] | None" = None,
     logcat_fn: "Callable[[float], str] | None" = None,
+    _recovery_retried: bool = False,
 ) -> FridaRunResult:
     """
     Ejecuta Frida con el script JS dado, captura output en tiempo real y
@@ -509,6 +575,30 @@ def launch_frida_capture(
 
     output = "\n".join(all_frida_lines)
     logcat = "\n".join(all_logcat_lines)
+
+    # ── Auto-recovery: system_server muerto (DeadSystemException) ──────────
+    # Si el spawn falló porque el sistema Android del emulador está caído,
+    # rebootear y reintentar el spawn UNA vez (la recursión rehace también el
+    # setup de frida-server, que muere con el reboot). Solo emuladores con adb
+    # local: en modo relay (shell_fn) un reboot mataría el túnel WebUSB, y un
+    # físico nunca se rebootea solo.
+    if (
+        not _recovery_retried
+        and shell_fn is None
+        and serial
+        and serial.startswith("emulator-")
+        and _looks_like_dead_system(output)
+    ):
+        console.print(f"[yellow][aipwn] {t('aipwn_device_unhealthy')}[/yellow]")
+        if reboot_device_and_wait(adb_args):
+            console.print(f"[green][aipwn] {t('aipwn_device_recovered')}[/green]")
+            return launch_frida_capture(
+                package, script_js, serial=serial, frida_host=frida_host,
+                duration=duration, iteration=iteration,
+                _recovery_retried=True,
+            )
+        console.print(f"[red][aipwn] {t('aipwn_device_recovery_failed')}[/red]")
+        output += f"\n[aipwn] {t('aipwn_device_recovery_failed')}"
 
     # Comprobar si el proceso del app sigue vivo al finalizar
     app_running = False

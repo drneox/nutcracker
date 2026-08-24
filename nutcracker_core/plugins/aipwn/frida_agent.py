@@ -58,6 +58,12 @@ console = Console()
 # el mismo límite de presupuesto sin tener que tocar el loop de nuevo.
 _FRIDA_SLOT_TOOL_NAMES = frozenset({"run_frida_script", "intercept_and_modify"})
 
+# Respuestas consecutivas del LLM sin ningún tool call que se toleran antes de
+# abortar la corrida (cada una recibe un nudge pidiéndole que actúe — ver el
+# loop del agente). Típicamente el modelo se quedó sin max_tokens a mitad de
+# un razonamiento largo y la respuesta se cortó antes de la tool call.
+_MAX_NO_TOOLCALL_STREAK = 3
+
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
@@ -640,6 +646,7 @@ class FridaAgent:
         self.show_thinking: bool = bool(aipwn_config.get("show_thinking", True))
 
         self._iters_since_last_run: int = 0  # iteraciones LLM sin run_frida_script
+        self._no_toolcall_streak: int = 0  # respuestas LLM consecutivas sin tool_calls
         self._enumerated_patterns: set[str] = set()  # patrones ya buscados con enumerate_runtime_classes
 
         self.ctx = ToolContext(
@@ -938,13 +945,38 @@ class FridaAgent:
                 console.print(f'[bold cyan]{t("aipwn_nutcracker_says")}[/bold cyan] "{_escape(_display_content[:300])}"')
 
             if not response.tool_calls:
-                # El LLM terminó sin herramientas — inesperado (visto en vivo:
+                # El LLM respondió sin tool call — inesperado (visto en vivo:
                 # se queda sin max_tokens a mitad de un razonamiento largo,
-                # cortando la respuesta antes de llegar a la tool call).
-                console.print(f"[yellow][aipwn] {t('aipwn_agent_no_result_warn')}[/yellow]")
-                final_failure = t("aipwn_agent_no_result")
-                resumable = True
-                break
+                # cortando la respuesta antes de llegar a la tool call, o
+                # vuelca el script como texto plano). Antes esto abortaba la
+                # corrida entera con un mensaje engañoso de "iteration limit"
+                # (job 18, 2026-08-24: cortó en la llamada 11 con límite 40).
+                # Ahora se le hace un nudge y se continúa; solo se corta tras
+                # _MAX_NO_TOOLCALL_STREAK respuestas consecutivas sin tools.
+                self._no_toolcall_streak += 1
+                if self._no_toolcall_streak >= _MAX_NO_TOOLCALL_STREAK:
+                    console.print(
+                        f"[yellow][aipwn] {t('aipwn_agent_no_tool_calls_warn', n=self._no_toolcall_streak)}[/yellow]"
+                    )
+                    final_failure = t("aipwn_agent_no_tool_calls", n=self._no_toolcall_streak)
+                    resumable = True
+                    break
+                console.print(
+                    f"[yellow][aipwn] {t('aipwn_agent_no_tool_calls_nudge', n=self._no_toolcall_streak, max=_MAX_NO_TOOLCALL_STREAK)}[/yellow]"
+                )
+                self.messages.append({
+                    "role": "user",
+                    "content": (
+                        "[SYSTEM] Your last response contained NO tool call. You MUST respond "
+                        "with a tool call — never with plain text or code blocks. If you were "
+                        "writing a Frida script, call run_frida_script with it NOW. Keep your "
+                        "reasoning short so the tool call fits within the token budget."
+                    ),
+                })
+                continue
+
+            # Hubo tool calls — resetear la racha de respuestas sin herramientas
+            self._no_toolcall_streak = 0
 
             # Ejecutar cada tool call
             for tc in response.tool_calls:
