@@ -77,7 +77,14 @@
   button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
   button:disabled{opacity:.5;cursor:not-allowed}
   .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
-  #webusb-canvas{width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border-radius:8px;min-height:280px;display:block}
+  /* Pantalla del device a tamaño/proporción reales: el renderer de scrcpy
+     fija la resolución interna del canvas y el <img> del emulador usa su
+     resolución natural -- con width:100% + height:auto ambos siguen el aspect
+     ratio real, sin letterbox (barras negras) ni bordes decorativos. */
+  #webusb-canvas,#emulator-img{width:100%;height:auto;display:block}
+  .device-toolbar{display:flex;gap:6px;align-items:center;margin:8px 0}
+  .device-toolbar .icon-btn{padding:6px 9px;font-size:14px;line-height:1;min-width:36px}
+  .device-toolbar-sep{width:1px;height:20px;background:var(--border);margin:0 2px}
   .device-status{font-size:12px;color:var(--dim);margin:6px 0}
   .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
   .modal-backdrop.open{display:flex}
@@ -225,9 +232,16 @@
         <div class="device-status" id="device-status">loading…</div>
         <canvas id="webusb-canvas" width="720" height="1600"></canvas>
         <img id="emulator-img" style="display:none" alt="pantalla del dispositivo">
-        <div class="row">
-          <button id="device-toggle-btn" class="secondary" style="display:none" onclick="toggleDevice()" data-i18n="btn.release">⏏ Soltar</button>
-          <button id="adb-restart-btn" class="secondary" onclick="restartAdb()" data-i18n="btn.adbRestart">🔌 Reiniciar adb</button>
+        <div class="device-toolbar">
+          <button id="device-play-btn" class="secondary icon-btn" onclick="devicePlay()" title="Iniciar transmisión de pantalla" data-i18n-title="tip.devPlay">▶</button>
+          <button id="device-stop-btn" class="secondary icon-btn" onclick="deviceStop()" title="Detener / soltar el dispositivo" data-i18n-title="tip.devStop" disabled>⏹</button>
+          <button id="device-refresh-btn" class="secondary icon-btn" onclick="deviceRefresh()" title="Refrescar captura ahora (solo emulador)" data-i18n-title="tip.devRefresh" disabled>🔄</button>
+          <span class="device-toolbar-sep"></span>
+          <button class="secondary icon-btn dev-key" onclick="sendDeviceKey('BACK')" title="Atrás (solo con adb del backend: emulador/red)" data-i18n-title="tip.devKeyBack" disabled>◀</button>
+          <button class="secondary icon-btn dev-key" onclick="sendDeviceKey('HOME')" title="Home (solo con adb del backend: emulador/red)" data-i18n-title="tip.devKeyHome" disabled>🏠</button>
+          <button class="secondary icon-btn dev-key" onclick="sendDeviceKey('APP_SWITCH')" title="Apps recientes (solo con adb del backend: emulador/red)" data-i18n-title="tip.devKeyRecents" disabled>▦</button>
+          <span class="device-toolbar-sep"></span>
+          <button id="adb-restart-btn" class="secondary icon-btn" onclick="restartAdb()" title="Reiniciar adb (recuperación por etapas)" data-i18n-title="tip.adbRestart">🔌</button>
         </div>
 
         <details style="margin-top:16px">
@@ -319,12 +333,17 @@ const I18N = {
     'btn.enqueue': 'Enqueue',
     'btn.batch': 'Batch',
     'btn.send': 'Send',
-    'btn.release': '⏏ Release',
-    'btn.reconnect': '🔄 Reconnect',
     'btn.relayOn': '🌐 Start relay',
     'btn.relayOff': '⏏ Stop relay',
     'btn.adbKill': '🔪 adb kill-server',
-    'btn.adbRestart': '🔌 Restart adb',
+    'tip.devPlay': 'Start screen stream',
+    'tip.devStop': 'Stop / release the device',
+    'tip.devRefresh': 'Refresh frame now (emulator only)',
+    'tip.devKeyBack': 'Back (backend adb only: emulator/network)',
+    'tip.devKeyHome': 'Home (backend adb only: emulator/network)',
+    'tip.devKeyRecents': 'Recents (backend adb only: emulator/network)',
+    'tip.adbRestart': 'Restart adb (staged recovery)',
+    'err.devKey': 'keyevent failed: {e}',
     'status.adbRestarting': 'Restarting adb connection…',
     'status.adbRecovered': 'adb recovered ({steps}).',
     'status.adbDead': 'adb restarted but the device still does not answer -- the emulator is hung; cold boot it manually.',
@@ -453,12 +472,17 @@ const I18N = {
     'btn.enqueue': 'Encolar',
     'btn.batch': 'Batch',
     'btn.send': 'Enviar',
-    'btn.release': '⏏ Soltar',
-    'btn.reconnect': '🔄 Reconectar',
     'btn.relayOn': '🌐 Activar relay',
     'btn.relayOff': '⏏ Detener relay',
     'btn.adbKill': '🔪 adb kill-server',
-    'btn.adbRestart': '🔌 Reiniciar adb',
+    'tip.devPlay': 'Iniciar transmisión de pantalla',
+    'tip.devStop': 'Detener / soltar el dispositivo',
+    'tip.devRefresh': 'Refrescar captura ahora (solo emulador)',
+    'tip.devKeyBack': 'Atrás (solo con adb del backend: emulador/red)',
+    'tip.devKeyHome': 'Home (solo con adb del backend: emulador/red)',
+    'tip.devKeyRecents': 'Apps recientes (solo con adb del backend: emulador/red)',
+    'tip.adbRestart': 'Reiniciar adb (recuperación por etapas)',
+    'err.devKey': 'falló el keyevent: {e}',
     'status.adbRestarting': 'Reiniciando la conexión adb…',
     'status.adbRecovered': 'adb recuperado ({steps}).',
     'status.adbDead': 'adb reiniciado pero el dispositivo sigue sin responder -- el emulador está colgado; hazle un cold boot manual.',
@@ -1051,15 +1075,17 @@ function rememberedWebUsbSerial(){
   try { return sessionStorage.getItem(WEBUSB_SESSION_KEY); } catch (e) { return null; }
 }
 
-// ── Panel Dispositivo: auto-conexión según config, UN solo botón toggle ────
-// No hay botones de "conectar": al cargar, el panel se conecta solo usando el
-// modo que dicta config.yaml -- emulator (screencap polling vía adb del
-// backend) si strategies.runtime_target: emulator o el serial configurado es
-// de emulador; si no, WebUSB (device físico por cable). El único botón es el
-// toggle: "⏏ Soltar" cuando hay conexión, "🔄 Reconectar" cuando no.
+// ── Panel Dispositivo: auto-conexión según config + botonera ─────────────
+// No hay botones de "conectar" sueltos: al cargar, el panel se conecta solo
+// usando el modo que dicta config.yaml -- emulator (screencap polling vía adb
+// del backend) si strategies.runtime_target: emulator o el serial configurado
+// es de emulador; si no, WebUSB (device físico por cable). La botonera tiene
+// ▶ play / ⏹ stop (conectar/soltar el stream), 🔄 refresh y las teclas de
+// navegación ◀ 🏠 ▦ (estas tres + refresh solo en modo emulador/red, donde el
+// adb del backend alcanza al device), más 🔌 reiniciar adb.
 // Excepción inevitable: la PRIMERA conexión WebUSB necesita un gesto del
 // usuario (el navegador exige el diálogo de permiso USB) -- ese gesto es el
-// propio click en "🔄 Reconectar".
+// propio click en ▶.
 let deviceMode = null;        // 'emulator' | 'usb'
 let deviceConnected = false;
 let emuConfigSerial = null;   // serial de emulador desde config.yaml (si hay)
@@ -1072,9 +1098,14 @@ function _isEmulatorSerial(s){
 
 function setDeviceToggle(connected){
   deviceConnected = connected;
-  const btn = document.getElementById('device-toggle-btn');
-  btn.style.display = '';
-  btn.textContent = connected ? T('btn.release') : T('btn.reconnect');
+  document.getElementById('device-play-btn').disabled = connected;
+  document.getElementById('device-stop-btn').disabled = !connected;
+  // Refresh y teclas de navegación solo aplican cuando el device es
+  // alcanzable por el adb del backend (emulador/red). En modo USB el cable
+  // lo tiene el navegador (WebUSB exclusivo) y `adb -s` no llega.
+  const emuReady = connected && deviceMode === 'emulator';
+  document.getElementById('device-refresh-btn').disabled = !emuReady;
+  document.querySelectorAll('.dev-key').forEach(b => { b.disabled = !emuReady; });
 }
 
 function _showEmulatorImg(show){
@@ -1082,13 +1113,31 @@ function _showEmulatorImg(show){
   document.getElementById('webusb-canvas').style.display = show ? 'none' : '';
 }
 
-async function toggleDevice(){
-  if (deviceConnected) {
-    if (deviceMode === 'emulator') disconnectEmulator();
-    else await disconnectWebUsb();
-  } else {
-    if (deviceMode === 'emulator') await connectEmulator();
-    else await connectWebUsb();
+async function devicePlay(){
+  if (deviceMode === 'emulator') await connectEmulator();
+  else await connectWebUsb();
+}
+
+async function deviceStop(){
+  if (deviceMode === 'emulator') disconnectEmulator();
+  else await disconnectWebUsb();
+}
+
+function deviceRefresh(){
+  if (deviceMode === 'emulator' && emuSerial) refreshEmulatorFrame();
+}
+
+// Teclas de navegación (◀ 🏠 ▦) via /api/device/key -- el efecto se ve en el
+// siguiente frame del polling; forzamos uno inmediato para que se sienta
+// instantáneo en vez de esperar ~900ms.
+async function sendDeviceKey(keycode){
+  if (deviceMode !== 'emulator' || !emuSerial) return;
+  const status = document.getElementById('device-status');
+  try {
+    await j(`/api/device/key?serial=${encodeURIComponent(emuSerial)}&keycode=${encodeURIComponent(keycode)}`, {method: 'POST'});
+    refreshEmulatorFrame();
+  } catch (e) {
+    status.textContent = T('err.devKey', {e: e.message || e});
   }
 }
 
