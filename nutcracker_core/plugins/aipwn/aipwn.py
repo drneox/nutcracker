@@ -30,10 +30,14 @@ from nutcracker_core.i18n import t
 from .frida_agent import FridaAgent, AgentResult
 from .frida_capture import (
     FridaRunResult,
+    any_device_online,
     check_app_installed,
     check_device_healthy,
+    find_emulator_binary,
     launch_frida_capture,
+    list_avds,
     reboot_device_and_wait,
+    start_emulator_and_wait,
 )
 
 if TYPE_CHECKING:
@@ -249,8 +253,32 @@ def _run_aipwn_inner(
         console.print(f"  {t('aipwn_serial')}:     {serial}")
     console.print()
 
-    # ── Paso 0: verificar que la app está instalada; si no, descargar e instalar ─
+    # ── Paso 0a: asegurar dispositivo; auto-start del emulador si aplica ─────
+    # Si no hay NINGÚN dispositivo online y la config apunta a emulador
+    # (strategies.runtime_target: emulator), levantar el AVD solos en vez de
+    # morir después contra un "no device". AVD: strategies.default_emulator_avd,
+    # o el primero de la lista si hay uno solo/no está configurado.
     _adb = shutil.which("adb")
+    if _adb and not any_device_online(_adb):
+        _strategies = config.get("strategies", {})
+        if str(_strategies.get("runtime_target", "")).strip() == "emulator":
+            _emu_bin = find_emulator_binary()
+            _avds = list_avds(_emu_bin) if _emu_bin else []
+            _avd = str(_strategies.get("default_emulator_avd", "")).strip() or (
+                _avds[0] if _avds else ""
+            )
+            if _emu_bin and _avd:
+                console.print(f"[dim][aipwn] {t('aipwn_emulator_starting', avd=_avd)}[/dim]")
+                _booted = start_emulator_and_wait(_emu_bin, _avd, _adb)
+                if _booted:
+                    serial = serial or _booted
+                    console.print(f"[green][aipwn] {t('aipwn_emulator_started', serial=_booted)}[/green]")
+                else:
+                    console.print(f"[yellow][aipwn] {t('aipwn_emulator_start_failed')}[/yellow]")
+            else:
+                console.print(f"[yellow][aipwn] {t('aipwn_emulator_not_found')}[/yellow]")
+
+    # ── Paso 0: verificar que la app está instalada; si no, descargar e instalar ─
     if _adb:
         _adb_base = [_adb] + (["--", "-s", serial] if serial else [])
         # normalizar: -s debe ir antes de shell, no con --

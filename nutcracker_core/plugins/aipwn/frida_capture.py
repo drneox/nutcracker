@@ -21,6 +21,7 @@ Uso:
 from __future__ import annotations
 
 import re
+import os
 import shutil
 import subprocess
 import sys
@@ -273,6 +274,82 @@ def reboot_device_and_wait(adb_args: list[str], timeout: float = 180.0) -> bool:
             return True
         time.sleep(3)
     return False
+
+
+# ── Auto-start del emulador ──────────────────────────────────────────────────
+
+def find_emulator_binary() -> str | None:
+    """Localiza el binario ``emulator`` del Android SDK.
+
+    Orden: $ANDROID_HOME, $ANDROID_SDK_ROOT, el default de macOS
+    (~/Library/Android/sdk), al lado de un `adb` que venga del SDK, y por
+    último PATH. En esta máquina adb viene de Homebrew pero el SDK está en la
+    ruta default de macOS, así que hacen falta todas las candidatas."""
+    candidates: list[Path] = []
+    for env in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        base = os.environ.get(env, "").strip()
+        if base:
+            candidates.append(Path(base) / "emulator" / "emulator")
+    candidates.append(Path.home() / "Library" / "Android" / "sdk" / "emulator" / "emulator")
+    adb = shutil.which("adb")
+    if adb:
+        candidates.append(Path(adb).resolve().parent.parent / "emulator" / "emulator")
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return shutil.which("emulator")
+
+
+def list_avds(emulator_bin: str) -> list[str]:
+    """AVDs disponibles (``emulator -list-avds``)."""
+    try:
+        r = subprocess.run(
+            [emulator_bin, "-list-avds"], capture_output=True, text=True, timeout=15,
+        )
+        return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+    except Exception:
+        return []
+
+
+def any_device_online(adb_bin: str) -> list[str]:
+    """Serials de dispositivos en estado ``device`` (online) según adb."""
+    try:
+        r = subprocess.run([adb_bin, "devices"], capture_output=True, text=True, timeout=10)
+        serials = []
+        for line in r.stdout.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == "device":
+                serials.append(parts[0])
+        return serials
+    except Exception:
+        return []
+
+
+def start_emulator_and_wait(
+    emulator_bin: str,
+    avd: str,
+    adb_bin: str,
+    timeout: float = 240.0,
+) -> str | None:
+    """Lanza el AVD en segundo plano (detached -- sobrevive a que aipwn salga)
+    y espera a que el boot complete. Devuelve el serial (``emulator-5554``…)
+    del emulador ya sano, o None si agotó el timeout."""
+    subprocess.Popen(
+        [emulator_bin, "-avd", avd],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        subprocess.run([adb_bin, "wait-for-device"], capture_output=True, timeout=timeout)
+    except Exception:
+        pass
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        serials = [s for s in any_device_online(adb_bin) if s.startswith("emulator-")]
+        if serials and check_device_healthy([adb_bin, "-s", serials[0]]):
+            return serials[0]
+        time.sleep(3)
+    return None
 
 
 # ── Setup frida-server ────────────────────────────────────────────────────────

@@ -55,6 +55,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "aipwn_device_unhealthy": "Emulator system_server is down (DeadSystem) — rebooting it...",
         "aipwn_device_recovered": "Emulator rebooted and healthy — continuing.",
         "aipwn_device_recovery_failed": "Emulator did not recover after reboot. Reboot it manually and retry.",
+        # aipwn.py — auto-start del emulador
+        "aipwn_emulator_starting": "No device online — starting emulator AVD '{avd}'...",
+        "aipwn_emulator_started": "Emulator up: {serial}",
+        "aipwn_emulator_start_failed": "Emulator did not boot in time — start it manually.",
+        "aipwn_emulator_not_found": "No emulator binary or AVDs found — start the emulator manually.",
         # aipwn.py — prev script
         "aipwn_prev_script_found": "Found previous script: {script}",
         "aipwn_testing_prev_script": "Testing previous script...",
@@ -154,6 +159,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "aipwn_device_unhealthy": "El system_server del emulador está caído (DeadSystem) — reiniciándolo...",
         "aipwn_device_recovered": "Emulador reiniciado y sano — continuando.",
         "aipwn_device_recovery_failed": "El emulador no se recuperó tras el reinicio. Reiniécialo a mano y reintenta.",
+        # aipwn.py — auto-start del emulador
+        "aipwn_emulator_starting": "Sin dispositivos conectados — iniciando emulador '{avd}'...",
+        "aipwn_emulator_started": "Emulador listo: {serial}",
+        "aipwn_emulator_start_failed": "El emulador no arrancó a tiempo — inícialo a mano.",
+        "aipwn_emulator_not_found": "No se encontró el binario emulator ni AVDs — inicia el emulador a mano.",
         # aipwn.py — prev script
         "aipwn_prev_script_found": "Script previo encontrado: {script}",
         "aipwn_testing_prev_script": "Probando script previo...",
